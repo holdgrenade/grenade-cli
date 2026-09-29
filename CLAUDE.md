@@ -33,10 +33,13 @@ grenade install-hooks [--print] [--remove] [--port 7788]   # edits ~/.claude/set
 grenade relay on [url] [--key K] # use a relay (default: the main relay, OFFICIAL_RELAY_URL); reloads a running daemon
 grenade relay off                # forget the relay and this Mac's id there
 grenade relay status             # url, relay id, online/offline, public + local IPs, phones piped through it
+grenade push on [url] [--key K] [--at-mac S]   # send push notifications, also with remote access off; url = another relay's push route
+grenade push auto                # the default: push while this Mac uses a relay for remote access, none otherwise
+grenade push off | status | test # test sends a notification to every phone that registered
 grenade --control-port 7790 <cmd>                          # talk to a daemon on another control port
 ```
 
-Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `daemon-id`, `daemon.log`, `relay.json`, `e2e-key` and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
+Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `daemon-id`, `daemon.log`, `relay.json`, `e2e-key`, `push.json` (push on or off, and the route), `push-devices.json` (the phones' push registrations, mode 0600) and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
 
 ## Layout
 
@@ -55,6 +58,7 @@ src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, p
 src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`
 src/setup/requirements.ts  pure: what is missing (macOS, Node 22+, tmux 3.2+, an agent) and the command that fixes it; `findRequirements.ts` looks
 src/setup/hooksNotice.ts   pure: `addedHooks(before, after)` and the text shown before `~/.claude/settings.json` is touched
+src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
 src/setup/answer.ts, ask.ts pure `readYesNo`; `askYesNo` on the terminal
 src/config.ts              paths under GRENADE_HOME, daemon id, default name, VERSION
 src/log.ts                 leveled logger → stderr (local time, color on a TTY) + daemon.log (ISO time); plain sentences + `key=value`, `formatLine` is pure; `silentLogger` for tests
@@ -98,7 +102,18 @@ src/hooks/installHooks.ts  pure merge/remove of Grenade hooks into a Claude sett
 src/daemon/promptHook.ts   POST /hooks/claude/prompt: `openPromptFromHook` (pure but for the store) and the HTTP wrapper that holds the response; `closePromptsByHook` for hooks that reach /hooks/claude
 src/prompts/promptStore.ts PromptStore: the prompts Claude Code is showing, each with the callback that answers its held request; `open`, `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered`
 src/prompts/promptText.ts  pure: one line that says what a prompt asks, for its push
+src/push/pusher.ts         Pusher: listens to the registry, keeps pending pushes, seals one per registered phone and posts it; `register`/`unregister` for a Connection
+src/push/pushPolicy.ts     pure: is a change an event (startedWaiting), wait / hold / send / drop (decide), how long a session was busy (trackBusy), worthPushing
+src/push/pushContent.ts    pure: what a push says (pushContentFor, pushText, clip)
+src/push/pushSeal.ts       pure crypto: sealPush (X25519 + HKDF + ChaCha20-Poly1305, one key per push), collapseId
+src/push/macPresence.ts    is someone at the Mac: pure parsers for `ioreg` (idle time, screen lock) + readMacPresence
+src/push/pushGateway.ts    postPush: one HTTPS POST to <relay>/v1/push; outcomeOf (pure) maps the answer to sent / unregistered / retry / refused
+src/push/pushConfig.ts     push.json {enabled?, url?, key?, atMacSeconds?}: load/save; pure pushMode (on / off / auto), pushGatewayFor, pushConfigOn, atMacMs
+src/push/pushDevices.ts    PushDevices: push-devices.json (0600), one registration per paired phone, keyed by device id; prune
+src/push/startPush.ts      startPush(): builds the Pusher from the files and the daemon's registry, tokens and key
+src/cli/pushCommand.ts     `grenade push on | off | status | test`; statusLines and testLine are pure
 scripts/smoke.mjs          end-to-end check against a running daemon (needs tmux)
+scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run against a daemon that pushes through the main relay
 scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
 scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the offer, pairs with its secret on this Mac or `--via relay`, says hello
 scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
@@ -182,6 +197,22 @@ Each session carries `summary`, one sentence on what it is working on, shown on 
 - A run takes about 2–6 s, and the first run after boot can take 30 s. The timeout is 60 s.
 - `summary` is saved in `sessions.json` and restored on `adopt()`. Off: `--no-summaries`, `GRENADE_SUMMARIES=off`, or no `claude` found (logged once at start).
 
+## Push notifications (`src/push/`)
+
+Read PROTOCOL.md "Push notifications" first. The phone is told that an agent needs it or has finished while the app is suspended or not running. The Mac holds no push key: it seals each push to the phone and posts it to a relay's push route, which hands it to Apple.
+
+- Registering: a phone sends `push.register` after every `welcome`; `Connection` passes it to `Pusher.register` with the token of its `hello`, and the answer is `push.state`. One registration per paired phone, keyed by the device id `grenade devices` shows (`deviceIdFor(token)`), kept in `push-devices.json`. It goes with `push.unregister`, when the pairing ends (`TokenStore.onChange` → `pairingsChanged` prunes), and when the route answers 410.
+- Events: `Pusher` listens to the registry's `updated`. A session that starts `waiting`, or waits for something else than before, is one event (`answer` or `done`, its `waitingFor`). An agent without hooks must have been busy 30 s for its `done` to count (`worthPushing`), with pauses under 10 s counted as the same stretch (`trackBusy`), so a quick shell command does not push.
+- Pending: the push waits 3 s (`PUSH_GRACE_MS`), is held while someone is at the Mac, and is dropped as soon as the session is no longer that `waiting` (`decide`). A timer ticks once a second only while something is pending.
+- At the Mac: `ioreg -c IOHIDSystem` gives the time since the last keyboard or mouse input, `ioreg -n Root` the screen lock. Input within 2 minutes (`--at-mac`, 0 never holds) and not locked means at the Mac. Neither needs a permission. A reading is reused for 5 s; one that fails counts as away. The lock key was not seen on a locked screen while writing this (it needs a locked Mac); the idle time was.
+- Text: for `answer` the `message` of the hook that made it wait (`noteAsked`, called from the hook route), for `done` the session's `summary`, else `lastLine`. 200 characters at most.
+- Sealing: `sealPush` makes a fresh X25519 key per push and mixes in the daemon's long-term key, so only the phone can read it and only this Mac can have written it. `test/pushPure.test.ts` reproduces `fixtures/push.vectors.json`.
+- Opt-in without a relay: `push.json` without `enabled` is `auto` (`pushMode`), which sends pushes only while this Mac uses a relay for remote access. A Mac that talks to no relay must never start to because of push; only `grenade push on` (`enabled: true`) makes it post to the main relay. Keep it that way: it is Adam's decision.
+- Route: `pushGatewayFor` answers null for `off` and for `auto` without a relay; otherwise the URL in `push.json`, else the relay this Mac uses for remote access (with its registration key), else the main relay. With remote access off that is one HTTPS request per push and no link.
+- Phones are told: `Connection` watches the pusher (`Pusher.watch`) and passes on a new `push.state` when pushes start or stop being sent (`deliveryMayHaveChanged`, called after `POST /push/reload` and `POST /relay/reload`), so a phone in the background knows at once whether to notify by itself. `503` / `502` / no answer get one more try after 5 s if the session still waits.
+- Off: `grenade push off` (`push.json` `enabled: false`), or `auto` with remote access off. Phones are told `delivery: "off"` and notify by themselves while they run.
+- `grenade push test` sends every registered phone a push with `event: "test"`; `grenade push status` shows the route, the phones and what became of the last push.
+
 ## Network changes
 
 The Mac may hop Wi‑Fi while the daemon runs. On macOS the service is registered with `dns-sd -R`, so mDNSResponder owns the SRV/A records and answers with the current address (and the current `<host>.local` name, which macOS renumbers per network: `-3`, `-4`…). The JS `bonjour-service` fallback snapshots interfaces at publish time and keeps advertising a dead address after a change; it is only used off-macOS. The phone matches the daemon by the `id` TXT key, never by name or address, and re-resolves while it is disconnected.
@@ -224,7 +255,8 @@ Two steps for a user: install (`brew install adamkchew/grenade/grenade`, once pu
 - The control API binds to `127.0.0.1` only. The WebSocket requires the encryption handshake, then a paired token before anything else, and closes after 5 s without a first frame or without `hello`.
 - A token never crosses a network in the clear: `hello` and `pair` are only accepted on a sealed connection (unless `--allow-plain-lan`). Never log a token, a pairing code or a pairing secret; log the device `id`.
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
-- Pure modules (`status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
+- A device token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
+- Pure modules (`pushPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
 - Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` and on a yes in `setup`, which merge and never clobber, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` on `service install`.
 
 ## Adding a frame
@@ -269,6 +301,17 @@ export GRENADE_HOME=/tmp/grenade-try/home TMUX_TMPDIR=$(mktemp -d) CLAUDE_CONFIG
 /tmp/grenade-try/bin/grenade --control-port 7790 setup --label com.adamchew.grenade.daemon.test
 /tmp/grenade-try/bin/grenade --control-port 7790 service remove --label com.adamchew.grenade.daemon.test
 ```
+
+Push notifications, with a relay of your own that has no push key (so nothing reaches Apple). Take ports nobody else uses, and a tmux socket of its own (`TMUX_TMPDIR`) so the test daemon does not adopt your sessions:
+
+```bash
+(cd ../grenade-relay && PORT=8799 GRENADE_RELAY_PUSH_UPSTREAM=off npm start) &
+GRENADE_HOME=/tmp/grenade-push-smoke TMUX_TMPDIR=/tmp/grenade-push-smoke node dist/cli.js --control-port 7790 daemon --port 7799 --no-advertise --terminal none --no-relay &
+GRENADE_HOME=/tmp/grenade-push-smoke node dist/cli.js --control-port 7790 push on http://127.0.0.1:8799
+node scripts/push-smoke.mjs --port 7799 --control-port 7790 --expect push_unavailable   # expects "PUSH SMOKE OK"
+```
+
+Before driving a test daemon through its control port, check it is yours (`GET /status` → `id` equals `$GRENADE_HOME/daemon-id`): another daemon may hold the port, and the CLI would talk to that one.
 
 Manual: `grenade daemon`, `grenade new demo --cwd ~ --agent shell`, `grenade open demo` in another terminal, then `grenade pair` and connect the phone.
 

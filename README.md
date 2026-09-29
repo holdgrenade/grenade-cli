@@ -14,7 +14,7 @@ grenade setup                            # hooks, start at login, relay, then a 
 1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing.
 2. It shows the Claude Code hooks it would add to `~/.claude/settings.json` and adds them on a yes (`grenade install-hooks --remove` takes them out).
 3. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
-4. It offers the relay, for reaching the Mac from any network (`grenade relay off`).
+4. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
 5. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
@@ -51,9 +51,16 @@ grenade kill grenade
 grenade relay on         # reach this Mac from any network via the main Grenade relay (or: grenade relay on <your relay>)
 grenade relay status     # online? public and local IPs, phones connected through it
 grenade relay off
+
+grenade push status      # push notifications: on or off, through which relay, which phones asked for them
+grenade push test        # send every registered phone a test notification
+grenade push on          # send them also with remote access off, through the main relay
+grenade push off         # send none (grenade push auto: on while remote access is on, the default)
 ```
 
 Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. Host your own relay with `../grenade-relay`.
+
+Push notifications tell the phone that an agent needs an answer or has finished, even while the app is closed. They follow remote access: with `grenade relay on` they are on and go through that relay; with remote access off they are off and the Mac talks to no relay. `grenade push on` turns them on by themselves, through the main relay. The Mac seals each one so that only your phone can read it, and the relay hands it to Apple. That relay learns the Mac's public IP address, the phone's device token and the time, never the session or the text. A push waits while you are at the Mac (keyboard or mouse used in the last two minutes; `grenade push on --at-mac 0` to never wait) and is dropped once you have answered.
 
 The daemon listens on `:7788` (WebSocket at `/ws`) and advertises itself as `_grenade._tcp` so the phone finds it on the same Wi‑Fi. State lives in `~/.grenade/`.
 

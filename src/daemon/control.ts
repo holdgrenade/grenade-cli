@@ -12,6 +12,9 @@
  *   GET  /devices           → Device[]   (paired phones, without their tokens)
  *   DELETE /devices/:id     → { ok, closed }   (unpair one phone; `closed` connections went with it)
  *   DELETE /devices         → { removed, closed }   (unpair every phone)
+ *   GET  /push              → PushStatus   (on or off, the relay pushes go through, the phones that registered)
+ *   POST /push/reload       → PushStatus   (re-reads push.json)
+ *   POST /push/test         → TestPushResult[]   (a test notification to every registered phone)
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { SessionCreateFrame, SessionGroupFrame, type DaemonInfo } from "@grenade/protocol";
@@ -21,6 +24,7 @@ import type { RelayStatus } from "../relay/relayLink.js";
 import type { Device } from "./devices.js";
 import type { PairingCodes } from "./pairing.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
+import type { PushStatus, TestPushResult } from "../push/pusher.js";
 import { readBody, sendJson } from "./http.js";
 
 export interface ControlDeps {
@@ -40,6 +44,7 @@ export interface ControlDeps {
   startedAt: number;
   log: Logger;
   relay: { status(): RelayStatus; reload(): RelayStatus };
+  push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
 }
 
 export function createControlServer(d: ControlDeps): Server {
@@ -60,6 +65,9 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     return sendJson(res, 200, { ...d.daemon, uptimeMs: Date.now() - d.startedAt, sessions: d.registry.list().length, relayLink: d.relay.status() });
   }
   if (method === "POST" && url.pathname === "/relay/reload") return sendJson(res, 200, d.relay.reload());
+  if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
+  if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
+  if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
   if (method === "GET" && url.pathname === "/sessions") return sendJson(res, 200, d.registry.list());
   if (method === "POST" && url.pathname === "/sessions") {
     const body = SessionCreateFrame.omit({ type: true }).safeParse(JSON.parse((await readBody(req)) || "{}"));

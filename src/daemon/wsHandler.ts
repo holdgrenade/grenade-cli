@@ -16,6 +16,8 @@ import {
   type PromptClosedFrame,
   type PromptDecision,
   type PromptFrame,
+  type PushRegisterFrame,
+  type PushStateFrame,
   type Session,
 } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
@@ -25,6 +27,8 @@ import type { Route } from "./devices.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
+/** What a daemon that sends no pushes answers to `push.register`. */
+const NO_PUSH: PushStateFrame = { type: "push.state", registered: false, delivery: "off", events: [] };
 /** What a phone that predates the encrypted local network is told (PROTOCOL.md "Older clients and daemons"). */
 export const PLAIN_REFUSED = "This Mac only accepts encrypted connections. Update Grenade on your phone.";
 /** What a `pair` outside the encrypted channel is told (PROTOCOL.md "Pairing inside the encrypted channel"). */
@@ -84,6 +88,13 @@ export interface ConnectionDeps {
   pair?(credential: string, client: ClientInfo, route: Route): PairVerdict;
   /** The phone sent `unpair`: delete its token and close its other connections. */
   unpair?(token: string): void;
+  /** Push notifications for the phone behind a token (PROTOCOL.md "Push notifications"). Absent means this daemon sends none. */
+  push?: {
+    register(token: string, frame: PushRegisterFrame): PushStateFrame;
+    unregister(token: string): PushStateFrame;
+    /** Hands `send` a new `push.state` when the Mac starts or stops sending pushes. Returns how to stop. */
+    watch?(token: string, send: (state: PushStateFrame) => void): () => void;
+  };
   /** Prompts the agent is showing (PROTOCOL.md "Prompts"). Absent means this daemon has none to offer. */
   prompts?: PromptsPort;
   daemon: DaemonInfo;
@@ -101,6 +112,7 @@ export class Connection {
   /** Set when the pairing behind this connection ended; frames that still arrive are ignored. */
   private over = false;
   private readonly subscriptions = new Set<string>();
+  private stopWatchingPush: (() => void) | undefined;
   private helloTimer: unknown;
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
   private readonly onRemoved = (id: string) => {
@@ -171,6 +183,7 @@ export class Connection {
       this.d.prompts?.off("opened", this.onPrompt);
       this.d.prompts?.off("closed", this.onPrompt);
       this.authed = false;
+      this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
     }
   }
@@ -201,6 +214,7 @@ export class Connection {
     this.authed = true;
     this.token = frame.token;
     this.d.onHello?.(this, frame.token, frame.client);
+    this.stopWatchingPush = this.d.push?.watch?.(frame.token, (state) => this.send(state));
     (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(this.helloTimer);
     this.d.registry.on("updated", this.onUpdated);
     this.d.registry.on("removed", this.onRemoved);
@@ -261,6 +275,10 @@ export class Connection {
       }
       case "session.kill":
         return r.kill(frame.sessionId);
+      case "push.register":
+        return this.send((this.token && this.d.push?.register(this.token, frame)) || NO_PUSH);
+      case "push.unregister":
+        return this.send((this.token && this.d.push?.unregister(this.token)) || NO_PUSH);
       case "prompt.answer": {
         const outcome = this.d.prompts?.answer(frame.sessionId, frame.promptId, frame) ?? "elsewhere";
         if (typeof outcome === "object") return this.fail("bad_frame", outcome.error, frame.type);

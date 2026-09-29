@@ -17,6 +17,7 @@ import { SERVICE_LABEL } from "../service/launchdPlist.js";
 import { askYesNo } from "../setup/ask.js";
 import { findRequirements } from "../setup/findRequirements.js";
 import { addedHooks, hooksNotice } from "../setup/hooksNotice.js";
+import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
 import { problems } from "../setup/requirements.js";
 import { showPairing } from "./pairCommand.js";
 import { startService, type ServiceCommandDeps } from "./serviceCommand.js";
@@ -52,6 +53,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       step(4, "Reach this Mac from anywhere");
       if (o.relay) await relay(d, ask);
       else console.log("skipped (--no-relay). The phone reaches this Mac on the same Wi‑Fi only.");
+      await push(d);
       step(5, "Pair your phone");
       if (!o.pair) return console.log("skipped (--no-pair). Pair later with: grenade pair");
       if (await pair(d, o.yes === true)) console.log("Start an agent with: grenade new myproject --cwd ~/code/myproject");
@@ -131,6 +133,15 @@ async function relay(d: ServiceCommandDeps, ask: Ask): Promise<void> {
   if (!program) throw new Error("cannot tell where the grenade command is installed");
   const r = spawnSync(process.execPath, [program, "--control-port", String(d.controlPort()), "relay", "on"], { stdio: "inherit" });
   if (r.status !== 0) console.log("The relay did not come on. Try again later with: grenade relay on");
+}
+
+/** Says what the daemon does about push notifications. It changes nothing: `grenade push` does. */
+async function push(d: ServiceCommandDeps): Promise<void> {
+  // A daemon that predates push notifications has no such route, and nothing to say.
+  const setting = await d.control<PushSetting>("GET", "/push").catch(() => null);
+  if (!setting) return;
+  console.log("");
+  for (const line of pushNotice(setting)) console.log(line);
 }
 
 async function pair(d: ServiceCommandDeps, assumeYes: boolean): Promise<boolean> {

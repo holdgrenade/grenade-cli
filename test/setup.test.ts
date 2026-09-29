@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mergeHooks } from "../src/hooks/installHooks.js";
 import { readYesNo } from "../src/setup/answer.js";
 import { addedHooks, hooksNotice } from "../src/setup/hooksNotice.js";
+import { pushNotice } from "../src/setup/pushNotice.js";
 import { problems, tmuxVersion, type Found } from "../src/setup/requirements.js";
 
 const fine: Found = { platform: "darwin", node: "22.4.0", tmux: "tmux 3.5a\n", brew: true, claude: true, codex: false };
@@ -84,5 +85,28 @@ describe("the hooks notice", () => {
   it("lists an http hook by its URL", () => {
     const after = { hooks: { PermissionRequest: [{ hooks: [{ type: "http", url: "http://127.0.0.1:7788/hooks/claude/prompt" }] }] } };
     expect(addedHooks({}, after)).toEqual([{ event: "PermissionRequest", runs: "http://127.0.0.1:7788/hooks/claude/prompt" }]);
+  });
+});
+
+describe("the push notice", () => {
+  it("names the relay the Mac posts to, what that relay learns, and how to turn it off", () => {
+    const text = pushNotice({ enabled: true, gateway: "https://relay.example.com" }).join("\n");
+    expect(text).toContain("https://relay.example.com");
+    expect(text).toContain("public IP address");
+    expect(text).toContain("grenade push off");
+  });
+
+  it("says that push follows remote access when nobody chose", () => {
+    const on = pushNotice({ enabled: true, mode: "auto", gateway: "https://relay.example.com" }).join("\n");
+    expect(on).toContain("grenade relay off");
+    const off = pushNotice({ enabled: false, mode: "auto" }).join("\n");
+    expect(off).toContain("remote access is off");
+    expect(off).toContain("talks to no relay");
+    expect(off).toContain("grenade push on");
+    expect(off).toContain("public IP address");
+  });
+
+  it("says how to turn them on when they are off", () => {
+    expect(pushNotice({ enabled: false })).toEqual(["Push notifications are off. Turn them on with: grenade push on"]);
   });
 });

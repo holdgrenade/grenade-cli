@@ -20,6 +20,8 @@ export const paths = {
   relay: join(GRENADE_DIR, "relay.json"),
   e2eKey: join(GRENADE_DIR, "e2e-key"),
   attachments: join(GRENADE_DIR, "attachments"),
+  push: join(GRENADE_DIR, "push.json"),
+  pushDevices: join(GRENADE_DIR, "push-devices.json"),
   // Claude Code keeps its settings in CLAUDE_CONFIG_DIR when that is set.
   claudeSettings: join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "settings.json"),
 };

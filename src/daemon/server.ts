@@ -38,7 +38,9 @@ import { localIpv4 } from "../relay/localIps.js";
 import { PhonePipe } from "../relay/phonePipe.js";
 import { applyRelayInfo, loadRelayConfig } from "../relay/relayConfig.js";
 import { RelayLink, type RelayStatus } from "../relay/relayLink.js";
+import { startPush } from "../push/startPush.js";
 import { PromptStore } from "../prompts/promptStore.js";
+import { promptText } from "../prompts/promptText.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -66,6 +68,10 @@ export interface DaemonOptions {
   allowPlainLan?: boolean;
   /** Unpair phones unseen for this long. Defaults to 90 days; 0 never unpairs by age. */
   deviceIdleMs?: number;
+  /** push.json: whether and through which relay this Mac sends push notifications. Defaults to ~/.grenade/push.json. */
+  pushPath?: string;
+  /** Where the phones' push registrations are kept. Defaults to ~/.grenade/push-devices.json; in memory when tokens are. */
+  pushDevicesPath?: string;
 }
 
 export interface RunningDaemon {
@@ -125,7 +131,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
   });
 
-  /** One hook event of a session: status, summary input and model. */
+  /** One hook event of a session: status, summary input, model and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) =>
     handleClaudeHook(
       registry,
@@ -137,6 +143,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         readTranscriptModel(path)
           .then((model) => model && registry.setModel(id, model))
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e })),
+      (id, message) => push.pusher.noteAsked(id, message),
     );
 
   function handlePair(raw: string, res: Parameters<typeof sendJson>[0]): void {
@@ -187,10 +194,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   });
 
   const attachments = createAttachmentStore(opts.attachmentsDir ?? paths.attachments);
+  const push = startPush({
+    registry,
+    tokens,
+    daemon: info,
+    staticKey: e2eKey,
+    relay: () => (opts.relay === false ? null : loadRelayConfig(opts.relayPath ?? paths.relay)),
+    configPath: opts.pushPath ?? paths.push,
+    devicesPath: opts.pushDevicesPath ?? (opts.tokensPath === null ? undefined : paths.pushDevices),
+    log,
+  });
   const live = new LiveConnections();
 
   // Prompts Claude Code is showing, which a phone can answer (PROTOCOL.md "Prompts").
   const prompts = new PromptStore();
+  prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
   prompts.on("answered", (id) => registry.applyHook(id, "working"));
   registry.on("removed", (id) => prompts.closeSession(id));
   registry.on("updated", (s) => {
@@ -243,6 +261,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         tokens.touch(token);
       },
       pair: pairPhone,
+      push: push.pusher,
       prompts,
       unpair(token) {
         const id = tokens.get(token)?.id;
@@ -325,7 +344,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     daemon: info,
     startedAt: Date.now(),
     log,
-    relay: { status: relayStatus, reload: startRelay },
+    relay: {
+      status: relayStatus,
+      reload() {
+        const status = startRelay();
+        // With push on `auto`, turning remote access on or off turns push on or off.
+        push.relayChanged();
+        return status;
+      },
+    },
+    push,
   });
 
   await listen(http, port, "0.0.0.0");
@@ -345,6 +373,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       mirror.stop();
       poller.stop();
       relayLink?.stop();
+      push.stop();
       // Held hook requests would keep the HTTP server from closing.
       prompts.closeAll();
       summarizer?.stop();
