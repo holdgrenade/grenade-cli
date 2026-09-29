@@ -19,7 +19,7 @@ grenade setup                            # hooks, start at login, relay, then a 
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
 
-Without Homebrew, with Node 22+ and tmux 3.2+ already there: `npm install -g grenade-remote`, then `grenade setup`.
+Without Homebrew, with Node 22+ and tmux 3.2+ already there: download `grenade-remote-<version>.tgz` from the [latest release](https://github.com/holdgrenade/grenade-cli/releases/latest), run `npm install -g ./grenade-remote-<version>.tgz`, then `grenade setup`.
 
 From the source:
 
@@ -31,7 +31,7 @@ npm link                 # puts `grenade` on your PATH
 grenade setup
 ```
 
-The tap and the npm package are not published yet. `npm run release` builds the tarball and the formula locally.
+The npm package `grenade-remote` is not published yet. `npm run release` builds the tarball and the formula locally.
 
 ## Use
 

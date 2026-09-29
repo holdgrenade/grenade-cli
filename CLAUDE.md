@@ -245,7 +245,7 @@ Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url
 
 ## First run (`src/cli/`, `src/setup/`, `src/service/`, `src/pairing/`)
 
-Two steps for a user: install (`brew install holdgrenade/tap/grenade`, once published) and `grenade setup`.
+Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `grenade setup`.
 
 - **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/grenade-remote-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g grenade-remote` both install that tarball. Development still runs from `dist/` built by `tsc`.
 - **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`), hooks, launchd agent, relay, pairing. It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
@@ -326,6 +326,7 @@ Manual: `grenade daemon`, `grenade new demo --cwd ~ --agent shell`, `grenade ope
 - The socket on the Wi‑Fi is still `ws://`; the frames in it are end-to-end encrypted. Sizes and timing are visible on the network, and `GET /health` and Bonjour tell anyone on it the Mac's name, id, version and public key.
 - `tokens.json` holds the tokens themselves (mode 0600). Storing only their hashes would stop a copy of the file from acting as a phone; whoever can read the file can read `e2e-key` beside it too, so it would not change who can get in.
 - A typed code pairs on the same Wi‑Fi only. Away from it a phone pairs with the QR code, which needs the relay to be on.
-- Nothing is installable yet: the tap exists (`holdgrenade/homebrew-tap`, private, `../homebrew-tap`) with the 0.1.0 formula, but there is no npm package and no GitHub release, and this repo is private, so brew has nothing to download. `npm run release` prepares the tarball and the formula locally; copy `packaging/homebrew/grenade.rb` to the tap's `Formula/grenade.rb` from the same run as the uploaded tarball, so the `sha256` matches.
+- Released through Homebrew only: the tap (`holdgrenade/homebrew-tap`, `../homebrew-tap`) installs the tarball of the GitHub release `v<version>` of this repo. The npm package `grenade-remote` is not published. For a new version: bump `version` in `package.json`, `npm run release`, commit, tag `v<version>`, upload `release/grenade-remote-<version>.tgz` to that GitHub release, then copy `packaging/homebrew/grenade.rb` to the tap's `Formula/grenade.rb` from the same run, so the `sha256` is the one of the uploaded tarball.
+- `grenade-protocol` is a private repo, so nobody outside can build this one from the source; the release tarball has the protocol inside.
 - `grenade setup` installs the hooks for port 7788 and the agent without daemon options; a daemon on other ports is set up by hand (`install-hooks --port`, `service install -- --port …`).
 - Codex status is heuristic only until Codex gets hooks.
