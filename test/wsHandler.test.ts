@@ -1,0 +1,267 @@
+import { EventEmitter } from "node:events";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import type { DaemonFrame, Session } from "@grenade/protocol";
+import type { ScreenFrame } from "../src/frames.js";
+import { Connection } from "../src/daemon/wsHandler.js";
+import { silentLogger } from "../src/log.js";
+
+const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
+const fixture = (name: string) => readFileSync(join(fixtures, name), "utf8");
+
+const session: Session = {
+  id: "gr-a1b2c3",
+  name: "grenade",
+  agent: "claude",
+  cwd: "/tmp",
+  status: "waiting",
+  statusSince: "2026-09-27T12:14:22.000Z",
+  lastLine: "hi",
+  createdAt: "2026-09-27T12:01:00.000Z",
+};
+
+class FakeRegistry extends EventEmitter {
+  calls: string[] = [];
+  sessions = new Map<string, Session>([[session.id, session]]);
+  screens = new Map<string, ScreenFrame>();
+  list() { return [...this.sessions.values()]; }
+  get(id: string) { return this.sessions.get(id); }
+  screenOf(id: string) { return this.screens.get(id); }
+  subscribe(id: string) { this.calls.push(`subscribe:${id}`); }
+  unsubscribe(id: string) { this.calls.push(`unsubscribe:${id}`); }
+  async sendText(id: string, text: string, submit: boolean) { this.calls.push(`input:${id}:${text}:${submit}`); }
+  async sendKey(id: string, key: string) { this.calls.push(`key:${id}:${key}`); }
+  async resize(id: string, cols: number, rows?: number) { this.calls.push(`resize:${id}:${cols}:${rows}`); }
+  seen(id: string) { this.calls.push(`seen:${id}`); }
+  async history(id: string, before: number, count: number) {
+    this.calls.push(`history:${id}:${before}:${count}`);
+    return { type: "history" as const, sessionId: id, epoch: 3, start: before - 2, lines: ["a", "b"], styled: ["a", "b"] };
+  }
+  async create(i: { name: string; cwd: string; agent: Session["agent"] }) {
+    const s = { ...session, id: `gr-${i.name}`, name: i.name, agent: i.agent, cwd: i.cwd };
+    this.sessions.set(s.id, s);
+    return s;
+  }
+  setGroup(id: string, group: string | null, index?: number) {
+    this.calls.push(`group:${id}:${group}${index === undefined ? "" : `@${index}`}`);
+    const before = this.sessions.get(id) ?? session;
+    const s = { ...before, id, group: group ?? before.group ?? "g-new" };
+    this.sessions.set(id, s);
+    if (s.group !== before.group) this.emit("updated", s);
+    return s;
+  }
+  async kill(id: string) { this.calls.push(`kill:${id}`); this.sessions.delete(id); }
+}
+
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean } = {}) {
+  const registry = new FakeRegistry();
+  const out: DaemonFrame[] = [];
+  const closes: string[] = [];
+  const saved: { sessionId: string; name: string; mime: string; bytes: number }[] = [];
+  const events: string[] = [];
+  const conn = new Connection({
+    registry: registry as never,
+    attachments: {
+      async save(sessionId, name, mime, data) {
+        saved.push({ sessionId, name, mime, bytes: data.length });
+        return { path: `/tmp/attachments/${sessionId}/${name}`, bytes: data.length };
+      },
+    },
+    isValidToken: (t) => t === (opts.token ?? "grt_example_token"),
+    sealed: opts.sealed ?? true,
+    route: "lan",
+    ...(opts.acceptsPlain ? { acceptsPlain: opts.acceptsPlain } : {}),
+    onHello: (_c, token) => events.push(`hello:${token}`),
+    onEnd: (_c, token) => events.push(`end:${token}`),
+    unpair: (token) => events.push(`unpair:${token}`),
+    daemon: { id: "d_1", name: "Mac", version: "0.1.0" },
+    log: silentLogger,
+    out: (f) => out.push(f),
+    close: (_c, r) => closes.push(r),
+    setTimer: () => 0,
+    clearTimer: () => {},
+  });
+  return { conn, registry, out, closes, saved, events };
+}
+
+describe("Connection", () => {
+  it("requires hello first", async () => {
+    const { conn, out, closes } = connect();
+    await conn.handleMessage(fixture("client.ping.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "unauthorized" });
+    expect(closes).toEqual(["unauthorized"]);
+  });
+
+  it("rejects an unknown token", async () => {
+    const { conn, out, closes } = connect({ token: "grt_other" });
+    await conn.handleMessage(fixture("client.hello.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "unauthorized" });
+    expect(closes).toHaveLength(1);
+  });
+
+  it("answers hello with welcome and the session list", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    expect(out[0]).toMatchObject({ type: "welcome", protocol: 1, daemon: { id: "d_1" } });
+    expect(out[1]).toMatchObject({ type: "sessions", sessions: [{ id: "gr-a1b2c3" }] });
+  });
+
+  it("accepts every client fixture without a bad_frame", async () => {
+    const { conn, out } = connect();
+    // `unpair` ends the connection, so it goes last.
+    const names = readdirSync(fixtures).filter((n) => n.startsWith("client.") && n !== "client.unpair.json");
+    for (const name of [...names, "client.unpair.json"]) {
+      const before = out.length;
+      await conn.handleMessage(fixture(name));
+      const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
+      expect(errors, name).toEqual([]);
+    }
+  });
+
+  it("dispatches input, key, seen, resize and subscribe to the registry", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    registry.screens.set(session.id, { type: "screen", sessionId: session.id, seq: 1, cols: 80, rows: 24, lines: ["hi"], cursor: { row: 0, col: 0 } });
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    await conn.handleMessage(fixture("client.input.json"));
+    await conn.handleMessage(fixture("client.key.json"));
+    await conn.handleMessage(fixture("client.seen.json"));
+    await conn.handleMessage(fixture("client.resize.json"));
+    expect(registry.calls).toEqual([
+      "subscribe:gr-a1b2c3",
+      "input:gr-a1b2c3:Use tmux so I can still attach from the desktop:true",
+      "key:gr-a1b2c3:ctrl-c",
+      "seen:gr-a1b2c3",
+      "resize:gr-a1b2c3:46:undefined",
+    ]);
+    expect(out.find((f) => f.type === "screen")).toMatchObject({ seq: 1 });
+  });
+
+  it("saves an attachment and answers with its path", async () => {
+    const { conn, out, saved } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.attachment.json"));
+    expect(saved).toEqual([{ sessionId: "gr-a1b2c3", name: "screenshot.png", mime: "image/png", bytes: 70 }]);
+    expect(out.at(-1)).toEqual({ type: "attachment.saved", id: "att-1", sessionId: "gr-a1b2c3", path: "/tmp/attachments/gr-a1b2c3/screenshot.png", bytes: 70 });
+  });
+
+  it("refuses an attachment for a session it does not have", async () => {
+    const { conn, out, saved } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(JSON.stringify({ type: "attachment", id: "a", sessionId: "gr-zzz", name: "x.png", mime: "image/png", data: "AA==" }));
+    expect(saved).toEqual([]);
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "unknown_session", ref: "attachment" });
+  });
+
+  it("answers history with the registry's rows", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.history.json"));
+    expect(registry.calls).toEqual(["history:gr-a1b2c3:1840:500"]);
+    expect(out.at(-1)).toEqual({ type: "history", sessionId: "gr-a1b2c3", epoch: 3, start: 1838, lines: ["a", "b"], styled: ["a", "b"] });
+  });
+
+  it("forwards screen frames only for subscribed sessions and unsubscribes on close", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    registry.emit("screen", { type: "screen", sessionId: "gr-other", seq: 1, cols: 1, rows: 1, lines: [], cursor: { row: 0, col: 0 } });
+    registry.emit("screen", { type: "screen", sessionId: session.id, seq: 2, cols: 1, rows: 1, lines: ["x"], cursor: { row: 0, col: 0 } });
+    expect(out.filter((f) => f.type === "screen").map((f) => (f as ScreenFrame).seq)).toEqual([2]);
+    conn.handleClose();
+    expect(registry.calls).toContain("unsubscribe:gr-a1b2c3");
+    expect(registry.listenerCount("screen")).toBe(0);
+  });
+
+  it("moves a session between groups and always answers with session.updated", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "session.group", sessionId: session.id, group: null }));
+    expect(registry.calls).toContain(`group:${session.id}:null`);
+    expect(out).toEqual([{ type: "session.updated", session: { ...session, group: "g-new" } }]);
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "session.group", sessionId: session.id, group: null }));
+    expect(out).toEqual([{ type: "session.updated", session: { ...session, group: "g-new" } }]);
+    await conn.handleMessage(JSON.stringify({ type: "session.group", sessionId: session.id, group: "g-new", index: 2 }));
+    expect(registry.calls).toContain(`group:${session.id}:g-new@2`);
+  });
+
+  it("reports unknown sessions", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(JSON.stringify({ type: "subscribe", sessionId: "gr-nope" }));
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "unknown_session", ref: "subscribe" });
+  });
+
+  it("rejects the wrong protocol version", async () => {
+    const { conn, out, closes } = connect();
+    await conn.handleMessage(JSON.stringify({ type: "hello", protocol: 2, token: "grt_example_token", client: { name: "x", platform: "test", version: "0" } }));
+    expect(out[0]).toMatchObject({ type: "error", code: "unsupported_protocol" });
+    expect(closes).toHaveLength(1);
+  });
+});
+
+describe("Connection: encryption and unpairing", () => {
+  it("refuses a plain hello without making the phone forget the Mac", async () => {
+    const { conn, out, closes, events } = connect({ sealed: false });
+    await conn.handleMessage(fixture("client.hello.json"));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ type: "error", code: "unsupported_protocol", ref: "hello" });
+    expect(closes).toEqual(["unsupported_protocol"]);
+    expect(events).toEqual([]);
+  });
+
+  it("still says unauthorized to a plain hello with an unknown token", async () => {
+    const { conn, out } = connect({ sealed: false, token: "grt_other", acceptsPlain: () => true });
+    await conn.handleMessage(fixture("client.hello.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "unauthorized" });
+  });
+
+  it("accepts a plain hello when the daemon allows it for that token", async () => {
+    const { conn, out, events } = connect({ sealed: false, acceptsPlain: (t) => t === "grt_example_token" });
+    await conn.handleMessage(fixture("client.hello.json"));
+    expect(out[0]).toMatchObject({ type: "welcome" });
+    expect(events).toEqual(["hello:grt_example_token"]);
+  });
+
+  it("reports the end of a connection that had said hello, once", async () => {
+    const { conn, events } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    conn.handleClose();
+    conn.handleClose();
+    expect(events).toEqual(["hello:grt_example_token", "end:grt_example_token"]);
+  });
+
+  it("unpair deletes the token, answers unpaired and closes", async () => {
+    const { conn, out, closes, events } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.unpair.json"));
+    expect(events).toContain("unpair:grt_example_token");
+    expect(out).toEqual([{ type: "unpaired" }]);
+    expect(closes).toEqual(["unpaired"]);
+    await conn.handleMessage(fixture("client.ping.json"));
+    expect(out).toHaveLength(1);
+  });
+
+  it("a pairing ended on the Mac says unauthorized, closes, and ignores what still arrives", async () => {
+    const { conn, out, closes } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    conn.revoked("unpaired on the Mac");
+    conn.revoked("unpaired on the Mac");
+    expect(out).toEqual([{ type: "error", code: "unauthorized", message: "unpaired on the Mac" }]);
+    expect(closes).toEqual(["unauthorized"]);
+    await conn.handleMessage(fixture("client.input.json"));
+    expect(out).toHaveLength(1);
+  });
+
+  it("revoking a connection that never said hello does nothing", () => {
+    const { conn, out, closes } = connect();
+    conn.revoked("unpaired on the Mac");
+    expect(out).toEqual([]);
+    expect(closes).toEqual([]);
+  });
+});
