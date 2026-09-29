@@ -1,4 +1,4 @@
-# grenade-backend
+# grenade-cli
 
 `grenaded` is the daemon that runs on the Mac. It owns tmux sessions that run AI coding agents, streams their screens to phones over WebSocket, accepts input, and turns Claude Code hook events into a status the phone can show. `grenade` is the CLI that talks to it. Phones on the same Wi‑Fi connect directly; anywhere else they reach it through a relay (`../grenade-relay`), end-to-end encrypted. Read `../grenade-protocol/PROTOCOL.md` first: every frame this daemon sends or accepts is defined there.
 
@@ -326,6 +326,6 @@ Manual: `grenade daemon`, `grenade new demo --cwd ~ --agent shell`, `grenade ope
 - The socket on the Wi‑Fi is still `ws://`; the frames in it are end-to-end encrypted. Sizes and timing are visible on the network, and `GET /health` and Bonjour tell anyone on it the Mac's name, id, version and public key.
 - `tokens.json` holds the tokens themselves (mode 0600). Storing only their hashes would stop a copy of the file from acting as a phone; whoever can read the file can read `e2e-key` beside it too, so it would not change who can get in.
 - A typed code pairs on the same Wi‑Fi only. Away from it a phone pairs with the QR code, which needs the relay to be on.
-- Nothing is published: there is no tap, no npm package and no release yet. `npm run release` prepares all three locally.
+- Nothing is installable yet: the tap exists (`holdgrenade/homebrew-tap`, private, `../homebrew-tap`) with the 0.1.0 formula, but there is no npm package and no GitHub release, and this repo is private, so brew has nothing to download. `npm run release` prepares the tarball and the formula locally; copy `packaging/homebrew/grenade.rb` to the tap's `Formula/grenade.rb` from the same run as the uploaded tarball, so the `sha256` matches.
 - `grenade setup` installs the hooks for port 7788 and the agent without daemon options; a daemon on other ports is set up by hand (`install-hooks --port`, `service install -- --port …`).
 - Codex status is heuristic only until Codex gets hooks.

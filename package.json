@@ -1,5 +1,5 @@
 {
-  "name": "grenade-backend",
+  "name": "grenade-cli",
   "version": "0.1.0",
   "description": "grenaded: the Grenade daemon for macOS, plus the grenade CLI.",
   "type": "module",

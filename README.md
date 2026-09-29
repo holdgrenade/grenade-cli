@@ -1,4 +1,4 @@
-# grenade-backend
+# grenade-cli
 
 The Mac side of Grenade: `grenaded` (daemon) and the `grenade` CLI. Runs your AI coding agents inside tmux, streams them to the Grenade phone app, and lets the phone type into them.
 
@@ -26,7 +26,7 @@ From the source:
 ```bash
 brew install tmux
 cd ../grenade-protocol && npm install && npm run build
-cd ../grenade-backend && npm install && npm run build
+cd ../grenade-cli && npm install && npm run build
 npm link                 # puts `grenade` on your PATH
 grenade setup
 ```

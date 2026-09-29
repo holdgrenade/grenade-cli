@@ -17,7 +17,7 @@ const NAME = "grenade-remote";
 const dir = join(root, "release", `${NAME}-${pkg.version}`);
 const tarball = join(root, "release", `${NAME}-${pkg.version}.tgz`);
 
-// The backend imports the protocol's dist, so that is built first.
+// The CLI imports the protocol's dist, so that is built first.
 execFileSync("npm", ["run", "build"], { cwd: join(root, "..", "grenade-protocol"), stdio: "inherit" });
 
 rmSync(dir, { recursive: true, force: true });
