@@ -20,7 +20,7 @@ grenade status | ls
 grenade setup [--yes] [--no-hooks] [--no-service] [--no-relay] [--no-pair]   # the whole first run: requirements, hooks, start at login, relay, QR code
 grenade pair [--no-wait]         # QR code (pairing offer) + typed code, then waits and names the phone that paired
 grenade service install [-- <daemon options>] | remove | status   # grenaded as a launchd agent: starts at login, restarts when it dies
-npm run release                  # release/grenade-remote-<version>.tgz + packaging/homebrew/grenade.rb (nothing is published)
+npm run release                  # release/holdgrenade-cli-<version>.tgz + packaging/homebrew/grenade.rb (nothing is published)
 grenade devices                  # paired phones: id, name, platform, paired, last seen, connected now (Wi‑Fi / relay), "not encrypted"
 grenade unpair <id or name>      # end one phone's pairing at once, on Wi‑Fi and relay; an ambiguous name lists the candidates
 grenade unpair --all
@@ -247,7 +247,7 @@ Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url
 
 Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `grenade setup`.
 
-- **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/grenade-remote-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g grenade-remote` both install that tarball. Development still runs from `dist/` built by `tsc`.
+- **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/holdgrenade-cli-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g @holdgrenade/cli` both install that tarball. Development still runs from `dist/` built by `tsc`.
 - **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`), hooks, launchd agent, relay, pairing. It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
 - **The agent** is `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist`, loaded into `gui/<uid>` (the login session, which has the Keychain that `claude -p` needs). `RunAtLoad`, `KeepAlive` on a failed exit only, `ThrottleInterval` 10 s, and `AbandonProcessGroup` so tmux outlives the daemon. Its `PATH` is the one of the terminal that installed it: launchd's own is bare, and agents started in tmux inherit the daemon's. `GRENADE_*`, `TMUX_BIN`, `TMUX_TMPDIR`, `CLAUDE_BIN` and `CLAUDE_CONFIG_DIR` that are set at install time go into the plist too. What the daemon prints before its logger is up lands in `~/.grenade/launchd.log`.
 - **Pairing** (PROTOCOL.md "Pairing offer (QR code)" and "Pairing inside the encrypted channel"): `POST /pair-code` mints code and secret and answers with `typed` and `offer`. `Connection.handlePair` takes a sealed `pair` with either, on the LAN socket or a relay pipe, through `ConnectionDeps.pair` → `pairPhone` in `server.ts`, which issues the token with `sealed: true`. While the secret is live its access hash is in the list the relay link uploads (`accessHashes` in `server.ts`); `PairingCodes.onChange` and a timer at the end of the two minutes send the list again. `pair` outside the encrypted channel is answered `unsupported_protocol` and is not counted as a try.
@@ -299,7 +299,7 @@ node scripts/pair-smoke.mjs --control-port 7790               # expects "PAIR SM
 The release and the launchd agent, without touching the daemon you use (its own state, ports, label and tmux server):
 
 ```bash
-npm run release && npm install -g --prefix /tmp/grenade-try ./release/grenade-remote-*.tgz   # `./` matters: npm reads a bare path as a GitHub repo
+npm run release && npm install -g --prefix /tmp/grenade-try ./release/holdgrenade-cli-*.tgz   # `./` matters: npm reads a bare path as a GitHub repo
 export GRENADE_HOME=/tmp/grenade-try/home TMUX_TMPDIR=$(mktemp -d) CLAUDE_CONFIG_DIR=/tmp/grenade-try/claude; unset TMUX
 /tmp/grenade-try/bin/grenade --control-port 7790 service install --label com.adamchew.grenade.daemon.test -- --port 7799 --no-advertise --terminal none
 /tmp/grenade-try/bin/grenade --control-port 7790 setup --label com.adamchew.grenade.daemon.test
@@ -326,7 +326,7 @@ Manual: `grenade daemon`, `grenade new demo --cwd ~ --agent shell`, `grenade ope
 - The socket on the Wi‑Fi is still `ws://`; the frames in it are end-to-end encrypted. Sizes and timing are visible on the network, and `GET /health` and Bonjour tell anyone on it the Mac's name, id, version and public key.
 - `tokens.json` holds the tokens themselves (mode 0600). Storing only their hashes would stop a copy of the file from acting as a phone; whoever can read the file can read `e2e-key` beside it too, so it would not change who can get in.
 - A typed code pairs on the same Wi‑Fi only. Away from it a phone pairs with the QR code, which needs the relay to be on.
-- Released through Homebrew only: the tap (`holdgrenade/homebrew-tap`, `../homebrew-tap`) installs the tarball of the GitHub release `v<version>` of this repo. The npm package `grenade-remote` is not published. For a new version: bump `version` in `package.json`, `npm run release`, commit, tag `v<version>`, upload `release/grenade-remote-<version>.tgz` to that GitHub release, then copy `packaging/homebrew/grenade.rb` to the tap's `Formula/grenade.rb` from the same run, so the `sha256` is the one of the uploaded tarball.
+- Two ways in, one tarball: the tap (`holdgrenade/homebrew-tap`, `../homebrew-tap`) installs the asset of the GitHub release `v<version>` of this repo, and npm has the same file as `@holdgrenade/cli` (the scope is the npm org `holdgrenade`; plain `grenade` is taken there). For a new version: bump `version` in `package.json`, `npm run release`, commit, tag `v<version>`, upload `release/holdgrenade-cli-<version>.tgz` to that GitHub release, `npm publish ./release/holdgrenade-cli-<version>.tgz` (npm asks for the second factor, so a person runs it), then copy `packaging/homebrew/grenade.rb` to the tap's `Formula/grenade.rb` from the same run, so the `sha256` is the one of the uploaded tarball.
 - `grenade-protocol` is a private repo, so nobody outside can build this one from the source; the release tarball has the protocol inside.
 - `grenade setup` installs the hooks for port 7788 and the agent without daemon options; a daemon on other ports is set up by hand (`install-hooks --port`, `service install -- --port …`).
 - Codex status is heuristic only until Codex gets hooks.

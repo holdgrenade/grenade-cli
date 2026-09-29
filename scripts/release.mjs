@@ -1,7 +1,7 @@
 // Builds what gets installed on a user's Mac: one self-contained package with no dependencies to fetch.
-//   release/grenade-remote-<version>/   package.json, dist/cli.js (the CLI, the daemon, @grenade/protocol and every
-//                                       library in one file), README.md, LICENSE
-//   release/grenade-remote-<version>.tgz   the same, packed; what `npm install -g` and the Homebrew formula take
+//   release/holdgrenade-cli-<version>/   package.json, dist/cli.js (the CLI, the daemon, @grenade/protocol and every
+//                                        library in one file), README.md, LICENSE
+//   release/holdgrenade-cli-<version>.tgz   the same, packed; what `npm install -g` and the Homebrew formula take
 //   packaging/homebrew/grenade.rb       the formula, with this tarball's version and sha256
 // Nothing is published. Run: npm run release
 import { execFileSync } from "node:child_process";
@@ -13,9 +13,12 @@ import { formula } from "../packaging/homebrew/formula.mjs";
 
 const root = join(import.meta.dirname, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const NAME = "grenade-remote";
-const dir = join(root, "release", `${NAME}-${pkg.version}`);
-const tarball = join(root, "release", `${NAME}-${pkg.version}.tgz`);
+const NAME = "@holdgrenade/cli";
+// What `npm pack` calls the tarball of a scoped package: the scope without its "@", then the name.
+const FILE = "holdgrenade-cli";
+const REPO = "https://github.com/holdgrenade/grenade-cli";
+const dir = join(root, "release", `${FILE}-${pkg.version}`);
+const tarball = join(root, "release", `${FILE}-${pkg.version}.tgz`);
 
 // The CLI imports the protocol's dist, so that is built first.
 execFileSync("npm", ["run", "build"], { cwd: join(root, "..", "grenade-protocol"), stdio: "inherit" });
@@ -53,6 +56,11 @@ writeFileSync(
       engines: pkg.engines,
       os: ["darwin"],
       license: pkg.license,
+      homepage: "https://www.holdgrenade.com",
+      repository: { type: "git", url: `git+${REPO}.git` },
+      bugs: { url: `${REPO}/issues` },
+      // A scoped package is private on npm unless it says otherwise.
+      publishConfig: { access: "public" },
     },
     null,
     2,
@@ -63,7 +71,7 @@ cpSync(join(root, "LICENSE"), join(dir, "LICENSE"));
 
 execFileSync("npm", ["pack", "--pack-destination", join(root, "release")], { cwd: dir, stdio: ["ignore", "ignore", "inherit"] });
 const sha256 = createHash("sha256").update(readFileSync(tarball)).digest("hex");
-writeFileSync(join(root, "packaging", "homebrew", "grenade.rb"), formula({ version: pkg.version, sha256, tarball: `${NAME}-${pkg.version}.tgz` }));
+writeFileSync(join(root, "packaging", "homebrew", "grenade.rb"), formula({ version: pkg.version, sha256, tarball: `${FILE}-${pkg.version}.tgz` }));
 
 console.log(`package   ${dir}`);
 console.log(`tarball   ${tarball}`);
