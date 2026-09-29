@@ -35,6 +35,8 @@ interface OpenPrompt {
   payload: unknown;
   openedAt: number;
   respond: Respond;
+  /** A test card: no agent is behind it, so what the session's agent does next says nothing about it. */
+  test: boolean;
 }
 
 export interface PromptStoreOptions {
@@ -65,13 +67,13 @@ export class PromptStore extends EventEmitter<PromptEvents> {
    * A `PermissionRequest` arrived for a session. Returns the prompt, which stays open until it is answered,
    * dropped or closed, or null when the payload is not something a card can show (`respond` is not called then).
    */
-  open(sessionId: string, payload: unknown, respond: Respond): PromptFrame | null {
+  open(sessionId: string, payload: unknown, respond: Respond, opts: { test?: boolean } = {}): PromptFrame | null {
     const body = promptFromClaudeHook(payload);
     if (!body) return null;
     const at = this.now();
     const frame: PromptFrame = { type: "prompt", sessionId, promptId: this.newId(), since: new Date(at).toISOString(), ...body };
     const toolName = (payload as { tool_name: string }).tool_name;
-    this.open_.set(frame.promptId, { frame, toolName, payload, openedAt: at, respond });
+    this.open_.set(frame.promptId, { frame, toolName, payload, openedAt: at, respond, test: opts.test === true });
     this.emit("opened", frame);
     return frame;
   }
@@ -95,11 +97,17 @@ export class PromptStore extends EventEmitter<PromptEvents> {
     this.close(p, ranOut ? "expired" : "elsewhere", null);
   }
 
+  /** Nobody may answer this one any more from a phone: its time is up. */
+  expire(promptId: string): void {
+    const p = this.open_.get(promptId);
+    if (p) this.close(p, "expired", null);
+  }
+
   /** A later hook of the session arrived (PROTOCOL.md "Prompt hook", step 3). */
   closeByHook(sessionId: string, eventName: string, toolName?: string): void {
     const closes = promptsClosedByClaudeHook(eventName);
     if (!closes) return;
-    const ofSession = [...this.open_.values()].filter((p) => p.frame.sessionId === sessionId);
+    const ofSession = [...this.open_.values()].filter((p) => p.frame.sessionId === sessionId && !p.test);
     const gone = closes === "all" ? ofSession : ofSession.filter((p) => p.toolName === toolName).slice(0, 1);
     for (const p of gone) this.close(p, "elsewhere", null);
   }

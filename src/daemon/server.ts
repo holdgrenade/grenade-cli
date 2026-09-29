@@ -40,6 +40,7 @@ import { applyRelayInfo, loadRelayConfig } from "../relay/relayConfig.js";
 import { RelayLink, type RelayStatus } from "../relay/relayLink.js";
 import { startPush } from "../push/startPush.js";
 import { PromptStore } from "../prompts/promptStore.js";
+import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
 
 export interface DaemonOptions {
@@ -208,6 +209,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   // Prompts Claude Code is showing, which a phone can answer (PROTOCOL.md "Prompts").
   const prompts = new PromptStore();
+  const promptTests = new PromptTests(prompts);
   prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
   prompts.on("answered", (id) => registry.applyHook(id, "working"));
   registry.on("removed", (id) => prompts.closeSession(id));
@@ -344,6 +346,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     daemon: info,
     startedAt: Date.now(),
     log,
+    promptTests,
     relay: {
       status: relayStatus,
       reload() {

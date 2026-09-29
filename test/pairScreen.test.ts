@@ -34,6 +34,28 @@ describe("pairScreen", () => {
     expect(text.indexOf("█")).toBeLessThan(text.indexOf("482 913 0457"));
   });
 
+  it("names the two ways option 1 and option 2, each with where it works", () => {
+    const lines = pairScreen(input);
+    const at = (text: string) => lines.findIndex((l) => l.includes(text));
+    expect(at("OPTION 1 · SCAN THE QR CODE")).toBeGreaterThan(-1);
+    expect(at("OPTION 1")).toBeLessThan(at("█"));
+    expect(at("█")).toBeLessThan(at("OPTION 2 · TYPE THE CODE"));
+    expect(at("OPTION 2")).toBeLessThan(at("482 913 0457"));
+    expect(lines[at("OPTION 2") + 1]).toContain("Same Wi‑Fi only");
+  });
+
+  it("ends with the typed code, alone on its line", () => {
+    const lines = pairScreen(input).filter((l) => l !== "");
+    expect(lines.at(-1)?.trim()).toBe("482 913 0457");
+  });
+
+  it("makes the headings and the code bold only when it may use color", () => {
+    expect(pairScreen(input).join("\n")).not.toContain("\u001b[1m");
+    const text = pairScreen({ ...input, color: true }).join("\n");
+    expect(text).toContain("\u001b[1mOPTION 1 · SCAN THE QR CODE\u001b[0m");
+    expect(text).toContain("\u001b[1m482 913 0457\u001b[0m");
+  });
+
   it("says where the QR code works", () => {
     expect(pairScreen(input).join("\n")).toContain("any network");
     expect(pairScreen({ ...input, relayOnline: false }).join("\n")).toContain("grenade relay on");
@@ -43,6 +65,8 @@ describe("pairScreen", () => {
     const text = pairScreen({ ...input, columns: 40 }).join("\n");
     expect(text).not.toContain("█");
     expect(text).toContain(`${qrWidth(url) + 2} columns`);
+    expect(text).toContain("OPTION 1");
+    expect(text).toContain("OPTION 2");
     expect(text).toContain("482 913 0457");
   });
 

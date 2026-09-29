@@ -120,7 +120,7 @@ async function setup() {
     fetch(`http://127.0.0.1:${d.port}/hooks/claude?session=${session.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
   const of = <T extends DaemonFrame["type"]>(type: T) => frames.filter((f): f is Extract<DaemonFrame, { type: T }> => f.type === type);
   const lastSession = () => of("session.updated").at(-1)?.session;
-  return { d, session, frames, send, hook, statusHook, of, lastSession };
+  return { d, session, frames, send, hook, statusHook, of, lastSession, control };
 }
 
 const bash = { hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "npm test", description: "Run the tests" } };
@@ -193,5 +193,44 @@ describe("a prompt, through the daemon", () => {
     await until(() => of("prompt").length === 1);
     await d.stop();
     expect(await held).toBe(200);
+  });
+});
+
+describe("a test card (grenade prompt test)", () => {
+  it("goes to the phone, and the phone's answer comes back to the CLI", async () => {
+    const { session, send, of, control } = await setup();
+    const started = await control("POST", "/prompts/test", { kind: "question", wait: 30 });
+    expect(started).toMatchObject({ sessionId: session.id, sessionName: "demo", kind: "question", phones: 1 });
+    await until(() => of("prompt").length === 1);
+    const prompt = of("prompt")[0]!;
+    expect(prompt.promptId).toBe(started["promptId"]);
+    expect(prompt.questions).toHaveLength(2);
+
+    const result = control("GET", `/prompts/test/${prompt.promptId}`);
+    send({ type: "prompt.answer", sessionId: session.id, promptId: prompt.promptId, allow: true, answers: [["Yes, on the phone"], ["The text", "The buttons"]] });
+    expect(await result).toMatchObject({
+      outcome: "answered",
+      kind: "question",
+      reply: {
+        hookSpecificOutput: {
+          decision: {
+            behavior: "allow",
+            updatedInput: {
+              answers: { "This is a test card. Did it reach your phone?": "Yes, on the phone", "Which parts of the card look right?": "The text, The buttons" },
+            },
+          },
+        },
+      },
+    });
+    await until(() => of("prompt.closed").length === 1);
+    expect(of("prompt.closed")[0]?.reason).toBe("answered");
+  });
+
+  it("names the session it is for, and says so when there is none", async () => {
+    const { control } = await setup();
+    expect(await control("POST", "/prompts/test", { kind: "plan", session: "demo" })).toMatchObject({ sessionName: "demo", kind: "plan" });
+    expect(await control("POST", "/prompts/test", { kind: "plan", session: "nope" })).toMatchObject({ error: "conflict", message: "no running session nope" });
+    expect(await control("POST", "/prompts/test", { kind: "riddle" })).toMatchObject({ error: "bad_request" });
+    expect(await control("GET", "/prompts/test/p-unknown")).toMatchObject({ error: "not_found" });
   });
 });

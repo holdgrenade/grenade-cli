@@ -36,6 +36,7 @@ grenade relay status             # url, relay id, online/offline, public + local
 grenade push on [url] [--key K] [--at-mac S]   # send push notifications, also with remote access off; url = another relay's push route
 grenade push auto                # the default: push while this Mac uses a relay for remote access, none otherwise
 grenade push off | status | test # test sends a notification to every phone that registered
+grenade prompt test [session] [--kind permission|question|plan|all] [--wait 120]   # a test card on the phone; prints what it answered
 grenade --control-port 7790 <cmd>                          # talk to a daemon on another control port
 ```
 
@@ -51,7 +52,7 @@ src/cli/serviceCommand.ts  `grenade service …`; `startService` (refuses while 
 src/cli/setupCommand.ts    `grenade setup`: five steps, each skipped when already done; asks before hooks and relay (no answer without a terminal, unless --yes)
 src/pairing/offer.ts       pure: the pairing offer for this daemon (`offerFor`, `offerUrlFor`), PROTOCOL.md "Pairing offer (QR code)"
 src/pairing/qrText.ts      pure: a URL as a QR code of half-block characters (`uqr`), forced white on black when it may use color
-src/pairing/pairScreen.ts  pure: what `grenade pair` prints; leaves the QR code out of a window it does not fit
+src/pairing/pairScreen.ts  pure: what `grenade pair` prints, "Option 1" (the QR code) and "Option 2" (the typed code), the names the phone's pairing screen uses; leaves the QR code out of a window it does not fit
 src/pairing/pairingWatch.ts pure: what became of the last pair code (none, waiting, paired with which phone over which route, expired)
 src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `servicePath` (the PATH the agent runs with), `stableProgram` (no versioned Cellar path)
 src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, pid, last exit)
@@ -102,6 +103,8 @@ src/hooks/installHooks.ts  pure merge/remove of Grenade hooks into a Claude sett
 src/daemon/promptHook.ts   POST /hooks/claude/prompt: `openPromptFromHook` (pure but for the store) and the HTTP wrapper that holds the response; `closePromptsByHook` for hooks that reach /hooks/claude
 src/prompts/promptStore.ts PromptStore: the prompts Claude Code is showing, each with the callback that answers its held request; `open`, `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered`
 src/prompts/promptText.ts  pure: one line that says what a prompt asks, for its push
+src/prompts/promptTests.ts PromptTests: test cards (`grenade prompt test`); `testPayload(kind)` is a payload as Claude Code sends it, `start` opens it in the store with nothing behind it, `result` resolves with the reply the phone's answer became
+src/cli/promptCommand.ts   `grenade prompt test`; src/cli/promptAnswer.ts (pure) reads the answer off the hook reply, in words
 src/push/pusher.ts         Pusher: listens to the registry, keeps pending pushes, seals one per registered phone and posts it; `register`/`unregister` for a Connection
 src/push/pushPolicy.ts     pure: is a change an event (startedWaiting), wait / hold / send / drop (decide), how long a session was busy (trackBusy), worthPushing
 src/push/pushContent.ts    pure: what a push says (pushContentFor, pushText, clip)
@@ -185,6 +188,7 @@ Read PROTOCOL.md "Prompt hook" and "Prompts" first. A phone can answer a permiss
 - A question and a plan only accept an `allow` that hands `tool_input` back as `updatedInput`; a bare `allow` leaves the dialog open. `fixtures/prompt.examples.json` pins every reply, and `test/promptStore.test.ts` replays it.
 - Replies never carry `updatedPermissions`: an answer from the phone counts once.
 - Open prompts are in memory only. `stop()` calls `closeAll()` first, because a held request would keep the HTTP server from closing.
+- `grenade prompt test` puts a test card on a session (the named one, else the first that is running) through `POST /prompts/test` on the control API and waits on `GET /prompts/test/:id`. It goes through the same store, frames and reply builder as a real prompt; only the held hook request is missing, so no agent is asked and nothing runs. It does not change the session's status and sends no push, and the hooks of the session's agent do not close it (`test` in the store), so it can sit on a session that is busy.
 - To try it without touching the running daemon or `~/.claude/settings.json`: write `mergeHooks({}, 7799).settings` to a file, put a `claude` wrapper that adds `--settings <file>` first on `PATH`, point `TMUX_BIN` at a wrapper that runs `tmux -L <name>`, and start a daemon with its own `GRENADE_HOME` on other ports.
 
 ## Summaries (`src/summary/`)

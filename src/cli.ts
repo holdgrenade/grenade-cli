@@ -8,6 +8,7 @@ import { CONTROL_PORT, DEFAULT_PORT, OFFICIAL_RELAY_URL, type Session } from "@g
 import { VERSION, paths } from "./config.js";
 import { ago, matchDevice, type Device } from "./daemon/devices.js";
 import { showPairing } from "./cli/pairCommand.js";
+import { registerPromptCommand } from "./cli/promptCommand.js";
 import { registerPushCommand } from "./cli/pushCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
@@ -75,6 +76,7 @@ program
 registerServiceCommand(program, { control, controlPort });
 registerSetupCommand(program, { control, controlPort });
 registerPushCommand(program, { control });
+registerPromptCommand(program, { control });
 
 program
   .command("devices")

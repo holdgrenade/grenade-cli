@@ -15,9 +15,12 @@
  *   GET  /push              → PushStatus   (on or off, the relay pushes go through, the phones that registered)
  *   POST /push/reload       → PushStatus   (re-reads push.json)
  *   POST /push/test         → TestPushResult[]   (a test notification to every registered phone)
+ *   POST /prompts/test      { kind, session?, wait? } → { promptId, sessionId, sessionName, kind, phones }
+ *                             (puts a test card on a session, PROTOCOL.md "Prompts"; `wait` is in seconds)
+ *   GET  /prompts/test/:id  → PromptTestResult   (answers when the phone has, or the wait ran out)
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { SessionCreateFrame, SessionGroupFrame, type DaemonInfo } from "@grenade/protocol";
+import { PromptKind, SessionCreateFrame, SessionGroupFrame, type DaemonInfo, type PromptFrame } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import type { SessionRegistry } from "../sessions/registry.js";
 import type { RelayStatus } from "../relay/relayLink.js";
@@ -25,6 +28,7 @@ import type { Device } from "./devices.js";
 import type { PairingCodes } from "./pairing.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
 import type { PushStatus, TestPushResult } from "../push/pusher.js";
+import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
 
 export interface ControlDeps {
@@ -45,6 +49,11 @@ export interface ControlDeps {
   log: Logger;
   relay: { status(): RelayStatus; reload(): RelayStatus };
   push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
+  /** Test cards. Absent means this daemon has no prompts to offer. */
+  promptTests?: {
+    start(sessionId: string, kind: PromptKind, waitMs: number): PromptFrame;
+    result(promptId: string): Promise<PromptTestResult> | undefined;
+  };
 }
 
 export function createControlServer(d: ControlDeps): Server {
@@ -68,6 +77,12 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
+  if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
+  const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);
+  if (method === "GET" && tested?.[1]) {
+    const result = d.promptTests?.result(tested[1]);
+    return result ? sendJson(res, 200, await result) : sendJson(res, 404, { error: "not_found", message: `no test card ${tested[1]}` });
+  }
   if (method === "GET" && url.pathname === "/sessions") return sendJson(res, 200, d.registry.list());
   if (method === "POST" && url.pathname === "/sessions") {
     const body = SessionCreateFrame.omit({ type: true }).safeParse(JSON.parse((await readBody(req)) || "{}"));
@@ -110,4 +125,23 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     return r ? sendJson(res, 200, { ok: true, ...r }) : sendJson(res, 404, { error: "unknown_device" });
   }
   sendJson(res, 404, { error: "not_found" });
+}
+
+/** `POST /prompts/test`: the card goes on the named session, or on the first one that is still running. */
+function startPromptTest(d: ControlDeps, body: { kind?: unknown; session?: unknown; wait?: unknown }, res: ServerResponse): void {
+  const kind = PromptKind.safeParse(body.kind ?? "permission");
+  if (!kind.success) return sendJson(res, 400, { error: "bad_request", message: "kind is permission, question or plan" });
+  const live = d.registry.list().filter((s) => s.status !== "gone");
+  const wanted = typeof body.session === "string" ? body.session : undefined;
+  const session = wanted ? live.find((s) => s.id === wanted || s.name === wanted) : live[0];
+  if (!session) {
+    const message = wanted ? `no running session ${wanted}` : "no session to show the card on. Start one with: grenade new demo --agent shell";
+    return sendJson(res, 409, { error: "conflict", message });
+  }
+  if (!d.promptTests) return sendJson(res, 409, { error: "conflict", message: "this daemon has no answer cards" });
+  const seconds = typeof body.wait === "number" && body.wait > 0 ? Math.min(body.wait, PROMPT_TEST_WAIT_MAX_S) : PROMPT_TEST_WAIT_S;
+  const frame = d.promptTests.start(session.id, kind.data, seconds * 1000);
+  const phones = d.devices.list().filter((phone) => phone.connected.length > 0).length;
+  d.log.info(`Sent a test card to ${session.name}`, { kind: kind.data, prompt: frame.promptId, phones });
+  sendJson(res, 201, { promptId: frame.promptId, sessionId: session.id, sessionName: session.name, kind: kind.data, phones });
 }

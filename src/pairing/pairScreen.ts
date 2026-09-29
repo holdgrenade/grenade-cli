@@ -1,4 +1,7 @@
-/** What `grenade pair` prints: the QR code, the typed code, and where each of them works. Pure. */
+/**
+ * What `grenade pair` prints: the two ways to pair, each under its own heading with where it works.
+ * Option 1 is the QR code, option 2 the typed code. The phone's pairing screen names them the same. Pure.
+ */
 import { spacedCode } from "../daemon/pairCheck.js";
 import { qrRows, qrWidth } from "./qrText.js";
 
@@ -15,25 +18,37 @@ export interface PairScreenInput {
 }
 
 const INDENT = "  ";
+/** The typed code stands alone, further in, so it is found at a glance. */
+const CODE_INDENT = "      ";
+const BOLD = "\u001b[1m";
+const RESET = "\u001b[0m";
 
 export function pairScreen(i: PairScreenInput): string[] {
+  const bold = (text: string) => (i.color ? `${BOLD}${text}${RESET}` : text);
   const needed = qrWidth(i.offer) + INDENT.length;
   const fits = i.columns === undefined || i.columns >= needed;
   const lines: string[] = [""];
+
+  lines.push(`${INDENT}${bold("Pair your phone with this Mac")}`);
+  lines.push(`${INDENT}Pick one of the two. Each works once and runs out in 2 minutes.`);
+  lines.push("");
+
+  lines.push(`${INDENT}${bold("OPTION 1 · SCAN THE QR CODE")}`);
   if (fits) {
-    lines.push(`${INDENT}Scan this in Grenade on your phone:`, "");
-    lines.push(...qrRows(i.offer, i.color).map((row) => INDENT + row));
-    lines.push("");
+    lines.push(`${INDENT}In the Grenade app, tap "Scan QR code".`);
     lines.push(`${INDENT}${i.relayOnline ? "Works from any network: the relay is on." : "Works on this Mac's Wi‑Fi. For any network, turn the relay on first: grenade relay on"}`);
     lines.push("");
-    lines.push(`${INDENT}Or pick this Mac in the app and type:  ${spacedCode(i.typed)}   (same Wi‑Fi only)`);
+    lines.push(...qrRows(i.offer, i.color).map((row) => INDENT + row));
   } else {
-    lines.push(`${INDENT}This window is too narrow for the QR code. Make it ${needed} columns wide and run grenade pair again,`);
-    lines.push(`${INDENT}or pick this Mac in the app and type:  ${spacedCode(i.typed)}   (same Wi‑Fi only)`);
+    lines.push(`${INDENT}This window is too narrow for the QR code.`);
+    lines.push(`${INDENT}Make it ${needed} columns wide and run grenade pair again.`);
   }
-  lines.push(`${INDENT}The last four digits let the phone check that it is talking to this Mac.`);
   lines.push("");
-  lines.push(`${INDENT}Both work once and run out in 2 minutes.`);
+
+  lines.push(`${INDENT}${bold("OPTION 2 · TYPE THE CODE")}`);
+  lines.push(`${INDENT}In the Grenade app, pick this Mac and type the code. Same Wi‑Fi only.`);
+  lines.push("");
+  lines.push(`${CODE_INDENT}${bold(spacedCode(i.typed))}`);
   lines.push("");
   return lines;
 }
