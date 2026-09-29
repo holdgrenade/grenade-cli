@@ -4,7 +4,7 @@
 
 ## Stack
 
-Node 22+ (uses `fetch`, `import.meta.dirname`), TypeScript strict ESM, `ws`, `bonjour-service`, `commander`, Zod schemas from `@grenade/protocol` (`file:../grenade-protocol`, so build that package first). Tests: vitest. tmux ≥ 3.2 must be on PATH (`brew install tmux`).
+Node 22+ (uses `fetch`, `import.meta.dirname`; `@types/node` stays on 22 so the types match the oldest Node we support), TypeScript strict ESM, `ws`, `bonjour-service`, `commander`, Zod schemas from `@grenade/protocol` (`file:../grenade-protocol`, so build that package first). Tests: vitest. tmux ≥ 3.2 must be on PATH (`brew install tmux`).
 
 ## Commands
 
