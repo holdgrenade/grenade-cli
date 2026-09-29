@@ -245,7 +245,7 @@ Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url
 
 ## First run (`src/cli/`, `src/setup/`, `src/service/`, `src/pairing/`)
 
-Two steps for a user: install (`brew install adamkchew/grenade/grenade`, once published) and `grenade setup`.
+Two steps for a user: install (`brew install holdgrenade/tap/grenade`, once published) and `grenade setup`.
 
 - **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/grenade-remote-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g grenade-remote` both install that tarball. Development still runs from `dist/` built by `tsc`.
 - **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`), hooks, launchd agent, relay, pairing. It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.

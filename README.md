@@ -5,7 +5,7 @@ The Mac side of Grenade: `grenaded` (daemon) and the `grenade` CLI. Runs your AI
 ## Install
 
 ```bash
-brew install adamkchew/grenade/grenade   # brings Node and tmux
+brew install holdgrenade/tap/grenade   # brings Node and tmux
 grenade setup                            # hooks, start at login, relay, then a QR code for the phone
 ```
 
