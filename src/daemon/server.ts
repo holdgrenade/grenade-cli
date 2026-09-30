@@ -14,7 +14,7 @@ import { startPoller, type Poller } from "../sessions/poller.js";
 import { SessionRegistry } from "../sessions/registry.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
 import { Summarizer } from "../summary/summarizer.js";
-import { ITermMirror, defaultTerminal, type TerminalKind } from "../terminal/iterm.js";
+import { TerminalMirror, defaultTerminal, type TerminalKind } from "../terminal/mirror.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
 import { ActivityStore } from "../activity/activityStore.js";
@@ -55,7 +55,7 @@ export interface DaemonOptions {
   tmux?: Tmux;
   tokensPath?: string | null;
   sessionsPath?: string | null;
-  /** Mirror sessions into iTerm2 tabs. Default `auto`: tabs whenever iTerm2 is installed, checked at every event. */
+  /** Mirror sessions into terminal tabs. Default `auto`: iTerm2 when it is installed (checked at every event), else Terminal.app. */
   terminal?: TerminalKind;
   /** One-sentence session summaries via `claude -p` (Haiku). Defaults to on unless `GRENADE_SUMMARIES=off`. */
   summaries?: boolean;
@@ -106,8 +106,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const summarizer = startSummarizer(registry, log, opts.summaries ?? process.env["GRENADE_SUMMARIES"] !== "off");
   await registry.adopt();
   const poller: Poller = startPoller({ tmux, registry, log });
-  const mirror = new ITermMirror({ registry, log, terminal: opts.terminal ?? defaultTerminal() });
-  mirror.start().catch((e) => log.warn("Could not mirror sessions into iTerm", { error: e }));
+  const mirror = new TerminalMirror({ registry, log, terminal: opts.terminal ?? defaultTerminal() });
+  mirror.start().catch((e) => log.warn("Could not mirror sessions into a terminal", { error: e }));
 
   const http = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");

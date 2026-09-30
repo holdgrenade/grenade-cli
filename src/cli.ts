@@ -13,7 +13,7 @@ import { registerPushCommand } from "./cli/pushCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
 import { startDaemon } from "./daemon/server.js";
-import type { TerminalKind } from "./terminal/iterm.js";
+import { isTerminalKind, type TerminalKind } from "./terminal/mirror.js";
 import { mergeHooks, removeHooks } from "./hooks/installHooks.js";
 import { loadRelayConfig, normalizeRelayUrl, relayConfigFor, removeRelayConfig, saveRelayConfig } from "./relay/relayConfig.js";
 import type { RelayStatus } from "./relay/relayLink.js";
@@ -33,7 +33,7 @@ program
   .option("--port <port>", "WebSocket/HTTP port", parsePort, DEFAULT_PORT)
   .option("--name <name>", "name shown on the phone")
   .option("--no-advertise", "do not publish over Bonjour")
-  .option("--terminal <kind>", "mirror sessions into terminal tabs: auto | iterm | none (default: auto, tabs whenever iTerm2 is installed)", parseTerminal)
+  .option("--terminal <kind>", "mirror sessions into terminal tabs: auto | iterm | terminal | none (default: auto, iTerm2 when installed, else Terminal.app)", parseTerminal)
   .option("--no-summaries", "do not describe sessions with claude -p (Haiku)")
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
@@ -321,8 +321,8 @@ async function control<T = unknown>(method: string, path: string, body?: unknown
 }
 
 function parseTerminal(v: string): TerminalKind {
-  if (v === "iterm" || v === "none" || v === "auto") return v;
-  throw new InvalidArgumentError("expected auto, iterm or none");
+  if (isTerminalKind(v)) return v;
+  throw new InvalidArgumentError("expected auto, iterm, terminal or none");
 }
 
 function parsePort(v: string): number {

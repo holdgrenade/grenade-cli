@@ -49,7 +49,7 @@ export function problems(f: Found): Problem[] {
   if (!f.iterm) {
     list.push({
       what: "iterm",
-      message: "iTerm2 is not installed. With it, every session opens in a tab of its own on this Mac, and you can watch all your agents at once.",
+      message: "iTerm2 is not installed. Sessions open in Terminal windows, one each. With iTerm2 the sessions of a folder sit side by side in one tab.",
       blocks: false,
       ...(f.brew ? { fix: "brew install --cask iterm2" } : {}),
     });

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "@grenade/protocol";
 import { silentLogger } from "../src/log.js";
 import type { RegistryEvents, SessionRegistry } from "../src/sessions/registry.js";
-import { ITermMirror, TAG_VARIABLE, closeTabScript, listTaggedScript, openTabScript, parseTaggedList, relayoutSteps, splitPaneScript } from "../src/terminal/iterm.js";
+import { TAG_VARIABLE, closeTabScript, listTaggedScript, openTabScript, parseTaggedList, splitPaneScript } from "../src/terminal/iterm.js";
+import { TerminalMirror, relayoutSteps } from "../src/terminal/mirror.js";
 
 const session = (id: string, status: Session["status"] = "working", group?: string, createdAt = "2026-09-27T12:00:00.000Z", order?: number): Session => ({
   id, name: id.slice(3), agent: "shell", cwd: "/tmp", status, statusSince: "2026-09-27T12:00:00.000Z", lastLine: "", createdAt,
@@ -71,11 +72,11 @@ describe("AppleScript builders", () => {
   });
 });
 
-describe("ITermMirror", () => {
+describe("TerminalMirror (iTerm2)", () => {
   it("opens a tab when a session is created and closes it when removed", async () => {
     const registry = fakeRegistry();
     const { run, scripts } = fakeRunner();
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     registry.emit("created", session("gr-one"));
     await flush();
@@ -90,7 +91,7 @@ describe("ITermMirror", () => {
   it("closes the tab when the agent exits on its own (status gone)", async () => {
     const registry = fakeRegistry();
     const { run, scripts } = fakeRunner();
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     registry.emit("created", session("gr-one"));
     registry.emit("updated", session("gr-one", "gone"));
@@ -102,7 +103,7 @@ describe("ITermMirror", () => {
   it("on start opens tabs only for live sessions that have no tab yet", async () => {
     const registry = fakeRegistry([session("gr-has-tab"), session("gr-no-tab"), session("gr-dead", "gone")]);
     const { run, scripts } = fakeRunner(["gr-has-tab"]);
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     await flush();
     const opened = scripts.filter((s) => s.includes("attach-session"));
@@ -114,7 +115,7 @@ describe("ITermMirror", () => {
   it("does nothing when terminal is none", async () => {
     const registry = fakeRegistry([session("gr-one")]);
     const { run, scripts } = fakeRunner();
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "none", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "none", tmuxBin: "/bin/tmux" });
     await mirror.start();
     registry.emit("created", session("gr-two"));
     await flush();
@@ -125,7 +126,7 @@ describe("ITermMirror", () => {
     const registry = fakeRegistry([session("gr-old")]);
     const { run, scripts } = fakeRunner();
     let installed = false;
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "auto", installed: () => installed, tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "auto", installed: () => installed, appleTerminal: () => false, tmuxBin: "/bin/tmux" });
     await mirror.start();
     registry.emit("created", session("gr-before"));
     await flush();
@@ -147,7 +148,7 @@ describe("ITermMirror", () => {
       if (fail) throw new Error("iTerm2 got an error: not allowed");
       return "";
     };
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "auto", installed: () => true, tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "auto", installed: () => true, appleTerminal: () => false, tmuxBin: "/bin/tmux" });
     await expect(mirror.start()).rejects.toThrow("not allowed");
     fail = false;
     registry.emit("created", session("gr-one"));
@@ -164,7 +165,7 @@ describe("ITermMirror", () => {
       if (script.includes("=gr-bad")) throw new Error("iTerm said no");
       return script.includes("set found") ? "" : "1";
     };
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     registry.emit("created", session("gr-bad"));
     registry.emit("created", session("gr-good"));
@@ -178,7 +179,7 @@ describe("ITermMirror", () => {
     const list = [session("gr-app", "working", "g-1", "2026-09-27T12:00:00.000Z")];
     const registry = fakeRegistry(list);
     const { run, scripts } = fakeRunner();
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     const zsh = session("gr-zsh", "working", "g-1", "2026-09-27T12:05:00.000Z");
     list.push(zsh);
@@ -199,7 +200,7 @@ describe("ITermMirror", () => {
     const list = [session("gr-app", "working", "g-1"), session("gr-zsh", "working", "g-1", "2026-09-27T12:05:00.000Z")];
     const registry = fakeRegistry(list);
     const { run, scripts } = fakeRunner(["gr-app", "gr-zsh"]);
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     scripts.length = 0;
     list[1] = session("gr-zsh", "working", "g-9", "2026-09-27T12:05:00.000Z");
@@ -217,7 +218,7 @@ describe("ITermMirror", () => {
     const list = [g("gr-a", 0), g("gr-b", 1), g("gr-c", 2)];
     const registry = fakeRegistry(list);
     const { run, scripts } = fakeRunner(["gr-a", "gr-b", "gr-c"]);
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     scripts.length = 0;
     list.splice(0, 3, g("gr-a", 0), g("gr-c", 1), g("gr-b", 2));
@@ -233,7 +234,7 @@ describe("ITermMirror", () => {
     const list = [session("gr-a", "working", "g-1", undefined, 0), session("gr-b", "working", "g-1", undefined, 1), session("gr-x", "working", "g-9")];
     const registry = fakeRegistry(list);
     const { run, scripts } = fakeRunner(["gr-a", "gr-b", "gr-x"]);
-    const mirror = new ITermMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: "iterm", tmuxBin: "/bin/tmux" });
     await mirror.start();
     scripts.length = 0;
     list[2] = session("gr-x", "working", "g-1", undefined, 2);

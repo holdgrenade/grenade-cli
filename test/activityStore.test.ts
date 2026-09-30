@@ -25,22 +25,42 @@ describe("ActivityStore", () => {
     expect(s.entriesOf("gr-b")).toEqual([]);
   });
 
-  it("shows a hook's prompt at once and lets the transcript's copy take its place", () => {
+  it("shows a hook's prompt at once and does not send the transcript's copy again", () => {
     const { s, frames } = store();
     s.append("gr-a", [said("Earlier.")]);
     s.noteAsked("gr-a", "  fix it \n", "2026-09-30T14:03:00.000Z");
     expect(s.entriesOf("gr-a").at(-1)).toEqual(asked("fix it", "2026-09-30T14:03:00.000Z"));
     expect(frames.at(-1)?.entries).toEqual([asked("fix it", "2026-09-30T14:03:00.000Z")]);
-    // The transcript records the prompt with its own time, then the reply.
+    // The transcript records the prompt with its own time, then the reply: the phone gets only the reply.
     s.append("gr-a", [asked("fix it", "2026-09-30T14:03:01.000Z"), said("On it.")]);
-    expect(s.entriesOf("gr-a")).toEqual([said("Earlier."), asked("fix it", "2026-09-30T14:03:01.000Z"), said("On it.")]);
+    expect(s.entriesOf("gr-a")).toEqual([said("Earlier."), asked("fix it", "2026-09-30T14:03:00.000Z"), said("On it.")]);
+    expect(frames.at(-1)).toEqual({ type: "activity", sessionId: "gr-a", entries: [said("On it.")] });
+    expect(frames).toHaveLength(3);
   });
 
-  it("puts a prompt noted before a restart's full read where the transcript has it", () => {
-    const { s } = store();
+  it("sends nothing when the transcript's copy is all the read brought", () => {
+    const { s, frames } = store();
+    s.noteAsked("gr-a", "fix it", at);
+    s.append("gr-a", [asked("fix it", "2026-09-30T14:03:01.000Z")]);
+    expect(frames).toHaveLength(1);
+    expect(s.entriesOf("gr-a")).toEqual([asked("fix it", at)]);
+  });
+
+  it("puts a prompt noted before a restart's full read where the transcript has it, and sends it all again", () => {
+    const { s, frames } = store();
     s.noteAsked("gr-a", "again", at);
     s.append("gr-a", [asked("first"), said("One."), asked("again"), said("Two.")]);
     expect(s.entriesOf("gr-a").map((e) => e.text)).toEqual(["first", "One.", "again", "Two."]);
+    expect(frames.at(-1)).toEqual({ type: "activity", sessionId: "gr-a", entries: s.entriesOf("gr-a"), full: true });
+  });
+
+  it("sends it all again when the read also brought the reply the last read missed", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [asked("first")]);
+    s.noteAsked("gr-a", "again", at);
+    s.append("gr-a", [said("One."), asked("again"), said("Two.")]);
+    expect(s.entriesOf("gr-a").map((e) => e.text)).toEqual(["first", "One.", "again", "Two."]);
+    expect(frames.at(-1)?.full).toBe(true);
   });
 
   it("keeps a repeated prompt when the transcript repeats it too", () => {

@@ -6,15 +6,15 @@ import { EventEmitter } from "node:events";
 import { ACTIVITY_KEEP, activityText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
 
 export interface ActivityEvents {
-  /** New entries of one session, in order. */
+  /** New entries of one session, in order; or, with `full`, everything held, when the order the phone has is wrong. */
   activity: [frame: ActivityFrame];
 }
 
 interface Track {
   entries: ActivityEntry[];
   /**
-   * The prompt a `UserPromptSubmit` hook put in before the transcript recorded it. When the transcript's copy
-   * arrives the hook's entry gives way to it, so the entry sits where the transcript has it.
+   * The prompt a `UserPromptSubmit` hook put in before the transcript recorded it. The transcript's copy of it is
+   * not sent again: the phone already shows the hook's entry, and showed it twice before this was so.
    */
   pending: ActivityEntry | null;
 }
@@ -31,12 +31,26 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
   append(id: string, entries: ActivityEntry[]): void {
     if (entries.length === 0) return;
     const t = this.track(id);
-    if (t.pending && entries.some((e) => e.kind === "asked" && e.text === t.pending?.text)) {
-      t.entries = t.entries.filter((e) => e !== t.pending);
-      t.pending = null;
+    const pending = t.pending;
+    const copy = pending ? entries.findIndex((e) => e.kind === "asked" && e.text === pending.text) : -1;
+    if (!pending || copy < 0) {
+      t.entries = [...t.entries, ...entries].slice(-ACTIVITY_KEEP);
+      this.emit("activity", { type: "activity", sessionId: id, entries });
+      return;
     }
-    t.entries = [...t.entries, ...entries].slice(-ACTIVITY_KEEP);
-    this.emit("activity", { type: "activity", sessionId: id, entries });
+    t.pending = null;
+    if (t.entries.at(-1) === pending && copy === 0) {
+      // The usual case: the hook's entry is the newest one and the transcript's copy leads the batch, so the
+      // hook's entry stays and only what follows the copy is new.
+      const rest = entries.slice(1);
+      t.entries = [...t.entries, ...rest].slice(-ACTIVITY_KEEP);
+      if (rest.length > 0) this.emit("activity", { type: "activity", sessionId: id, entries: rest });
+      return;
+    }
+    // The transcript has the prompt elsewhere (a read from the start after a restart, or lines the last read
+    // missed): take the transcript's order, and send it whole so the phone shows the same.
+    t.entries = [...t.entries.filter((e) => e !== pending), ...entries].slice(-ACTIVITY_KEEP);
+    this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
   }
 
   /** The prompt of a `UserPromptSubmit` hook: shown at once, before the transcript has it. */

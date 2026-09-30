@@ -8,8 +8,9 @@ export function nextSteps(iterm: boolean): string[] {
     );
   } else {
     lines.push(
-      "Watch it from any terminal with: grenade open myproject   (Ctrl-b d detaches)",
-      "Install iTerm2 (brew install --cask iterm2) and every session opens in a tab of its own, no restart needed.",
+      "It opens in a Terminal window of its own. With iTerm2 (brew install --cask iterm2) the sessions of a folder",
+      "sit side by side in one tab instead; no restart needed. Any terminal attaches with: grenade open myproject",
+      "The first time, macOS may ask whether grenaded (it says node) may control Terminal: allow it, or no window appears.",
     );
   }
   return lines;

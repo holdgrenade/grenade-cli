@@ -46,6 +46,7 @@ describe("nextSteps", () => {
   it("says where the agent shows up, with and without iTerm2", () => {
     expect(nextSteps(true).join("\n")).toContain("tab of its own in iTerm2");
     expect(nextSteps(false).join("\n")).toContain("brew install --cask iterm2");
+    expect(nextSteps(false).join("\n")).toContain("Terminal window");
     expect(nextSteps(false)[0]).toContain("grenade new myproject");
   });
 });
