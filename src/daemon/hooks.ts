@@ -13,7 +13,8 @@ export interface HookResult {
 
 /**
  * `onPrompt` receives the user's prompt from an applied `UserPromptSubmit`, for the session summary.
- * `onTranscript` receives the transcript path of any applied hook, to read the session's model from.
+ * `onTranscript` receives the transcript path of any applied hook, and the hook's event, to read the session's model and
+ * activity from.
  * `onAsked` receives the `message` of a hook that left the session waiting for an answer, for its push.
  */
 export function handleClaudeHook(
@@ -22,7 +23,7 @@ export function handleClaudeHook(
   rawBody: string,
   log: Logger,
   onPrompt?: (sessionId: string, prompt: string) => void,
-  onTranscript?: (sessionId: string, path: string) => void,
+  onTranscript?: (sessionId: string, path: string, event: string) => void,
   onAsked?: (sessionId: string, message: string) => void,
 ): HookResult {
   if (!sessionParam) return { status: 202, body: { ok: true, reason: "no session param; not a grenade session" } };
@@ -39,7 +40,7 @@ export function handleClaudeHook(
   const waitingFor = waitingForClaudeHook(parsed.data.hook_event_name, parsed.data.notification_type) ?? undefined;
   if (!registry.applyHook(sessionParam, status, waitingFor)) return { status: 404, body: { ok: false, reason: `unknown session ${sessionParam}` } };
   if (parsed.data.prompt !== undefined) onPrompt?.(sessionParam, parsed.data.prompt);
-  if (parsed.data.transcript_path) onTranscript?.(sessionParam, parsed.data.transcript_path);
+  if (parsed.data.transcript_path) onTranscript?.(sessionParam, parsed.data.transcript_path, parsed.data.hook_event_name);
   if (waitingFor === "answer" && parsed.data.message) onAsked?.(sessionParam, parsed.data.message);
   log.debug(`Claude hook ${parsed.data.hook_event_name}`, { session: sessionParam, status });
   return { status: 200, body: { ok: true, applied: status } };

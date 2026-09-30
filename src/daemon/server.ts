@@ -19,6 +19,7 @@ import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
+import { CatchUp } from "../activity/catchUp.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
@@ -137,6 +138,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
   const activity = new ActivityStore();
   const transcripts = new TranscriptReader();
+  /** Reads a session's transcript into the store; true when the agent's reply was among the new entries. */
+  const readActivity = (id: string, path: string) =>
+    transcripts.read(path).then((entries) => {
+      activity.append(id, entries);
+      return entries.some((e) => e.kind === "said");
+    });
+  // A Stop can come before the reply is in the transcript; keep reading until it is.
+  const catchUp = new CatchUp(readActivity);
 
   /** One hook event of a session: status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) =>
@@ -149,13 +158,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
       },
-      (id, path) => {
+      (id, path, event) => {
         readTranscriptModel(path)
           .then((model) => model && registry.setModel(id, model))
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));
-        transcripts
-          .read(path)
-          .then((entries) => activity.append(id, entries))
+        catchUp.cancel(id);
+        readActivity(id, path)
+          .then((said) => {
+            if (event === "Stop" && !said) catchUp.start(id, path);
+          })
           .catch((e) => log.debug("Could not read the activity from a transcript", { session: id, path, error: e }));
       },
       (id, message) => push.pusher.noteAsked(id, message),
@@ -229,6 +240,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   registry.on("removed", (id) => {
     prompts.closeSession(id);
     activity.forget(id);
+    catchUp.cancel(id);
   });
   registry.on("updated", (s) => {
     if (s.status === "gone") prompts.closeSession(s.id);
@@ -398,6 +410,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       // Held hook requests would keep the HTTP server from closing.
       prompts.closeAll();
       summarizer?.stop();
+      catchUp.stop();
       await discovery?.stop();
       for (const c of wss.clients) c.close(1001, "daemon stopping");
       await Promise.all([closeServer(wss), closeServer(http), closeServer(control)]);
