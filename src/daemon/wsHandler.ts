@@ -2,24 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
-import {
-  ATTACHMENT_MAX_BYTES,
-  CLOSE_UNAUTHORIZED,
-  PROTOCOL_VERSION,
-  parseClientFrame,
-  type ClientFrame,
-  type ClientInfo,
-  type DaemonFrame,
-  type DaemonInfo,
-  type ErrorCode,
-  type KeyName,
-  type PromptClosedFrame,
-  type PromptDecision,
-  type PromptFrame,
-  type PushRegisterFrame,
-  type PushStateFrame,
-  type Session,
-} from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -70,6 +53,13 @@ export interface PromptsPort {
   off(event: "closed", cb: (f: PromptClosedFrame) => void): unknown;
 }
 
+/** The slice of ActivityStore a connection needs (PROTOCOL.md "Activity"). */
+export interface ActivityPort {
+  entriesOf(id: string): ActivityEntry[];
+  on(event: "activity", cb: (f: ActivityFrame) => void): unknown;
+  off(event: "activity", cb: (f: ActivityFrame) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -97,6 +87,8 @@ export interface ConnectionDeps {
   };
   /** Prompts the agent is showing (PROTOCOL.md "Prompts"). Absent means this daemon has none to offer. */
   prompts?: PromptsPort;
+  /** What the agent said and was asked (PROTOCOL.md "Activity"). Absent means this daemon sends none. */
+  activity?: ActivityPort;
   daemon: DaemonInfo;
   log: Logger;
   out(frame: DaemonFrame): void;
@@ -123,6 +115,9 @@ export class Connection {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
   };
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
+  private readonly onActivity = (f: ActivityFrame) => {
+    if (this.subscriptions.has(f.sessionId)) this.send(f);
+  };
 
   constructor(private readonly d: ConnectionDeps) {
     this.helloTimer = this.startHelloTimer();
@@ -182,6 +177,7 @@ export class Connection {
       this.d.registry.off("screen", this.onScreen);
       this.d.prompts?.off("opened", this.onPrompt);
       this.d.prompts?.off("closed", this.onPrompt);
+      this.d.activity?.off("activity", this.onActivity);
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -225,6 +221,7 @@ export class Connection {
     this.d.prompts?.on("opened", this.onPrompt);
     this.d.prompts?.on("closed", this.onPrompt);
     for (const open of this.d.prompts?.list() ?? []) this.send(open);
+    this.d.activity?.on("activity", this.onActivity);
   }
 
   private async dispatch(frame: ClientFrame): Promise<void> {
@@ -248,6 +245,10 @@ export class Connection {
         }
         const cached = r.screenOf(frame.sessionId);
         if (cached) this.send(cached);
+        // Only Claude Code has a transcript to read; the phone hides the plain view for the others.
+        if (this.d.activity && r.get(frame.sessionId)?.agent === "claude") {
+          this.send({ type: "activity", sessionId: frame.sessionId, entries: this.d.activity.entriesOf(frame.sessionId), full: true });
+        }
         return;
       }
       case "unsubscribe":

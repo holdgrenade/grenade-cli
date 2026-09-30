@@ -17,6 +17,8 @@ import { Summarizer } from "../summary/summarizer.js";
 import { ITermMirror, defaultTerminal, type TerminalKind } from "../terminal/iterm.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
+import { ActivityStore } from "../activity/activityStore.js";
+import { TranscriptReader } from "../activity/transcriptReader.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
@@ -132,18 +134,30 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
   });
 
-  /** One hook event of a session: status, summary input, model and the text of a push. */
+  // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
+  const activity = new ActivityStore();
+  const transcripts = new TranscriptReader();
+
+  /** One hook event of a session: status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) =>
     handleClaudeHook(
       registry,
       session,
       body,
       log,
-      (id, prompt) => summarizer?.notePrompt(id, prompt),
-      (id, path) =>
+      (id, prompt) => {
+        summarizer?.notePrompt(id, prompt);
+        activity.noteAsked(id, prompt, new Date().toISOString());
+      },
+      (id, path) => {
         readTranscriptModel(path)
           .then((model) => model && registry.setModel(id, model))
-          .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e })),
+          .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));
+        transcripts
+          .read(path)
+          .then((entries) => activity.append(id, entries))
+          .catch((e) => log.debug("Could not read the activity from a transcript", { session: id, path, error: e }));
+      },
       (id, message) => push.pusher.noteAsked(id, message),
     );
 
@@ -212,7 +226,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const promptTests = new PromptTests(prompts);
   prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
   prompts.on("answered", (id) => registry.applyHook(id, "working"));
-  registry.on("removed", (id) => prompts.closeSession(id));
+  registry.on("removed", (id) => {
+    prompts.closeSession(id);
+    activity.forget(id);
+  });
   registry.on("updated", (s) => {
     if (s.status === "gone") prompts.closeSession(s.id);
   });
@@ -248,6 +265,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     new Connection({
       registry,
       attachments,
+      activity,
       isValidToken: (t) => tokens.has(t),
       sealed: via.sealed,
       route: via.route,

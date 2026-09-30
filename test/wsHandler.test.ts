@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DaemonFrame, Session } from "@grenade/protocol";
+import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { Connection } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
@@ -54,14 +54,21 @@ class FakeRegistry extends EventEmitter {
   async kill(id: string) { this.calls.push(`kill:${id}`); this.sessions.delete(id); }
 }
 
+class FakeActivity extends EventEmitter {
+  entries = new Map<string, ActivityEntry[]>([[session.id, [{ kind: "said", text: "On it.", at: "2026-09-30T14:02:14.000Z" }]]]);
+  entriesOf(id: string) { return this.entries.get(id) ?? []; }
+}
+
 function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean } = {}) {
   const registry = new FakeRegistry();
+  const activity = new FakeActivity();
   const out: DaemonFrame[] = [];
   const closes: string[] = [];
   const saved: { sessionId: string; name: string; mime: string; bytes: number }[] = [];
   const events: string[] = [];
   const conn = new Connection({
     registry: registry as never,
+    activity: activity as never,
     attachments: {
       async save(sessionId, name, mime, data) {
         saved.push({ sessionId, name, mime, bytes: data.length });
@@ -82,7 +89,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     setTimer: () => 0,
     clearTimer: () => {},
   });
-  return { conn, registry, out, closes, saved, events };
+  return { conn, registry, activity, out, closes, saved, events };
 }
 
 describe("Connection", () => {
@@ -263,5 +270,27 @@ describe("Connection: encryption and unpairing", () => {
     conn.revoked("unpaired on the Mac");
     expect(out).toEqual([]);
     expect(closes).toEqual([]);
+  });
+});
+
+describe("Connection activity", () => {
+  it("sends the full activity of a Claude session on subscribe, then forwards new entries", async () => {
+    const { conn, activity, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    expect(out.at(-1)).toEqual({ type: "activity", sessionId: session.id, full: true, entries: activity.entriesOf(session.id) });
+    const frame = { type: "activity", sessionId: session.id, entries: [{ kind: "said", text: "Done.", at: "2026-09-30T14:06:41.000Z" }] };
+    activity.emit("activity", frame);
+    expect(out.at(-1)).toEqual(frame);
+    activity.emit("activity", { ...frame, sessionId: "gr-other" });
+    expect(out.at(-1)).toEqual(frame);
+  });
+
+  it("sends no activity for a session without a transcript", async () => {
+    const { conn, registry, out } = connect();
+    registry.sessions.set(session.id, { ...session, agent: "shell" });
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    expect(out.some((f) => f.type === "activity")).toBe(false);
   });
 });

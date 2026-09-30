@@ -81,7 +81,7 @@ src/relay/localIps.ts      pure: the Mac's IPv4 addresses from os.networkInterfa
 src/relay/sealedPipe.ts    SealedPipe: one encrypted connection from a phone, whatever carries it; handshake, then open → Connection → seal. Text in, text out
 src/relay/phonePipe.ts     PhonePipe: one relay conn; a SealedPipe whose text travels in the relay's `data` frames
 src/relay/relayLink.ts     RelayLink: WebSocket to <relay>/v1/daemon; register, update, ping/pong, backoff, routes conns to pipes
-src/daemon/hooks.ts        POST /hooks/claude?session=… → registry.applyHook; a UserPromptSubmit prompt goes to the Summarizer; transcript_path → registry.setModel
+src/daemon/hooks.ts        POST /hooks/claude?session=… → registry.applyHook; a UserPromptSubmit prompt goes to the Summarizer and the ActivityStore; transcript_path → registry.setModel and the TranscriptReader
 src/daemon/discovery.ts    Bonjour _grenade._tcp with TXT v/id/name; `dns-sd -R` (system mDNSResponder) on macOS so the address follows Wi‑Fi changes, bonjour-service elsewhere
 src/daemon/http.ts         readBody / sendJson
 src/attachments/attachmentName.ts  pure: the on-disk name of an upload (UTC stamp, sanitized name, extension from the mime type)
@@ -99,6 +99,8 @@ src/summary/claudeCli.ts   resolveClaudeBin + runClaudeSummary: `claude -p --mod
 src/summary/summarizer.ts  Summarizer: listens to the registry, schedules runs, calls registry.setSummary
 src/transcript/modelLabel.ts  pure: lastModelIn (model id of the last assistant reply in transcript JSONL), modelLabel ("claude-opus-5-5" → "Opus 5.5")
 src/transcript/readModel.ts   readTranscriptModel: reads the last 256 KB of a transcript, returns the label
+src/activity/transcriptReader.ts  TranscriptReader: reads a transcript from where it left off, whole lines only, one read at a time per file; `activityEntriesIn` (protocol) turns the lines into entries
+src/activity/activityStore.ts     ActivityStore: the last 200 entries per session; `append` (from the transcript), `noteAsked` (a hook's prompt, shown at once), `forget`; event `activity` carries new entries as a frame
 src/hooks/installHooks.ts  pure merge/remove of Grenade hooks into a Claude settings object: seven command hooks that report status, and the `PermissionRequest` HTTP hook (`promptHook`) that Claude Code holds open
 src/daemon/promptHook.ts   POST /hooks/claude/prompt: `openPromptFromHook` (pure but for the store) and the HTTP wrapper that holds the response; `closePromptsByHook` for hooks that reach /hooks/claude
 src/prompts/promptStore.ts PromptStore: the prompts Claude Code is showing, each with the callback that answers its held request; `open`, `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered`
@@ -201,6 +203,15 @@ Each session carries `summary`, one sentence on what it is working on, shown on 
 - The call is `claude -p --model haiku --tools "" --setting-sources "" --strict-mcp-config --no-session-persistence --system-prompt …`, run in the temp folder with `GRENADE_SESSION` removed. No settings means no hooks, so a summary never reports status for itself. Do not use `--bare`: it skips the keychain, so a subscription login stops working.
 - A run takes about 2–6 s, and the first run after boot can take 30 s. The timeout is 60 s.
 - `summary` is saved in `sessions.json` and restored on `adopt()`. Off: `--no-summaries`, `GRENADE_SUMMARIES=off`, or no `claude` found (logged once at start).
+
+## Activity (`src/activity/`)
+
+Read PROTOCOL.md "Activity" first. The phone's plain view of a session is what the agent said and was asked, in the words of its transcript, with no tool calls and no output.
+
+- Source: the `transcript_path` every Claude Code hook carries. On each hook the `TranscriptReader` reads the file from where it left off (whole lines only, so a line still being written waits for the next hook) and `activityEntriesIn` from the protocol picks the lines that count. The same rule pins `fixtures/transcript.examples.jsonl` to `fixtures/daemon.activity.json`, so what counts is decided in the protocol, not here.
+- `ActivityStore` keeps the last 200 entries per session in memory only. After a restart the store is empty until the next hook, whose read starts from the beginning of the file and brings the history back. A removed session is forgotten.
+- A `UserPromptSubmit` hook's `prompt` goes into the store at once (`noteAsked`), because Claude Code writes the prompt to the transcript after the hook. When the transcript's copy arrives, the hook's entry gives way to it, so the entry sits where the transcript has it. Slash commands and text that starts with `<` are not the user talking and are skipped.
+- `Connection` sends the store's entries with `full: true` when a phone subscribes to a Claude session, and forwards each new batch while it stays subscribed. Codex and shell sessions have no transcript and get no `activity` frame.
 
 ## Push notifications (`src/push/`)
 
