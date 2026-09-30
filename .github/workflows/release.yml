@@ -1,0 +1,117 @@
+# Ships the CLI when a push to main carries a version that is not on npm yet.
+# Bumping `version` in package.json is the release switch; a push without a bump only runs the tests.
+#
+# One-time setup, outside this file:
+#   - npmjs.com → @holdgrenade/cli → Settings → Trusted publisher: GitHub Actions, holdgrenade/grenade-cli, release.yml.
+#     Then `npm publish` below needs no token and no second factor (it uses the job's OIDC id-token).
+#   - A fine-grained personal access token, stored as the repository secret RELEASE_TOKEN, with
+#     Contents: read on holdgrenade/grenade-protocol (private; the CLI builds it) and
+#     Contents: write on holdgrenade/homebrew-tap (the formula is pushed there).
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # the tag and the GitHub release
+  id-token: write # npm trusted publishing
+
+# Two pushes in a row release one after the other, never at the same time.
+concurrency: release
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Check out grenade-cli
+        uses: actions/checkout@v4
+        with:
+          path: grenade-cli
+
+      - name: Check out grenade-protocol beside it
+        uses: actions/checkout@v4
+        with:
+          repository: holdgrenade/grenade-protocol
+          token: ${{ secrets.RELEASE_TOKEN }}
+          path: grenade-protocol
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: npm 11.5 or newer, for trusted publishing
+        run: npm install -g npm@latest && npm --version
+
+      - name: Install and test the protocol
+        working-directory: grenade-protocol
+        run: npm ci && npm test
+
+      - name: Install and test the CLI
+        working-directory: grenade-cli
+        run: npm ci && npm test
+
+      - name: Is this version on npm already?
+        id: version
+        working-directory: grenade-cli
+        run: |
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view @holdgrenade/cli versions --json | node -e '
+            const versions = [].concat(JSON.parse(require("fs").readFileSync(0, "utf8")));
+            console.log(versions.includes(process.argv[1]));
+          ' "$version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "@holdgrenade/cli@$version on npm: $published"
+
+      - name: Build the tarball and the formula
+        if: steps.version.outputs.published == 'false'
+        working-directory: grenade-cli
+        run: npm run release
+
+      # The steps below are safe to run again: each skips what an earlier, interrupted run already did.
+      - name: Tag and GitHub release, with the tarball as its asset
+        if: steps.version.outputs.published == 'false'
+        working-directory: grenade-cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git fetch --tags --quiet
+          if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            git tag "v$VERSION"
+            git push origin "v$VERSION"
+          fi
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" "release/holdgrenade-cli-$VERSION.tgz" \
+              --title "Grenade $VERSION" \
+              --notes "Install: \`brew install holdgrenade/tap/grenade\` or \`npm install -g @holdgrenade/cli\`, then \`grenade setup\`."
+          fi
+
+      - name: Publish to npm
+        if: steps.version.outputs.published == 'false'
+        working-directory: grenade-cli
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm publish "./release/holdgrenade-cli-$VERSION.tgz"
+
+      - name: Copy the formula to the tap
+        if: steps.version.outputs.published == 'false'
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git clone --quiet "https://x-access-token:$RELEASE_TOKEN@github.com/holdgrenade/homebrew-tap.git" homebrew-tap
+          cp grenade-cli/packaging/homebrew/grenade.rb homebrew-tap/Formula/grenade.rb
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/grenade.rb
+          if git diff --cached --quiet; then
+            echo "The tap already has grenade $VERSION."
+          else
+            git commit --quiet -m "grenade $VERSION"
+            git push --quiet origin main
+          fi
