@@ -7,7 +7,7 @@
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
+import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
 import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.js";
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
@@ -138,10 +138,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
   const activity = new ActivityStore();
   const transcripts = new TranscriptReader();
-  /** Reads a session's transcript into the store; true when the agent's reply was among the new entries. */
+  /** Reads a session's transcript: new activity into the store, a moved working directory into the session. */
   const readActivity = (id: string, path: string) =>
-    transcripts.read(path).then((entries) => {
+    transcripts.read(path).then((jsonl) => {
+      const entries = activityEntriesIn(jsonl);
       activity.append(id, entries);
+      const cwd = workingDirectoryIn(jsonl);
+      if (cwd) registry.setCwd(id, cwd);
+      // True when the agent's reply was among the new lines.
       return entries.some((e) => e.kind === "said");
     });
   // A Stop can come before the reply is in the transcript; keep reading until it is.

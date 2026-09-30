@@ -235,6 +235,20 @@ describe("session groups", () => {
     await again.adopt();
     expect(again.get("gr-app")?.model).toBe("Opus 5.5");
   });
+
+  it("setCwd follows the agent into another folder, once per change, and restores it on adopt", async () => {
+    const persistPath = join(mkdtempSync(join(tmpdir(), "grenade-cwd-")), "sessions.json");
+    const r = make({ live: ["gr-app"], persistPath });
+    await r.adopt();
+    const seen: string[] = [];
+    r.on("updated", (s) => seen.push(s.cwd));
+    r.setCwd("gr-app", "/Users/adam/workspace/grenade/grenade-ios");
+    r.setCwd("gr-app", "/Users/adam/workspace/grenade/grenade-ios");
+    expect(seen).toEqual(["/Users/adam/workspace/grenade/grenade-ios"]);
+    const again = make({ live: ["gr-app"], persistPath });
+    await again.adopt();
+    expect(again.get("gr-app")?.cwd).toBe("/Users/adam/workspace/grenade/grenade-ios");
+  });
 });
 
 describe("group rules", () => {

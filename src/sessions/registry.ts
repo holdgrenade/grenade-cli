@@ -280,6 +280,15 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
+  /** The folder the agent works in now (PROTOCOL.md "Session": `cwd` follows the agent). */
+  setCwd(id: string, cwd: string): void {
+    const r = this.records.get(id);
+    if (!r || r.session.cwd === cwd) return;
+    r.session = { ...r.session, cwd };
+    this.persist();
+    this.emit("updated", r.session);
+  }
+
   /** The label of the model the agent last answered with (see `readTranscriptModel`). */
   setModel(id: string, model: string): void {
     const r = this.records.get(id);
