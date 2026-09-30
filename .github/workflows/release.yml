@@ -5,8 +5,8 @@
 #   - npmjs.com → @holdgrenade/cli → Settings → Trusted publisher: GitHub Actions, holdgrenade/grenade-cli, release.yml.
 #     Then `npm publish` below needs no token and no second factor (it uses the job's OIDC id-token).
 #   - Two repository secrets, each a fine-grained personal access token that reaches one repo:
-#     PROTOCOL_TOKEN  Contents: read on holdgrenade/grenade-protocol (private; the CLI builds it)
-#     TAP_TOKEN       Contents: write on holdgrenade/homebrew-tap (the formula is pushed there)
+#     GH_GRENADE_PROTOCOL_TOKEN  Contents: read on holdgrenade/grenade-protocol (private; the CLI builds it)
+#     GH_HOMEBREW_TAP_TOKEN      Contents: write on holdgrenade/homebrew-tap (the formula is pushed there)
 name: Release
 
 on:
@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: holdgrenade/grenade-protocol
-          token: ${{ secrets.PROTOCOL_TOKEN }}
+          token: ${{ secrets.GH_GRENADE_PROTOCOL_TOKEN }}
           path: grenade-protocol
 
       - uses: actions/setup-node@v4
@@ -100,10 +100,10 @@ jobs:
       - name: Copy the formula to the tap
         if: steps.version.outputs.published == 'false'
         env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          GH_HOMEBREW_TAP_TOKEN: ${{ secrets.GH_HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          git clone --quiet "https://x-access-token:$TAP_TOKEN@github.com/holdgrenade/homebrew-tap.git" homebrew-tap
+          git clone --quiet "https://x-access-token:$GH_HOMEBREW_TAP_TOKEN@github.com/holdgrenade/homebrew-tap.git" homebrew-tap
           cp grenade-cli/packaging/homebrew/grenade.rb homebrew-tap/Formula/grenade.rb
           cd homebrew-tap
           git config user.name "github-actions[bot]"
