@@ -3,9 +3,10 @@ import { mergeHooks } from "../src/hooks/installHooks.js";
 import { readYesNo } from "../src/setup/answer.js";
 import { addedHooks, hooksNotice } from "../src/setup/hooksNotice.js";
 import { pushNotice } from "../src/setup/pushNotice.js";
+import { nextSteps } from "../src/setup/nextSteps.js";
 import { problems, tmuxVersion, type Found } from "../src/setup/requirements.js";
 
-const fine: Found = { platform: "darwin", node: "22.4.0", tmux: "tmux 3.5a\n", brew: true, claude: true, codex: false };
+const fine: Found = { platform: "darwin", node: "22.4.0", tmux: "tmux 3.5a\n", brew: true, claude: true, codex: false, iterm: true };
 
 describe("problems", () => {
   it("finds none on a Mac that has everything", () => {
@@ -30,9 +31,22 @@ describe("problems", () => {
     expect(problems({ ...fine, platform: "linux" })).toMatchObject([{ what: "platform", blocks: true }]);
   });
 
+  it("offers iTerm2 without stopping", () => {
+    expect(problems({ ...fine, iterm: false })).toMatchObject([{ what: "iterm", blocks: false, fix: "brew install --cask iterm2" }]);
+    expect(problems({ ...fine, iterm: false, brew: false })[0]?.fix).toBeUndefined();
+  });
+
   it("only warns when no agent is installed yet", () => {
     expect(problems({ ...fine, claude: false })).toMatchObject([{ what: "agent", blocks: false }]);
     expect(problems({ ...fine, claude: false, codex: true })).toEqual([]);
+  });
+});
+
+describe("nextSteps", () => {
+  it("says where the agent shows up, with and without iTerm2", () => {
+    expect(nextSteps(true).join("\n")).toContain("tab of its own in iTerm2");
+    expect(nextSteps(false).join("\n")).toContain("brew install --cask iterm2");
+    expect(nextSteps(false)[0]).toContain("grenade new myproject");
   });
 });
 

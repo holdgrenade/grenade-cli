@@ -33,7 +33,7 @@ program
   .option("--port <port>", "WebSocket/HTTP port", parsePort, DEFAULT_PORT)
   .option("--name <name>", "name shown on the phone")
   .option("--no-advertise", "do not publish over Bonjour")
-  .option("--terminal <kind>", "mirror sessions into terminal tabs: iterm | none (default: iterm when installed)", parseTerminal)
+  .option("--terminal <kind>", "mirror sessions into terminal tabs: auto | iterm | none (default: auto, tabs whenever iTerm2 is installed)", parseTerminal)
   .option("--no-summaries", "do not describe sessions with claude -p (Haiku)")
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
@@ -321,8 +321,8 @@ async function control<T = unknown>(method: string, path: string, body?: unknown
 }
 
 function parseTerminal(v: string): TerminalKind {
-  if (v === "iterm" || v === "none") return v;
-  throw new InvalidArgumentError("expected iterm or none");
+  if (v === "iterm" || v === "none" || v === "auto") return v;
+  throw new InvalidArgumentError("expected auto, iterm or none");
 }
 
 function parsePort(v: string): number {

@@ -1,5 +1,6 @@
 /** Looks at this Mac for what `requirements.ts` judges. */
 import { execFileSync } from "node:child_process";
+import { isITermInstalled } from "../terminal/iterm.js";
 import type { Found } from "./requirements.js";
 
 export function findRequirements(): Found {
@@ -10,6 +11,7 @@ export function findRequirements(): Found {
     brew: onPath("brew"),
     claude: Boolean(process.env["CLAUDE_BIN"]) || onPath("claude"),
     codex: onPath("codex"),
+    iterm: isITermInstalled(),
   };
 }
 

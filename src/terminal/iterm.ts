@@ -25,17 +25,18 @@ import type { SessionRegistry } from "../sessions/registry.js";
 
 export const TAG_VARIABLE = "user.grenadeSession";
 
-export type TerminalKind = "iterm" | "none";
+/** `auto` is the default: iTerm2 tabs whenever iTerm2 is installed, looked up again at every event, so installing it later needs no restart. */
+export type TerminalKind = "iterm" | "none" | "auto";
 
 export function isITermInstalled(): boolean {
   return existsSync("/Applications/iTerm.app") || existsSync(join(homedir(), "Applications", "iTerm.app"));
 }
 
-/** `iterm` when iTerm2 is installed, else `none`. `GRENADE_TERMINAL` overrides. */
+/** `GRENADE_TERMINAL` when it is set, else `auto`. */
 export function defaultTerminal(): TerminalKind {
   const env = process.env["GRENADE_TERMINAL"];
-  if (env === "iterm" || env === "none") return env;
-  return isITermInstalled() ? "iterm" : "none";
+  if (env === "iterm" || env === "none" || env === "auto") return env;
+  return "auto";
 }
 
 /** Absolute tmux path: an iTerm command session has no shell profile, so PATH may lack Homebrew. */
@@ -209,8 +210,10 @@ export interface MirrorOptions {
   log: Logger;
   tmuxBin?: string;
   run?: ScriptRunner;
-  /** Only iTerm is supported today; `none` makes start() a no-op. */
+  /** Only iTerm is supported today; `none` makes start() a no-op. Default `auto`. */
   terminal?: TerminalKind;
+  /** Is iTerm2 installed? Asked at every event in `auto`. Tests fake it. */
+  installed?: () => boolean;
 }
 
 export class ITermMirror {
@@ -218,14 +221,17 @@ export class ITermMirror {
   private readonly log: Logger;
   private readonly tmuxBin: string;
   private readonly run: ScriptRunner;
-  private readonly enabled: boolean;
+  private readonly kind: TerminalKind;
+  private readonly installed: () => boolean;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly open = new Set<string>();
-  private readonly onCreated = (s: Session) => this.openTab(s);
-  private readonly onRegrouped = (s: Session, from: string | undefined) => this.regroup(s, from);
-  private readonly onRemoved = (id: string) => this.closeTab(id);
+  /** The catch-up in flight or done; null until iTerm is first wanted, and again after a catch-up that failed. */
+  private ready: Promise<void> | null = null;
+  private readonly onCreated = (s: Session) => this.whenEnabled(() => this.openTab(s));
+  private readonly onRegrouped = (s: Session, from: string | undefined) => this.whenEnabled(() => this.regroup(s, from));
+  private readonly onRemoved = (id: string) => this.whenEnabled(() => this.closeTab(id));
   private readonly onUpdated = (s: Session) => {
-    if (s.status === "gone") this.closeTab(s.id);
+    if (s.status === "gone") this.whenEnabled(() => this.closeTab(s.id));
   };
 
   constructor(o: MirrorOptions) {
@@ -233,16 +239,44 @@ export class ITermMirror {
     this.log = o.log;
     this.tmuxBin = o.tmuxBin ?? resolveTmuxBin();
     this.run = o.run ?? runAppleScript;
-    this.enabled = (o.terminal ?? "iterm") === "iterm";
+    this.kind = o.terminal ?? "auto";
+    this.installed = o.installed ?? isITermInstalled;
   }
 
-  /** Subscribes to the registry and opens tabs for live sessions that have none. */
+  /** Tabs are wanted now: `iterm`, or `auto` with iTerm2 installed. Asked every time, so iTerm2 installed after the daemon started counts. */
+  private enabled(): boolean {
+    return this.kind === "iterm" || (this.kind === "auto" && this.installed());
+  }
+
+  /** Subscribes to the registry and, when iTerm2 is there, opens tabs for live sessions that have none. */
   async start(): Promise<void> {
-    if (!this.enabled) return;
+    if (this.kind === "none") return;
     this.registry.on("created", this.onCreated);
     this.registry.on("removed", this.onRemoved);
     this.registry.on("updated", this.onUpdated);
     this.registry.on("regrouped", this.onRegrouped);
+    if (this.enabled()) await this.whenReady();
+    else this.log.debug("iTerm2 is not installed; sessions get a tab once it is");
+  }
+
+  /** Runs `job` once iTerm is wanted and the tabs it already has are known; does nothing while it is not wanted. */
+  private whenEnabled(job: () => void): void {
+    if (!this.enabled()) return;
+    void this.whenReady().then(job, (e) => this.log.warn("Could not list the iTerm tabs", { error: e }));
+  }
+
+  private whenReady(): Promise<void> {
+    if (!this.ready) {
+      this.ready = this.catchUp().catch((e: unknown) => {
+        this.ready = null; // try again at the next event
+        throw e;
+      });
+    }
+    return this.ready;
+  }
+
+  /** Learns which tabs iTerm already has, then opens one for every live session without. Once, the first time tabs are wanted. */
+  private async catchUp(): Promise<void> {
     const tagged = new Set(await this.enqueue(async () => parseTaggedList(await this.run(listTaggedScript()))));
     for (const id of tagged) this.open.add(id);
     // Group order, so the first session of a group gets the tab and the rest split to its right in order.

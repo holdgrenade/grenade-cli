@@ -11,7 +11,7 @@ grenade setup                            # hooks, start at login, relay, then a 
 
 `grenade setup` asks before it changes anything and skips what is already done:
 
-1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing.
+1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing. It also offers `brew install --cask iterm2`: with iTerm2, every session opens in a tab of its own on the Mac (see below). A no goes on without it.
 2. It shows the Claude Code hooks it would add to `~/.claude/settings.json` and adds them on a yes (`grenade install-hooks --remove` takes them out).
 3. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
 4. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
@@ -37,8 +37,7 @@ grenade setup
 
 ```bash
 grenade service status   # is grenaded installed as a login agent, and running?
-grenade daemon           # or run it in the foreground yourself
-                         # with iTerm2 installed, every session also gets its own iTerm tab (--terminal none to turn off)
+grenade daemon           # or run it in the foreground yourself (--terminal none: no iTerm tabs)
 
 grenade new grenade --cwd ~/projects/grenade --agent claude
 grenade open grenade     # attach your terminal to it (Ctrl-b d to detach)
@@ -57,6 +56,16 @@ grenade push test        # send every registered phone a test notification
 grenade push on          # send them also with remote access off, through the main relay
 grenade push off         # send none (grenade push auto: on while remote access is on, the default)
 ```
+
+### On the Mac
+
+Every session is a tmux session (`gr-<name>`), so it survives any window closing; only `grenade kill` ends it. With iTerm2 installed, the daemon also opens a tab per session in iTerm2, so all your agents are on screen at once:
+
+- `grenade new` in a folder that already has a live session joins that session's **group**, and the new agent opens as a split pane next to it in the same tab. `--alone` starts a group of its own, `--with <session>` joins a specific one. `grenade group` and `grenade ungroup` move sessions later; the phone does the same by drag and drop and the tabs follow.
+- Installing iTerm2 after setup is enough: the next session opens in a tab, and every live session gets one then. No restart.
+- The first time, macOS may ask whether grenaded (it says `node`) may control iTerm2. Allow it, or no tab appears. If you clicked Don't Allow: System Settings › Privacy & Security › Automation.
+- Closing a tab or detaching (Ctrl-b d) leaves the agent running. `grenade open <name>` attaches any terminal to it.
+- Without iTerm2, nothing opens on the Mac: `grenade open <name>` is how you watch, and the phone works the same.
 
 Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. Host your own relay with `../grenade-relay`.
 

@@ -55,7 +55,7 @@ export interface DaemonOptions {
   tmux?: Tmux;
   tokensPath?: string | null;
   sessionsPath?: string | null;
-  /** Mirror sessions into iTerm2 tabs. Defaults to `iterm` when iTerm2 is installed. */
+  /** Mirror sessions into iTerm2 tabs. Default `auto`: tabs whenever iTerm2 is installed, checked at every event. */
   terminal?: TerminalKind;
   /** One-sentence session summaries via `claude -p` (Haiku). Defaults to on unless `GRENADE_SUMMARIES=off`. */
   summaries?: boolean;

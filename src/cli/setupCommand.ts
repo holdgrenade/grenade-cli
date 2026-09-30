@@ -1,5 +1,5 @@
 /**
- * `grenade setup`: the whole first run in one command. Checks what Grenade needs, offers the Claude Code hooks,
+ * `grenade setup`: the whole first run in one command. Checks what Grenade needs (and offers iTerm2), offers the Claude Code hooks,
  * starts grenaded at login, offers the relay, and ends on the QR code for the phone. Every step that is already
  * done is skipped, so it is safe to run again.
  */
@@ -17,6 +17,7 @@ import { SERVICE_LABEL } from "../service/launchdPlist.js";
 import { askYesNo } from "../setup/ask.js";
 import { findRequirements } from "../setup/findRequirements.js";
 import { addedHooks, hooksNotice } from "../setup/hooksNotice.js";
+import { nextSteps } from "../setup/nextSteps.js";
 import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
 import { problems } from "../setup/requirements.js";
 import { showPairing } from "./pairCommand.js";
@@ -56,7 +57,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       await push(d);
       step(5, "Pair your phone");
       if (!o.pair) return console.log("skipped (--no-pair). Pair later with: grenade pair");
-      if (await pair(d, o.yes === true)) console.log("Start an agent with: grenade new myproject --cwd ~/code/myproject");
+      if (await pair(d, o.yes === true)) for (const line of nextSteps(findRequirements().iterm)) console.log(line);
       else process.exitCode = 1;
     });
 }
@@ -70,15 +71,24 @@ function step(n: number, title: string): void {
 async function requirements(ask: Ask): Promise<void> {
   for (const p of problems(findRequirements())) {
     console.log(p.message);
-    if (!p.blocks) continue;
-    if (!p.fix) throw new Error("Setup cannot go on until that is fixed.");
-    if (!(await ask(`Run \`${p.fix}\` now?`, false))) throw new Error(`Setup cannot go on without it. Run: ${p.fix}`);
+    if (!p.fix) {
+      if (p.blocks) throw new Error("Setup cannot go on until that is fixed.");
+      continue;
+    }
+    if (!(await ask(`Run \`${p.fix}\` now?`, false))) {
+      if (p.blocks) throw new Error(`Setup cannot go on without it. Run: ${p.fix}`);
+      console.log(`left out. Later: ${p.fix}`);
+      continue;
+    }
     const [command, ...args] = p.fix.split(" ");
-    if (!command || spawnSync(command, args, { stdio: "inherit" }).status !== 0) throw new Error(`\`${p.fix}\` failed.`);
+    const ok = command !== undefined && spawnSync(command, args, { stdio: "inherit" }).status === 0;
+    if (!ok && p.blocks) throw new Error(`\`${p.fix}\` failed.`);
+    if (!ok) console.log(`\`${p.fix}\` failed; going on without it.`);
   }
-  const left = problems(findRequirements()).filter((p) => p.blocks);
+  const found = findRequirements();
+  const left = problems(found).filter((p) => p.blocks);
   if (left.length > 0) throw new Error(left.map((p) => p.message).join(" "));
-  console.log("ok: macOS, Node and tmux are in place");
+  console.log(found.iterm ? "ok: macOS, Node, tmux and iTerm2 are in place" : "ok: macOS, Node and tmux are in place");
 }
 
 async function hooks(ask: Ask): Promise<void> {

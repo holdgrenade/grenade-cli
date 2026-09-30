@@ -1,4 +1,4 @@
-/** What Grenade needs on the Mac before setup can go on: macOS, Node 22+, tmux 3.2+, and an agent to run. Pure. */
+/** What Grenade needs on the Mac before setup can go on: macOS, Node 22+, tmux 3.2+, and an agent to run. iTerm2 is offered, not needed. Pure. */
 export const MIN_NODE_MAJOR = 22;
 export const MIN_TMUX: readonly [number, number] = [3, 2];
 
@@ -12,14 +12,16 @@ export interface Found {
   brew: boolean;
   claude: boolean;
   codex: boolean;
+  /** iTerm2 is installed, so every session can get a tab on the Mac. */
+  iterm: boolean;
 }
 
 export interface Problem {
-  what: "platform" | "node" | "tmux" | "agent";
+  what: "platform" | "node" | "tmux" | "agent" | "iterm";
   message: string;
-  /** Setup cannot go on. A warning (no agent yet) lets it. */
+  /** Setup cannot go on. A warning (no agent yet, no iTerm2) lets it. */
   blocks: boolean;
-  /** A command that fixes it. */
+  /** A command that fixes it. Offered either way; only a blocking problem stops setup when it is declined or fails. */
   fix?: string;
 }
 
@@ -43,6 +45,14 @@ export function problems(f: Found): Problem[] {
   }
   if (!f.claude && !f.codex) {
     list.push({ what: "agent", message: "Neither claude nor codex is on your PATH. Sessions can still run a shell.", blocks: false });
+  }
+  if (!f.iterm) {
+    list.push({
+      what: "iterm",
+      message: "iTerm2 is not installed. With it, every session opens in a tab of its own on this Mac, and you can watch all your agents at once.",
+      blocks: false,
+      ...(f.brew ? { fix: "brew install --cask iterm2" } : {}),
+    });
   }
   return list;
 }
