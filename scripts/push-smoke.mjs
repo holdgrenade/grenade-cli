@@ -64,7 +64,7 @@ const register = {
   provider: "apns",
   deviceToken: randomBytes(32).toString("hex"),
   environment: "sandbox",
-  topic: "com.adamchew.grenade",
+  topic: "com.holdgrenade.grenade",
   key: pushKey.publicKey.toString("base64"),
   events: ["answer", "done"],
 };

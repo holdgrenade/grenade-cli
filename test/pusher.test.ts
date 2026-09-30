@@ -85,7 +85,7 @@ function setup(opts: { gateway?: PushGateway | null; presence?: MacPresence | nu
     provider: "apns",
     deviceToken: DEVICE_TOKEN,
     environment: "production",
-    topic: "com.adamchew.grenade",
+    topic: "com.holdgrenade.grenade",
     key: phone.publicKey.toString("base64"),
     events: ["answer", "done"],
   };
@@ -176,7 +176,7 @@ describe("Pusher: telling connected phones", () => {
     const unregistered: string[] = [];
     const stop = pusher.watch(TOKEN, (s) => heard.push(s.delivery));
     pusher.watch("grt_other", (s) => unregistered.push(s.delivery));
-    pusher.register(TOKEN, { type: "push.register", provider: "apns", deviceToken: DEVICE_TOKEN, environment: "production", topic: "com.adamchew.grenade", key: generateX25519().publicKey.toString("base64"), events: ["answer"] });
+    pusher.register(TOKEN, { type: "push.register", provider: "apns", deviceToken: DEVICE_TOKEN, environment: "production", topic: "com.holdgrenade.grenade", key: generateX25519().publicKey.toString("base64"), events: ["answer"] });
 
     pusher.deliveryMayHaveChanged();
     expect(heard).toEqual([]);
