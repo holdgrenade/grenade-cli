@@ -1,6 +1,8 @@
 /**
  * Loopback-only JSON API used by the `grenade` CLI. Never exposed on the network.
- *   GET  /status            → { id, name, version, key, relay, uptimeMs, sessions, relayLink }
+ *   GET  /status            → { id, name, version, key, relay, uptimeMs, sessions, relayLink, update }
+ *   GET  /update            → UpdateStatus   (the version on disk, the latest release from the tap, when it was read)
+ *   POST /update/check      → UpdateStatus   (reads the tap now)
  *   POST /relay/reload      → RelayStatus (re-reads relay.json, restarts the relay link)
  *   GET  /sessions          → Session[]
  *   POST /sessions          { name, cwd, agent, group? } → Session
@@ -28,6 +30,7 @@ import type { Device } from "./devices.js";
 import type { PairingCodes } from "./pairing.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
 import type { PushStatus, TestPushResult } from "../push/pusher.js";
+import type { UpdateStatus } from "../update/versions.js";
 import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
 
@@ -49,6 +52,7 @@ export interface ControlDeps {
   log: Logger;
   relay: { status(): RelayStatus; reload(): RelayStatus };
   push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
+  updates: { current(): UpdateStatus; checkTap(): Promise<UpdateStatus> };
   /** Test cards. Absent means this daemon has no prompts to offer. */
   promptTests?: {
     start(sessionId: string, kind: PromptKind, waitMs: number): PromptFrame;
@@ -71,8 +75,10 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   if (method === "GET" && url.pathname === "/status") {
-    return sendJson(res, 200, { ...d.daemon, uptimeMs: Date.now() - d.startedAt, sessions: d.registry.list().length, relayLink: d.relay.status() });
+    return sendJson(res, 200, { ...d.daemon, uptimeMs: Date.now() - d.startedAt, sessions: d.registry.list().length, relayLink: d.relay.status(), update: d.updates.current() });
   }
+  if (method === "GET" && url.pathname === "/update") return sendJson(res, 200, d.updates.current());
+  if (method === "POST" && url.pathname === "/update/check") return sendJson(res, 200, await d.updates.checkTap());
   if (method === "POST" && url.pathname === "/relay/reload") return sendJson(res, 200, d.relay.reload());
   if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());

@@ -12,6 +12,9 @@ import { registerPromptCommand } from "./cli/promptCommand.js";
 import { registerPushCommand } from "./cli/pushCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
+import { registerUpdateCommand } from "./cli/updateCommand.js";
+import { RESTART_EXIT_CODE, underLaunchd } from "./update/underLaunchd.js";
+import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
 import { startDaemon } from "./daemon/server.js";
 import { isTerminalKind, type TerminalKind } from "./terminal/mirror.js";
 import { mergeHooks, removeHooks } from "./hooks/installHooks.js";
@@ -38,8 +41,11 @@ program
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
   .action(async (o: { port: number; name?: string; advertise: boolean; terminal?: TerminalKind; summaries: boolean; relay: boolean; allowPlainLan?: boolean }) => {
+    // Under launchd an exit with a failure code brings the daemon back at once (KeepAlive), now running what is on disk.
+    const restart = underLaunchd() ? (installed: string) => void d.stop().then(() => process.exit(RESTART_EXIT_CODE)) : undefined;
     const d = await startDaemon({
       port: o.port,
+      updates: { ...(process.argv[1] ? { program: process.argv[1] } : {}), ...(restart ? { restart } : {}) },
       controlPort: controlPort(),
       advertise: o.advertise,
       ...(o.allowPlainLan ? { allowPlainLan: true } : {}),
@@ -62,6 +68,7 @@ program
     if (!s) return fail("grenaded is not running. Start it with: grenade daemon");
     console.log(`grenaded ${s.version} · ${s.name} (${s.id}) · up ${Math.round(s.uptimeMs / 1000)}s · ${s.sessions} session(s)`);
     console.log(`relay: ${relayLine(s.relayLink)}`);
+    if (s.update) console.log(`update: ${updateLine(s.version, s.update)}`);
   });
 
 program
@@ -77,6 +84,15 @@ registerServiceCommand(program, { control, controlPort });
 registerSetupCommand(program, { control, controlPort });
 registerPushCommand(program, { control });
 registerPromptCommand(program, { control });
+registerUpdateCommand(program, { control });
+
+// Like Claude Code: after a command, one line when a new version is out. Read from the daemon, which checks the tap.
+program.hook("postAction", async (_program, action) => {
+  if (!process.stderr.isTTY || NO_UPDATE_NOTICE.has(action.name()) || action.parent?.name() === "service") return;
+  const s = await control<DaemonStatus>("GET", "/status", undefined, 500).catch(() => null);
+  const line = s?.update ? updateNotice(s.version, s.update) : null;
+  if (line) console.error(`\n${line}`);
+});
 
 program
   .command("devices")
@@ -261,7 +277,12 @@ interface DaemonStatus {
   uptimeMs: number;
   sessions: number;
   relayLink: RelayStatus;
+  /** Absent from a daemon older than 0.1.11. */
+  update?: UpdateStatus;
 }
+
+/** Commands after which no update line is printed: they say it themselves, or never return. */
+const NO_UPDATE_NOTICE = new Set(["daemon", "open", "update", "status"]);
 
 function routeName(route: "lan" | "relay"): string {
   return route === "lan" ? "Wi‑Fi" : "relay";
@@ -304,13 +325,14 @@ async function findSession(name: string): Promise<Session> {
   return s;
 }
 
-async function control<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+async function control<T = unknown>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`http://127.0.0.1:${controlPort()}${path}`, {
       method,
       headers: body ? { "content-type": "application/json" } : {},
       body: body ? JSON.stringify(body) : null,
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
   } catch {
     throw new Error("grenaded is not running. Start it with: grenade daemon");

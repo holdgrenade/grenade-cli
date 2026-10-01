@@ -70,6 +70,11 @@ export async function serviceStatus(label: string = SERVICE_LABEL): Promise<Serv
   return { ...parseLaunchctlPrint(printed), installed: existsSync(plist), plist, label };
 }
 
+/** Stops the running agent and starts it again at once (`kickstart -k`): the way to run a newly installed version. */
+export async function restartService(label: string = SERVICE_LABEL): Promise<void> {
+  await launchctl(["kickstart", "-k", serviceTarget(uid(), label)]);
+}
+
 /** `bootout` returns before the job is gone, and a `bootstrap` right after it fails, so wait until launchd forgot it. */
 async function unload(label: string): Promise<void> {
   const target = serviceTarget(uid(), label);

@@ -41,6 +41,9 @@ import { localIpv4 } from "../relay/localIps.js";
 import { PhonePipe } from "../relay/phonePipe.js";
 import { applyRelayInfo, loadRelayConfig } from "../relay/relayConfig.js";
 import { RelayLink, type RelayStatus } from "../relay/relayLink.js";
+import { installedVersion } from "../update/installedVersion.js";
+import { UpdateChecker } from "../update/updateChecker.js";
+import { isBusy } from "../update/versions.js";
 import { startPush } from "../push/startPush.js";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
@@ -76,6 +79,12 @@ export interface DaemonOptions {
   pushPath?: string;
   /** Where the phones' push registrations are kept. Defaults to ~/.grenade/push-devices.json; in memory when tokens are. */
   pushDevicesPath?: string;
+  /**
+   * Updates (src/update/): ask the tap for the latest release (default on unless GRENADE_UPDATE_CHECK=off), watch the
+   * version on disk behind `program` (the `grenade` command; none: nothing to watch), and call `restart` once a newer
+   * one is there and no session is busy. Without `restart` the daemon only logs it.
+   */
+  updates?: { checkTap?: boolean; program?: string; restart?(installed: string): void };
 }
 
 export interface RunningDaemon {
@@ -366,6 +375,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     log.info("Connecting to the relay", { url: config.url, id: config.id });
     return relayLink.status();
   }
+  const updates = new UpdateChecker({
+    running: VERSION,
+    log,
+    installed: () => (opts.updates?.program ? installedVersion(opts.updates.program) : null),
+    busy: () => registry.list().some(isBusy),
+    checkTap: opts.updates?.checkTap ?? process.env["GRENADE_UPDATE_CHECK"] !== "off",
+    ...(opts.updates?.restart ? { restart: opts.updates.restart } : {}),
+  });
+
   const relayStatus = (): RelayStatus => relayLink?.status() ?? { state: "off", phones: 0, ...(opts.relay === false ? { disabled: true } : {}) };
   tokens.onChange(() => relayLink?.tokensChanged());
   startRelay();
@@ -391,6 +409,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
     },
     push,
+    updates,
   });
 
   await listen(http, port, "0.0.0.0");
@@ -399,6 +418,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   log.info(`Grenade ${VERSION} is running as "${info.name}" on port ${port}`, { id: info.id, controlPort });
   if (allowPlainLan) log.warn("Accepting phones without encryption on the Wi‑Fi (--allow-plain-lan). Update them, then start without it.");
   log.info("Pair a phone with: grenade pair");
+  updates.start();
 
   return {
     info,
@@ -406,6 +426,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     controlPort,
     async stop() {
       clearInterval(idleTimer);
+      updates.stop();
       if (offerExpiry) clearTimeout(offerExpiry);
       mirror.stop();
       poller.stop();

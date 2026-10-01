@@ -7,7 +7,7 @@ import { SERVICE_LABEL } from "../service/launchdPlist.js";
 import type { Control } from "./controlClient.js";
 
 /** Settings of the daemon that live in the environment. The agent gets the ones set when it is installed. */
-const PASSED_ON = ["GRENADE_HOME", "GRENADE_LOG", "GRENADE_TERMINAL", "GRENADE_SUMMARIES", "GRENADE_DEVICE_IDLE_DAYS", "TMUX_BIN", "TMUX_TMPDIR", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR"];
+const PASSED_ON = ["GRENADE_HOME", "GRENADE_LOG", "GRENADE_TERMINAL", "GRENADE_SUMMARIES", "GRENADE_DEVICE_IDLE_DAYS", "GRENADE_UPDATE_CHECK", "TMUX_BIN", "TMUX_TMPDIR", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR"];
 const START_WAIT_MS = 15_000;
 
 export interface ServiceCommandDeps {
