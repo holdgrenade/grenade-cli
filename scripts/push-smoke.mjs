@@ -26,7 +26,7 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
 const status = await ctl("GET", "/push").catch(() => fail("the daemon does not answer on its control port"));
 if (!status.enabled) fail("push is off on this daemon: grenade push on <url of your relay>");
-if (/grenade-relay-.*herokuapp|relay\.grenade\.dev/.test(status.gateway ?? "")) fail(`this daemon pushes through ${status.gateway}; point it at a relay of your own for this test`);
+if (/relay\.holdgrenade\.com|grenade-relay-.*herokuapp/.test(status.gateway ?? "")) fail(`this daemon pushes through ${status.gateway}; point it at a relay of your own for this test`);
 console.log("push route", status.gateway);
 
 const client = { name: "push-smoke", platform: "test", version: "0" };

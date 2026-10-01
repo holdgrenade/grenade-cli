@@ -256,7 +256,7 @@ Read PROTOCOL.md "Unpairing", "On the local network" and "Older clients and daem
 
 ## Remote access (`src/relay/`)
 
-Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url]`; the main relay is `OFFICIAL_RELAY_URL` (`https://grenade-relay-7a47b5a07a7d.herokuapp.com`), and anyone can host `grenade-relay`.
+Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url]`; the main relay is `OFFICIAL_RELAY_URL` (`https://relay.holdgrenade.com`), and anyone can host `grenade-relay`.
 
 - Config: `relay.json` holds `url`, an optional registration `key`, this Mac's relay `id` (`r_` + 32 hex) and `secret` (64 hex). `relay on` with the same URL keeps id and secret (and the key unless a new one is given); a different URL gets a new identity. `relay off` deletes the file. The CLI writes the file, then `POST /relay/reload` makes the daemon re-read it and restart the link.
 - Identity shown to phones: `info.key` (base64 X25519 public key from `e2e-key`) is always in the pair reply and `welcome`; `info.relay = {url, id}` is set in place while a relay is configured, so the next welcome carries it.
