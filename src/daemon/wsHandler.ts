@@ -2,7 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -60,6 +60,14 @@ export interface ActivityPort {
   off(event: "activity", cb: (f: ActivityFrame) => void): unknown;
 }
 
+/** The slice of GroupOrderStore a connection needs (PROTOCOL.md "Group order"). */
+export interface GroupsPort {
+  frame(): GroupsFrame;
+  move(group: string, index: number): boolean;
+  on(event: "changed", cb: (f: GroupsFrame) => void): unknown;
+  off(event: "changed", cb: (f: GroupsFrame) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -89,6 +97,8 @@ export interface ConnectionDeps {
   prompts?: PromptsPort;
   /** What the agent said and was asked (PROTOCOL.md "Activity"). Absent means this daemon sends none. */
   activity?: ActivityPort;
+  /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
+  groups?: GroupsPort;
   daemon: DaemonInfo;
   log: Logger;
   out(frame: DaemonFrame): void;
@@ -114,6 +124,7 @@ export class Connection {
   private readonly onScreen = (f: ScreenFrame) => {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
   };
+  private readonly onGroups = (f: GroupsFrame) => this.send(f);
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   private readonly onActivity = (f: ActivityFrame) => {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
@@ -178,6 +189,7 @@ export class Connection {
       this.d.prompts?.off("opened", this.onPrompt);
       this.d.prompts?.off("closed", this.onPrompt);
       this.d.activity?.off("activity", this.onActivity);
+      this.d.groups?.off("changed", this.onGroups);
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -218,6 +230,10 @@ export class Connection {
     this.d.log.info(`Phone connected: ${frame.client.name}`, { platform: frame.client.platform });
     this.send({ type: "welcome", protocol: PROTOCOL_VERSION, daemon: this.d.daemon });
     this.send({ type: "sessions", sessions: this.d.registry.list() });
+    if (this.d.groups) {
+      this.send(this.d.groups.frame());
+      this.d.groups.on("changed", this.onGroups);
+    }
     this.d.prompts?.on("opened", this.onPrompt);
     this.d.prompts?.on("closed", this.onPrompt);
     for (const open of this.d.prompts?.list() ?? []) this.send(open);
@@ -274,6 +290,11 @@ export class Connection {
         if (after.group === before?.group && after.order === before?.order) this.send({ type: "session.updated", session: after });
         return;
       }
+      case "group.move":
+        if (!this.d.groups) return this.fail("bad_frame", "this daemon keeps no group order", frame.type);
+        // A change reaches every client through `changed`; a move to where it already is still gets an answer.
+        if (!this.d.groups.move(frame.group, frame.index)) this.send(this.d.groups.frame());
+        return;
       case "session.kill":
         return r.kill(frame.sessionId);
       case "push.register":

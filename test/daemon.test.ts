@@ -2,7 +2,7 @@
  * The whole daemon over real sockets on loopback: pairing, the encrypted local connection, unpairing from the Mac
  * and from the phone, and what its relay is told. No tmux, no Bonjour, no iTerm; GRENADE_HOME is a temp folder.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,8 +182,8 @@ describe("pairing with a typed code", () => {
     expect(paired).toMatchObject({ type: "paired", daemon: { key: d.info.key, e2e: 1 } });
     expect(p.raw.join("")).not.toContain(code);
     p.hello(paired.token);
-    await until(() => p.frames.length >= 3);
-    expect(p.types()).toEqual(["paired", "welcome", "sessions"]);
+    await until(() => p.frames.length >= 4);
+    expect(p.types()).toEqual(["paired", "welcome", "sessions", "groups"]);
     expect((await control("GET", "/devices")).body).toMatchObject([{ name: "Test phone", connected: ["lan"], sealed: true }]);
   });
 
@@ -207,8 +207,8 @@ describe("the local connection", () => {
     const token = (await pairPlain()).body.token ?? "";
     const p = await phone(d.port, key, true);
     p.hello(token);
-    await until(() => p.frames.length >= 2);
-    expect(p.types()).toEqual(["welcome", "sessions"]);
+    await until(() => p.frames.length >= 3);
+    expect(p.types()).toEqual(["welcome", "sessions", "groups"]);
     expect(p.frames[0]).toMatchObject({ daemon: { e2e: 1, key: d.info.key } });
     for (const text of p.raw.slice(1)) expect(text).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
     expect((await control("GET", "/devices")).body).toMatchObject([{ connected: ["lan"], sealed: true }]);
@@ -295,8 +295,8 @@ describe("unpairing", () => {
     await until(() => a.closed() !== null && b.closed() !== null);
     const later = await phone(d.port, key, true);
     later.hello((await pairPlain()).body.token ?? "");
-    await until(() => later.frames.length >= 2);
-    expect(later.types()).toEqual(["welcome", "sessions"]);
+    await until(() => later.frames.length >= 3);
+    expect(later.types()).toEqual(["welcome", "sessions", "groups"]);
   });
 
   it("from the phone: unpaired, closed, and its other connection goes too", async () => {
@@ -365,5 +365,26 @@ describe("Claude Code hooks", () => {
     const { base } = await daemon();
     const res = await fetch(`${base}/hooks/claude`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hook_event_name: "Stop" }) });
     expect(res.status).not.toBe(403);
+  });
+});
+
+describe("group order", () => {
+  it("is the same on every phone: a group moved on one moves on the other", async () => {
+    const { d, pairPlain, key, dir } = await daemon({ allowPlainLan: true });
+    for (const f of ["one", "two"]) mkdirSync(join(dir, f), { recursive: true });
+    const a = await phone(d.port, key, true);
+    a.hello((await pairPlain()).body.token ?? "");
+    const b = await phone(d.port, key, true);
+    b.hello((await pairPlain()).body.token ?? "");
+    await until(() => a.frames.length >= 3 && b.frames.length >= 3);
+    a.send({ type: "session.create", name: "one", cwd: join(dir, "one"), agent: "shell" });
+    a.send({ type: "session.create", name: "two", cwd: join(dir, "two"), agent: "shell" });
+    const orders = (p: typeof a) => p.frames.flatMap((f) => (f.type === "groups" ? [f.order] : []));
+    await until(() => orders(b).at(-1)?.length === 2);
+    const [top, below] = orders(b).at(-1) as string[];
+    a.send({ type: "group.move", group: below, index: 0 });
+    await until(() => orders(b).at(-1)?.[0] === below);
+    expect(orders(b).at(-1)).toEqual([below, top]);
+    expect(orders(a).at(-1)).toEqual([below, top]);
   });
 });

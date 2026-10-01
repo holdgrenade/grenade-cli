@@ -15,6 +15,7 @@ export const paths = {
   dir: GRENADE_DIR,
   tokens: join(GRENADE_DIR, "tokens.json"),
   sessions: join(GRENADE_DIR, "sessions.json"),
+  groups: join(GRENADE_DIR, "groups.json"),
   daemonId: join(GRENADE_DIR, "daemon-id"),
   log: join(GRENADE_DIR, "daemon.log"),
   relay: join(GRENADE_DIR, "relay.json"),

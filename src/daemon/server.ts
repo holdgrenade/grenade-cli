@@ -4,6 +4,7 @@
  *   127.0.0.1:7789  control API for the CLI
  *   relay link (optional)  phones away from the LAN, end-to-end encrypted (src/relay/)
  */
+import { dirname, join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -12,6 +13,7 @@ import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
 import { SessionRegistry } from "../sessions/registry.js";
+import { GroupOrderStore } from "../sessions/groupOrderStore.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
 import { Summarizer } from "../summary/summarizer.js";
 import { TerminalMirror, defaultTerminal, type TerminalKind } from "../terminal/mirror.js";
@@ -114,6 +116,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   });
   const summarizer = startSummarizer(registry, log, opts.summaries ?? process.env["GRENADE_SUMMARIES"] !== "off");
   await registry.adopt();
+  // Saved beside sessions.json, so a test daemon with its own sessions file keeps its own order too.
+  const groupsPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "groups.json") : paths.groups;
+  const groupOrder = new GroupOrderStore(registry, log, groupsPath);
   const poller: Poller = startPoller({ tmux, registry, log });
   const mirror = new TerminalMirror({ registry, log, terminal: opts.terminal ?? defaultTerminal() });
   mirror.start().catch((e) => log.warn("Could not mirror sessions into a terminal", { error: e }));
@@ -314,6 +319,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       pair: pairPhone,
       push: push.pusher,
       prompts,
+      groups: groupOrder,
       unpair(token) {
         const id = tokens.get(token)?.id;
         const gone = id ? tokens.revoke(id) : undefined;

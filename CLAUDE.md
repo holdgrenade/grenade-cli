@@ -40,7 +40,7 @@ grenade prompt test [session] [--kind permission|question|plan|all] [--wait 120]
 grenade --control-port 7790 <cmd>                          # talk to a daemon on another control port
 ```
 
-Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `daemon-id`, `daemon.log`, `relay.json`, `e2e-key`, `push.json` (push on or off, and the route), `push-devices.json` (the phones' push registrations, mode 0600) and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
+Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `groups.json` (the order groups are listed in), `daemon-id`, `daemon.log`, `relay.json`, `e2e-key`, `push.json` (push on or off, and the route), `push-devices.json` (the phones' push registrations, mode 0600) and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
 
 ## Layout
 
@@ -93,6 +93,8 @@ src/sessions/registry.ts   SessionRegistry: Session objects, status machine driv
 src/terminal/iterm.ts      ITermMirror: one iTerm2 tab per live session (AppleScript via osascript), tagged with `user.grenadeSession`
 src/sessions/status.ts     pure status reducer (see below)
 src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt)
+src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
+src/sessions/groupOrderStore.ts GroupOrderStore: that order for every client, follows the registry's `updated`/`removed`, `move` for `group.move`, event `changed` (a `groups` frame), groups.json
 src/sessions/poller.ts     timers: 200 ms capture of subscribed sessions, 1 s sweep of all sessions
 src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen tail), cleanSummary of the reply
 src/summary/summaryTiming.ts  pure: summaryDelay (wanted delay vs. one run per minute)
@@ -150,6 +152,7 @@ Sessions that belong together share an opaque `group` id (`g-` + 6 hex). A group
 - `registry.setGroup(id, group | null, index?)`: `null` moves it into a new group of its own at order 0 (no-op if it is already alone). A group plus `index` places it there (clamped; default last) and renumbers the whole group 0..n-1; its own group plus `index` is a reorder. Emits `updated` for every member whose group or order changed, then one `regrouped(session, from)` (the mirror listens to that; `from === session.group` means a reorder).
 - Groups and order are saved in `sessions.json`. On `adopt()`, sessions saved before groups existed are grouped by folder, oldest first.
 - Control API: `PUT /sessions/:id/group {group, index?}`. The CLI's `--with`/`group` look up the other session's group first.
+- The order the groups themselves are listed in (PROTOCOL.md "Group order") is the daemon's too, so a group moved on the phone moves in the Mac app and on every other phone. `GroupOrderStore` keeps it: a group that appears goes to the top, a session moved out lands right under the group it left (it remembers each session's last group to tell), a group with no session left is dropped, and without a saved order the groups are listed newest first. Saved in `groups.json` beside `sessions.json` (none when sessions are in memory only). `Connection` sends `groups` after `sessions` on `hello` and forwards every `changed`; `group.move` answers with `groups` to everyone, or to the sender alone when nothing moved.
 
 ## Terminal mirror (`src/terminal/iterm.ts`)
 

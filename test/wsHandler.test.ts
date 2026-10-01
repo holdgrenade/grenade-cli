@@ -59,9 +59,23 @@ class FakeActivity extends EventEmitter {
   entriesOf(id: string) { return this.entries.get(id) ?? []; }
 }
 
+class FakeGroups extends EventEmitter {
+  order = ["g-7f3a91", "g-0c2d4e"];
+  frame() { return { type: "groups" as const, order: [...this.order] }; }
+  move(group: string, index: number) {
+    const rest = this.order.filter((g) => g !== group);
+    const next = [...rest.slice(0, index), group, ...rest.slice(index)];
+    if (next.join() === this.order.join()) return false;
+    this.order = next;
+    this.emit("changed", this.frame());
+    return true;
+  }
+}
+
 function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
+  const groups = new FakeGroups();
   const out: DaemonFrame[] = [];
   const closes: string[] = [];
   const saved: { sessionId: string; name: string; mime: string; bytes: number }[] = [];
@@ -69,6 +83,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
   const conn = new Connection({
     registry: registry as never,
     activity: activity as never,
+    groups,
     attachments: {
       async save(sessionId, name, mime, data) {
         saved.push({ sessionId, name, mime, bytes: data.length });
@@ -89,7 +104,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     setTimer: () => 0,
     clearTimer: () => {},
   });
-  return { conn, registry, activity, out, closes, saved, events };
+  return { conn, registry, activity, groups, out, closes, saved, events };
 }
 
 describe("Connection", () => {
@@ -112,6 +127,24 @@ describe("Connection", () => {
     await conn.handleMessage(fixture("client.hello.json"));
     expect(out[0]).toMatchObject({ type: "welcome", protocol: 1, daemon: { id: "d_1" } });
     expect(out[1]).toMatchObject({ type: "sessions", sessions: [{ id: "gr-a1b2c3" }] });
+    expect(out[2]).toEqual({ type: "groups", order: ["g-7f3a91", "g-0c2d4e"] });
+  });
+
+  it("moves a group, and passes every change of the order on", async () => {
+    const { conn, groups, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "group.move", group: "g-0c2d4e", index: 0 }));
+    expect(out).toEqual([{ type: "groups", order: ["g-0c2d4e", "g-7f3a91"] }]);
+    // Where it already is: nothing changed, and this client still gets the order.
+    await conn.handleMessage(JSON.stringify({ type: "group.move", group: "g-0c2d4e", index: 0 }));
+    expect(out).toHaveLength(2);
+    // A move from another client reaches this one; after close it no longer does.
+    groups.move("g-7f3a91", 0);
+    expect(out).toHaveLength(3);
+    conn.handleClose();
+    groups.move("g-0c2d4e", 0);
+    expect(out).toHaveLength(3);
   });
 
   it("accepts every client fixture without a bad_frame", async () => {

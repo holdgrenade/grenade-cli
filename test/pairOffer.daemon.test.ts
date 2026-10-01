@@ -204,8 +204,8 @@ describe("pairing on the local network", () => {
     expect(paired.daemon.key).toBe(offer.key);
 
     p.send({ type: "hello", protocol: 1, token: paired.token, client });
-    await until(() => p.frames.length >= 3);
-    expect(p.frames.slice(1).map((f) => f.type)).toEqual(["welcome", "sessions"]);
+    await until(() => p.frames.length >= 4);
+    expect(p.frames.slice(1).map((f) => f.type)).toEqual(["welcome", "sessions", "groups"]);
     expect(await control("GET", "/pair-code")).toEqual({ state: "paired", phone: "Test phone", platform: "test", route: "lan" });
     expect(await control("GET", "/devices")).toMatchObject([{ name: "Test phone", sealed: true, connected: ["lan"] }]);
   });
