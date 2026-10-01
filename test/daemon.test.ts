@@ -60,7 +60,7 @@ afterEach(async () => {
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 let run = 0;
-async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string } = {}) {
+async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?: Tmux; sessionsPath?: string } = {}) {
   const dir = join(home, `run-${++run}`);
   const relayPath = join(dir, "relay.json");
   const tokensPath = join(dir, "tokens.json");
@@ -69,10 +69,10 @@ async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string } = {})
     controlPort: await freePort(),
     advertise: false,
     log: silentLogger,
-    tmux,
+    tmux: opts.tmux ?? tmux,
     terminal: "none",
     summaries: false,
-    sessionsPath: null,
+    sessionsPath: opts.sessionsPath ?? null,
     tokensPath,
     relayPath,
     e2eKeyPath: join(dir, "e2e-key"),
@@ -137,6 +137,27 @@ describe("pairing without encryption", () => {
     expect(r.status).toBe(200);
     expect(r.body.token).toMatch(/^grt_/);
     expect((await control("GET", "/devices")).body).toMatchObject([{ name: "Test phone", platform: "test", connected: [], sealed: false }]);
+  });
+});
+
+describe("activity after a restart", () => {
+  it("is read from the saved transcript at start, before any hook", async () => {
+    const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
+    const dir = mkdtempSync(join(home, "restart-"));
+    const transcript = join(dir, "t.jsonl");
+    writeFileSync(transcript, readFileSync(join(fixtures, "transcript.examples.jsonl")));
+    const sessionsPath = join(dir, "sessions.json");
+    writeFileSync(sessionsPath, JSON.stringify([{ id: "gr-app", name: "app", agent: "claude", cwd: dir, createdAt: "2026-09-30T14:00:00.000Z", transcript }]));
+    const live: Tmux = { ...tmux, async listSessions() { return ["gr-app"]; } };
+    const { d, pairPlain } = await daemon({ allowPlainLan: true, tmux: live, sessionsPath });
+    const { token } = (await pairPlain()).body;
+    const p = await phone(d.port, Buffer.alloc(0), false);
+    p.hello(token ?? "");
+    await until(() => p.types().includes("welcome"));
+    p.send({ type: "subscribe", sessionId: "gr-app" });
+    await until(() => p.types().includes("activity"));
+    const expected = JSON.parse(readFileSync(join(fixtures, "daemon.activity.json"), "utf8")) as { entries: unknown[] };
+    expect(p.frames.find((f) => f.type === "activity")).toMatchObject({ sessionId: "gr-app", full: true, entries: expected.entries });
   });
 });
 

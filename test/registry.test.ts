@@ -236,6 +236,17 @@ describe("session groups", () => {
     expect(again.get("gr-app")?.model).toBe("Opus 5.5");
   });
 
+  it("saves the transcript a hook named, keeps it off the session, and restores it on adopt", async () => {
+    const persistPath = join(mkdtempSync(join(tmpdir(), "grenade-transcript-")), "sessions.json");
+    const r = make({ persistPath });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.setTranscript("gr-app", "/Users/adam/.claude/projects/app/one.jsonl");
+    expect(r.get("gr-app")).not.toHaveProperty("transcript");
+    const again = make({ live: ["gr-app"], persistPath });
+    await again.adopt();
+    expect(again.transcripts()).toEqual([{ id: "gr-app", path: "/Users/adam/.claude/projects/app/one.jsonl" }]);
+  });
+
   it("setCwd follows the agent into another folder, once per change, and restores it on adopt", async () => {
     const persistPath = join(mkdtempSync(join(tmpdir(), "grenade-cwd-")), "sessions.json");
     const r = make({ live: ["gr-app"], persistPath });

@@ -159,6 +159,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     });
   // A Stop can come before the reply is in the transcript; keep reading until it is.
   const catchUp = new CatchUp(readActivity);
+  // The store lives in memory: after a restart, read every saved transcript from its start rather than wait for
+  // each session's next hook, so a phone sees what was said the moment it subscribes.
+  for (const { id, path } of registry.transcripts()) {
+    readActivity(id, path).catch((e) => log.debug("Could not read the activity from a saved transcript", { session: id, path, error: e }));
+  }
 
   /** One hook event of a session: status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) =>
@@ -172,6 +177,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         activity.noteAsked(id, prompt, new Date().toISOString());
       },
       (id, path, event) => {
+        registry.setTranscript(id, path);
         readTranscriptModel(path)
           .then((model) => model && registry.setModel(id, model))
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));

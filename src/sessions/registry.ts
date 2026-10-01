@@ -41,6 +41,8 @@ interface Record_ {
   phoneSized: boolean;
   /** Epoch of the pane's history indexes (see historyEpoch.ts). Null until the first capture. */
   mark: HistoryMark | null;
+  /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
+  transcript: string | undefined;
 }
 
 interface PersistedSession {
@@ -53,6 +55,7 @@ interface PersistedSession {
   order?: number | undefined;
   summary?: string | undefined;
   model?: string | undefined;
+  transcript?: string | undefined;
 }
 
 export class SessionExistsError extends Error {}
@@ -152,6 +155,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         order: meta?.order ?? nextOrder(group, this.list()),
         summary: meta?.summary,
         model: meta?.model,
+        transcript: meta?.transcript,
       });
       // Sessions started by an older daemon lack mouse mode and the blank fill; set them like `newSession` does.
       this.tmux.applySessionOptions(id).catch((e) => this.log.debug("Could not set tmux session options", { session: id, error: e }));
@@ -352,6 +356,19 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     return changed;
   }
 
+  /** The transcript a hook named. Not part of the session phones see; only saved. */
+  setTranscript(id: string, path: string): void {
+    const r = this.records.get(id);
+    if (!r || r.transcript === path) return;
+    r.transcript = path;
+    this.persist();
+  }
+
+  /** Sessions with a known transcript, to read their activity from (PROTOCOL.md "Activity"). */
+  transcripts(): { id: string; path: string }[] {
+    return [...this.records.values()].flatMap((r) => (r.transcript ? [{ id: r.session.id, path: r.transcript }] : []));
+  }
+
   // ---- internals -----------------------------------------------------------
 
   private add(meta: PersistedSession): Session {
@@ -371,7 +388,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, phoneSized: false, mark: null });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, phoneSized: false, mark: null, transcript: meta.transcript });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -418,7 +435,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, model: s.model }));
+      .map(({ session: s, transcript }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, model: s.model, transcript }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");
