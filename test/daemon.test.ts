@@ -125,6 +125,15 @@ async function phone(port: number, key: Buffer, sealed: boolean) {
   return { ws, frames, raw, send, hello, closed: () => closed, types: () => frames.map((f) => f.type) };
 }
 
+describe("updates through the control API", () => {
+  it("reports what installs this copy and refuses a restart it cannot do", async () => {
+    const { control } = await daemon();
+    const update = (await control("GET", "/status")).body["update"] as { method?: string; restarts?: boolean };
+    expect(update).toMatchObject({ method: "source", restarts: false });
+    expect(await control("POST", "/update/restart")).toEqual({ status: 409, body: { error: "cannot_restart" } });
+  });
+});
+
 describe("pairing without encryption", () => {
   it("is refused by default", async () => {
     const { pairPlain } = await daemon();

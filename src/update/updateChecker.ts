@@ -159,6 +159,23 @@ export class UpdateChecker {
     }
   }
 
+  /**
+   * The Mac app's Restart: run what is on disk now instead of waiting for the sessions. Refused when this daemon was
+   * started by hand (nothing would start it again) and, unless `force`, while a session is busy: a restart loses the
+   * hooks of those seconds and closes a card the phone is about to answer.
+   */
+  restartNow(force: boolean): "restarting" | "busy" | "cannotRestart" {
+    if (!this.d.restart) return "cannotRestart";
+    if (this.d.busy() && !force) return "busy";
+    if (this.restarting) return "restarting";
+    this.restarting = true;
+    const installed = this.readDisk() ?? this.d.running;
+    this.d.log.info(`Restarting into Grenade ${installed}, as asked`, { from: this.d.running, force });
+    const restart = this.d.restart;
+    setTimeout(() => restart(installed), 100); // after the answer has gone out
+    return "restarting";
+  }
+
   /** Once a minute: a newer version on disk is run as soon as no session is busy. */
   watchDisk(): void {
     const installed = this.readDisk();

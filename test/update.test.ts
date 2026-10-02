@@ -304,6 +304,19 @@ describe("UpdateChecker", () => {
     });
   });
 
+  it("restarts when asked, but not while a session is busy unless forced, and never when started by hand", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const restart = vi.fn();
+    const { c, state } = checker({ restart, busy: true });
+    expect(c.restartNow(false)).toBe("busy");
+    expect(c.restartNow(true)).toBe("restarting");
+    state.busy = false;
+    expect(c.restartNow(false)).toBe("restarting"); // once is enough
+    vi.advanceTimersByTime(100);
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(checker({}).c.restartNow(true)).toBe("cannotRestart");
+  });
+
   it("never restarts a daemon started by hand, and says it cannot", () => {
     const { c, state } = checker({});
     state.installed = "0.1.10";
