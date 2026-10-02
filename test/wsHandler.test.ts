@@ -154,7 +154,7 @@ describe("Connection", () => {
     const everything: ConversationsPort = {
       async list() { return []; },
       async preview() { return []; },
-      archive() {},
+      async delete() { return null; },
       async resume({ name }) { return { ...session, id: `gr-${name}`, name }; },
     };
     const { conn, out } = connect({ conversations: everything });
@@ -405,9 +405,12 @@ describe("Connection: conversations", () => {
   function withConversations() {
     const calls: string[] = [];
     const port: ConversationsPort = {
-      async list() { return calls.includes("archive:true") ? [{ ...glass, archived: true }] : [glass]; },
+      async list() { return calls.includes(`delete:${glass.id}`) ? [] : [glass]; },
       async preview(id) { return id === glass.id ? [{ kind: "asked", text: "Make it glass", at: "2026-10-02T14:14:10.000Z" }, { kind: "stopped", text: "Stopped", at: "2026-10-02T14:15:00.000Z" }] : null; },
-      archive(id, archived) { calls.push(`archive:${archived}`); },
+      async delete(id) {
+        calls.push(`delete:${id}`);
+        return id === glass.id ? null : "it is open in a Grenade session; end that session first";
+      },
       async resume({ name, conversationId }) {
         calls.push(`resume:${name}:${conversationId}`);
         return conversationId === glass.id ? { ...session, id: `gr-${name}`, name, resumedFrom: conversationId } : null;
@@ -418,7 +421,7 @@ describe("Connection: conversations", () => {
   const hello = (platform = "ios", version = "1.0.13") =>
     JSON.stringify({ type: "hello", protocol: 1, token: "grt_example_token", client: { name: "Phone", platform, version } });
 
-  it("lists, previews and archives", async () => {
+  it("lists, previews and deletes", async () => {
     const { port, calls } = withConversations();
     const { conn, out } = connect({ conversations: port });
     await conn.handleMessage(hello());
@@ -427,9 +430,21 @@ describe("Connection: conversations", () => {
     expect(out).toEqual([{ type: "conversations", conversations: [glass] }]);
     await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
     expect(out[1]).toMatchObject({ type: "conversation.preview", conversationId: glass.id, entries: [{ kind: "asked" }, { kind: "stopped" }] });
+    await conn.handleMessage(JSON.stringify({ type: "conversation.delete", conversationId: glass.id }));
+    expect(calls).toEqual([`delete:${glass.id}`]);
+    expect(out[2]).toEqual({ type: "conversations", conversations: [] });
+    await conn.handleMessage(JSON.stringify({ type: "conversation.delete", conversationId: "held-one" }));
+    expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "conversation.delete", message: "could not delete the conversation: it is open in a Grenade session; end that session first" });
+  });
+
+  it("answers the retired archive with the list and changes nothing", async () => {
+    const { port, calls } = withConversations();
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
     await conn.handleMessage(JSON.stringify({ type: "conversation.archive", conversationId: glass.id, archived: true }));
-    expect(calls).toEqual(["archive:true"]);
-    expect(out[2]).toEqual({ type: "conversations", conversations: [{ ...glass, archived: true }] });
+    expect(calls).toEqual([]);
+    expect(out).toEqual([{ type: "conversations", conversations: [glass] }]);
   });
 
   it("leaves stopped out of a preview for an app from before it", async () => {

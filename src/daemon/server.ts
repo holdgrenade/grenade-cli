@@ -24,6 +24,7 @@ import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
 import { ConversationMarks } from "../conversations/conversationMarks.js";
+import { moveToTrash } from "../conversations/trash.js";
 import { conversationIdOf, heldConversations } from "../conversations/heldConversations.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
@@ -112,7 +113,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
   const tmux = opts.tmux ?? createTmux();
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
@@ -210,7 +211,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const conversations: ConversationsPort = {
     list: () => conversationIndex.list(),
     preview: (id) => conversationIndex.preview(id),
-    archive: (id, archived) => marks.setArchived(id, archived),
+    async delete(id) {
+      const target = await conversationIndex.trashPaths(id);
+      if ("refused" in target) return target.refused;
+      try {
+        await moveToTrash(target.paths);
+      } catch (e) {
+        log.warn("Could not move a conversation to the Trash", { conversation: id, error: e });
+        return "the Mac could not move it to the Trash";
+      }
+      log.info(`Moved conversation ${id} to the Trash`, { paths: target.paths.join(",") });
+      return null;
+    },
     async resume({ name, group, conversationId }) {
       const found = await conversationIndex.find(conversationId);
       if (!found) return null;

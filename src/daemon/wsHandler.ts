@@ -67,7 +67,8 @@ export interface ConversationsPort {
   list(): Promise<Conversation[]>;
   /** Null when there is no conversation with that id. */
   preview(id: string): Promise<ActivityEntry[] | null>;
-  archive(id: string, archived: boolean): void;
+  /** Moves a conversation to the Trash. Resolves with why it was refused, or null when it is gone. */
+  delete(id: string): Promise<string | null>;
   /** Starts a session that runs a copy of the conversation, its history already read. Null when there is no such conversation. */
   resume(input: { name: string; group?: string | undefined; conversationId: string }): Promise<Session | null>;
 }
@@ -111,7 +112,7 @@ export interface ConnectionDeps {
   activity?: ActivityPort;
   /** A client pressed a key that interrupts (Esc or Ctrl-C): an interrupt fires no hook, so the transcript is read for it. */
   interrupted?(sessionId: string): void;
-  /** Past conversations to list, preview, archive and resume. Absent means this daemon has none (no `conversations: 1`). */
+  /** Past conversations to list, preview, resume and delete. Absent means this daemon has none (no `conversations: 1`). */
   conversations?: ConversationsPort;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
@@ -339,9 +340,15 @@ export class Connection {
         if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this Mac`, frame.type);
         return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: this.entriesFor(entries) });
       }
-      case "conversation.archive":
+      case "conversation.delete": {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
-        this.d.conversations.archive(frame.conversationId, frame.archived);
+        const refused = await this.d.conversations.delete(frame.conversationId);
+        if (refused) return this.fail("bad_frame", `could not delete the conversation: ${refused}`, frame.type);
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+      }
+      case "conversation.archive":
+        // Retired (grenade-cli 1.0.14): answered, changes nothing.
+        if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.

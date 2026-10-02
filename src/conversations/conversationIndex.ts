@@ -1,9 +1,11 @@
 /**
  * The Claude Code conversations saved on this Mac (PROTOCOL.md "Conversations"): `<claude dir>/projects/<folder>/
  * <id>.jsonl`. Lists them for the `conversations` frame, finds one to resume, and reads one for a preview. Reads only;
- * a transcript is read again only when it changed. Grenade's own marks (archived, copies) come from ConversationMarks.
+ * a transcript is read again only when it changed. Grenade's own mark (which conversations are its copies) comes from ConversationMarks. `trashPaths` names
+ * what a delete moves to the Trash; the move itself is `trash.ts`.
  */
 import { open, readdir, readFile, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ACTIVITY_KEEP, CONVERSATIONS_MAX, activityEntriesIn, type ActivityEntry, type Conversation } from "@grenade/protocol";
@@ -37,7 +39,7 @@ export class ConversationIndex {
 
   constructor(private readonly opts: ConversationIndexOptions) {}
 
-  /** Every conversation, newest first, at most CONVERSATIONS_MAX, archived ones included. */
+  /** Every conversation, newest first, at most CONVERSATIONS_MAX. */
   async list(): Promise<Conversation[]> {
     const found = (await this.scan()).sort((a, b) => b.mtimeMs - a.mtimeMs);
     const running = await (this.opts.running?.() ?? runningConversationIds(join(this.opts.claudeDir, "sessions")));
@@ -56,7 +58,6 @@ export class ConversationIndex {
         title: info.title,
         ...(info.lastPrompt !== undefined ? { lastPrompt: info.lastPrompt } : {}),
         updatedAt: new Date(f.mtimeMs).toISOString(),
-        ...(this.opts.marks.isArchived(f.id) ? { archived: true as const } : {}),
         // A conversation Grenade holds runs in Grenade, not somewhere else.
         ...(running.has(f.id) && !sessionId ? { running: true as const } : {}),
         ...(sessionId ? { sessionId } : {}),
@@ -72,6 +73,22 @@ export class ConversationIndex {
     if (!f) return null;
     const info = await this.infoOf(f);
     return info ? { path: f.path, cwd: info.cwd } : null;
+  }
+
+  /**
+   * What deleting a conversation moves to the Trash: its transcript and the folder of the same name beside it
+   * (subagents, tool results), or why it may not be deleted. Grenade's session would write it again, and so would
+   * another Claude Code process.
+   */
+  async trashPaths(id: string): Promise<{ paths: string[] } | { refused: string }> {
+    const f = (await this.scan()).find((c) => c.id === id);
+    if (!f) return { refused: `no conversation ${id} on this Mac` };
+    if (this.opts.held().has(id)) return { refused: "it is open in a Grenade session; end that session first" };
+    const running = await (this.opts.running?.() ?? runningConversationIds(join(this.opts.claudeDir, "sessions")));
+    if (running.has(id)) return { refused: "it is open in another terminal; quit Claude Code there first" };
+    const folder = f.path.slice(0, -".jsonl".length);
+    this.cache.delete(f.path);
+    return { paths: existsSync(folder) ? [f.path, folder] : [f.path] };
   }
 
   /** The last ACTIVITY_KEEP activity entries of a conversation, or null when there is none with that id. */

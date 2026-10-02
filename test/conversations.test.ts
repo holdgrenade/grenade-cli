@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -85,12 +85,30 @@ describe("ConversationIndex", () => {
 
   it("lists conversations newest first with Grenade's marks", async () => {
     const { index, marks } = setup();
-    marks.setArchived("old", true);
     marks.noteCopy("new", "older-original");
     expect(await index.list()).toEqual([
       { id: "new", cwd: "/work/app", title: "Glass buttons and badges", lastPrompt: "Glass buttons", updatedAt: new Date(1_790_900_000_000).toISOString(), sessionId: "gr-glass", copyOf: "older-original" },
-      { id: "old", cwd: "/work/app", title: "First thing", lastPrompt: "First thing", updatedAt: new Date(1_790_000_000_000).toISOString(), archived: true, running: true },
+      { id: "old", cwd: "/work/app", title: "First thing", lastPrompt: "First thing", updatedAt: new Date(1_790_000_000_000).toISOString(), running: true },
     ]);
+  });
+
+  it("names the transcript and its folder for the Trash, and refuses one that is open", async () => {
+    const { index } = setup();
+    expect(await index.trashPaths("old")).toEqual({ refused: "it is open in another terminal; quit Claude Code there first" });
+    expect(await index.trashPaths("new")).toEqual({ refused: "it is open in a Grenade session; end that session first" });
+    expect(await index.trashPaths("nope")).toEqual({ refused: "no conversation nope on this Mac" });
+  });
+
+  it("refuses one another Claude Code process has open, and takes the folder beside a transcript", async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), "gr-claude-"));
+    const project = join(claudeDir, "projects", "-work-app");
+    mkdirSync(join(project, "abc", "subagents"), { recursive: true });
+    writeFileSync(join(project, "abc.jsonl"), user("Hi", "2026-10-02T14:00:00.000Z") + "\n");
+    writeFileSync(join(project, "run.jsonl"), user("Hi", "2026-10-02T14:00:00.000Z") + "\n");
+    const index = new ConversationIndex({ claudeDir, marks: new ConversationMarks(silentLogger), held: () => new Map(), running: async () => new Set(["run"]) });
+    const target = await index.trashPaths("abc");
+    expect("paths" in target && target.paths.map((p) => p.split("/-work-app/")[1])).toEqual(["abc.jsonl", "abc"]);
+    expect(await index.trashPaths("run")).toEqual({ refused: "it is open in another terminal; quit Claude Code there first" });
   });
 
   it("finds a conversation's transcript and folder, and previews it", async () => {
@@ -104,16 +122,15 @@ describe("ConversationIndex", () => {
 });
 
 describe("ConversationMarks", () => {
-  it("saves and reads archived ids and copies", () => {
+  it("saves and reads copies, and reads a 1.0.14 file with archived ids", () => {
     const path = join(mkdtempSync(join(tmpdir(), "gr-marks-")), "conversations.json");
+    writeFileSync(path, JSON.stringify({ archived: ["x"], copies: { old: "x" } }));
     const a = new ConversationMarks(silentLogger, path);
-    a.setArchived("x", true);
+    expect(a.copyOf("old")).toBe("x");
     a.noteCopy("copy", "x");
     const b = new ConversationMarks(silentLogger, path);
-    expect(b.isArchived("x")).toBe(true);
     expect(b.copyOf("copy")).toBe("x");
-    b.setArchived("x", false);
-    expect(new ConversationMarks(silentLogger, path).isArchived("x")).toBe(false);
+    expect(readFileSync(path, "utf8")).not.toContain("archived");
   });
 });
 
