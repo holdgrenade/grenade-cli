@@ -43,6 +43,10 @@ interface Record_ {
   mark: HistoryMark | null;
   /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
   transcript: string | undefined;
+  /** Claude Code's title for the conversation; beats `guessedTitle` as the session's `title`. */
+  aiTitle: string | undefined;
+  /** The summarizer's title, used until Claude Code has written one and for other agents. */
+  guessedTitle: string | undefined;
 }
 
 interface PersistedSession {
@@ -54,6 +58,8 @@ interface PersistedSession {
   group?: string | undefined;
   order?: number | undefined;
   summary?: string | undefined;
+  aiTitle?: string | undefined;
+  guessedTitle?: string | undefined;
   model?: string | undefined;
   transcript?: string | undefined;
   resumedFrom?: string | undefined;
@@ -156,6 +162,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         group,
         order: meta?.order ?? nextOrder(group, this.list()),
         summary: meta?.summary,
+        aiTitle: meta?.aiTitle,
+        guessedTitle: meta?.guessedTitle,
         model: meta?.model,
         transcript: meta?.transcript,
         resumedFrom: meta?.resumedFrom,
@@ -300,6 +308,30 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
+  /** Claude Code's title for the session's conversation (`ai-title` in its transcript). */
+  setAiTitle(id: string, title: string): void {
+    const r = this.records.get(id);
+    if (!r || r.aiTitle === title) return;
+    r.aiTitle = title;
+    this.updateTitle(r);
+  }
+
+  /** The summarizer's few-word title; shown only while Claude Code has written none. */
+  setGuessedTitle(id: string, title: string): void {
+    const r = this.records.get(id);
+    if (!r || r.guessedTitle === title) return;
+    r.guessedTitle = title;
+    this.updateTitle(r);
+  }
+
+  private updateTitle(r: Record_): void {
+    this.persist();
+    const title = r.aiTitle ?? r.guessedTitle;
+    if (title === undefined || r.session.title === title) return;
+    r.session = { ...r.session, title };
+    this.emit("updated", r.session);
+  }
+
   /** The folder the agent works in now (PROTOCOL.md "Session": `cwd` follows the agent). */
   setCwd(id: string, cwd: string): void {
     const r = this.records.get(id);
@@ -403,6 +435,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       status: state.status,
       statusSince: new Date(state.since).toISOString(),
       lastLine: "",
+      ...((meta.aiTitle ?? meta.guessedTitle) !== undefined ? { title: meta.aiTitle ?? meta.guessedTitle } : {}),
       ...(meta.summary !== undefined ? { summary: meta.summary } : {}),
       ...(meta.model !== undefined ? { model: meta.model } : {}),
       createdAt: meta.createdAt,
@@ -411,7 +444,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, mark: null, transcript: meta.transcript });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -458,7 +491,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, model: s.model, transcript, resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

@@ -20,6 +20,7 @@ import { Summarizer } from "../summary/summarizer.js";
 import { TerminalMirror, defaultTerminal, type TerminalKind } from "../terminal/mirror.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
+import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
@@ -163,7 +164,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
   const activity = new ActivityStore();
   const transcripts = new TranscriptReader();
-  /** Reads a session's transcript: new activity into the store, a moved working directory into the session. */
+  /** Reads a session's transcript: new activity into the store, a moved working directory and a new title into the session. */
   const readActivity = (id: string, path: string) =>
     transcripts.readChunk(path).then(({ jsonl, fromStart }) => {
       const entries = activityEntriesIn(jsonl);
@@ -172,6 +173,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       else activity.append(id, entries);
       const cwd = workingDirectoryIn(jsonl);
       if (cwd) registry.setCwd(id, cwd);
+      const title = clipTitle(aiTitleIn(jsonl) ?? "");
+      if (title) registry.setAiTitle(id, title);
       // The user interrupted the turn: no hook says so, and Claude Code is back at its prompt.
       if (endsStopped(entries) && registry.get(id)?.status === "working") registry.applyHook(id, "idle");
       return entries;

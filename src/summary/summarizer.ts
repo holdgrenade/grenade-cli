@@ -1,5 +1,5 @@
 /**
- * Keeps each session's one-sentence `summary` fresh. Triggers: a session starts working (after a
+ * Keeps each session's one-sentence `summary` and its few-word `title` fresh. Triggers: a session starts working (after a
  * short delay, so the screen shows the task), a session starts waiting, and a new user prompt.
  * At most one run per session per minute, one run at a time overall, and none when nothing the
  * model would see has changed since the last run.
@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import type { Session } from "@grenade/protocol";
 import type { Logger } from "../log.js";
-import { buildSummaryInput, cleanSummary } from "./summaryPrompt.js";
+import { buildSummaryInput, parseSummaryReply } from "./summaryPrompt.js";
 import { SUMMARY_WORKING_DELAY_MS, summaryDelay } from "./summaryTiming.js";
 
 const PROMPTS_KEPT = 3;
@@ -20,6 +20,7 @@ export interface SummaryRegistryPort {
   get(id: string): Session | undefined;
   screenOf(id: string): { lines: string[] } | undefined;
   setSummary(id: string, summary: string): void;
+  setGuessedTitle(id: string, title: string): void;
 }
 
 export interface SummarizerOptions {
@@ -126,11 +127,12 @@ export class Summarizer {
     t.lastInputHash = hash;
     t.lastRunAt = this.now();
     try {
-      const summary = cleanSummary(await this.run(input));
+      const { title, summary } = parseSummaryReply(await this.run(input));
       this.failures = 0;
-      if (!summary || this.stopped || !this.registry.get(id)) return;
-      this.registry.setSummary(id, summary);
-      this.log.debug("Summarized session", { session: id, summary });
+      if (this.stopped || !this.registry.get(id)) return;
+      if (title) this.registry.setGuessedTitle(id, title);
+      if (summary) this.registry.setSummary(id, summary);
+      this.log.debug("Summarized session", { session: id, title, summary });
     } catch (e) {
       t.lastInputHash = undefined; // let the next trigger try the same input again
       // Log the first failure in a row as a warning so a broken `claude` is visible, the rest quietly.

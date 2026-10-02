@@ -239,6 +239,22 @@ describe("session groups", () => {
     expect(again.get("gr-app")?.summary).toBe("Fixing the tests.");
   });
 
+  it("titles a session with Claude Code's title over the summarizer's, and restores both on adopt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-title-"));
+    const persistPath = join(dir, "sessions.json");
+    const r = make({ persistPath });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    const seen: (string | undefined)[] = [];
+    r.on("updated", (s) => seen.push(s.title));
+    r.setGuessedTitle("gr-app", "Test fixes");
+    r.setAiTitle("gr-app", "Flaky test fixes");
+    r.setGuessedTitle("gr-app", "Other guess");
+    expect(seen).toEqual(["Test fixes", "Flaky test fixes"]);
+    const again = make({ live: ["gr-app"], persistPath });
+    await again.adopt();
+    expect(again.get("gr-app")?.title).toBe("Flaky test fixes");
+  });
+
   it("sets, emits and persists a model, and restores it on adopt", async () => {
     const dir = mkdtempSync(join(tmpdir(), "grenade-model-"));
     const persistPath = join(dir, "sessions.json");

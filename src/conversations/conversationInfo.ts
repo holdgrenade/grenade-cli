@@ -3,6 +3,7 @@
  * last few hundred kilobytes. Which lines are prompts is the protocol's rule (`activityEntriesIn`).
  */
 import { CONVERSATION_TEXT_MAX, activityEntriesIn } from "@grenade/protocol";
+import { aiTitleIn } from "../transcript/aiTitle.js";
 
 export interface ConversationInfo {
   /** The folder it was started in: the first `cwd` Claude Code stamped on a line. */
@@ -24,7 +25,7 @@ export function conversationInfoIn(head: string, tail: string): ConversationInfo
   const tailPrompts = asked(tail);
   const first = headPrompts[0] ?? tailPrompts[0];
   if (!cwd || first === undefined) return null;
-  const title = lastTitle(tail) ?? lastTitle(head) ?? first;
+  const title = aiTitleIn(tail) ?? aiTitleIn(head) ?? first;
   const last = tailPrompts.at(-1) ?? headPrompts.at(-1);
   return { cwd, title: clip(title), lastPrompt: last === undefined ? undefined : clip(last) };
 }
@@ -46,18 +47,6 @@ function firstCwd(jsonl: string): string | null {
     if (entry && entry["isSidechain"] !== true && typeof entry["cwd"] === "string" && entry["cwd"]) return entry["cwd"];
   }
   return null;
-}
-
-/** Claude Code writes `{"type":"ai-title","aiTitle":…}` and repeats it as the title changes; the last one wins. */
-function lastTitle(jsonl: string): string | null {
-  let title: string | null = null;
-  for (const line of jsonl.split("\n")) {
-    if (!line.includes('"ai-title"')) continue;
-    const entry = parse(line);
-    const text = entry?.["aiTitle"];
-    if (entry?.["type"] === "ai-title" && typeof text === "string" && text.trim()) title = text;
-  }
-  return title;
 }
 
 function parse(line: string): Record<string, unknown> | null {

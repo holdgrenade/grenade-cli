@@ -104,12 +104,13 @@ src/sessions/groups.ts     pure group rules: default group for a folder, joinabl
 src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
 src/sessions/groupOrderStore.ts GroupOrderStore: that order for every client, follows the registry's `updated`/`removed`, `move` for `group.move`, event `changed` (a `groups` frame), groups.json
 src/sessions/poller.ts     timers: 200 ms capture of subscribed sessions, 1 s sweep of all sessions
-src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen tail), cleanSummary of the reply
+src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen tail), parseSummaryReply (line 1 title, line 2 summary)
 src/summary/summaryTiming.ts  pure: summaryDelay (wanted delay vs. one run per minute)
 src/summary/claudeCli.ts   resolveClaudeBin + runClaudeSummary: `claude -p --model haiku`, stdin in, reply out
-src/summary/summarizer.ts  Summarizer: listens to the registry, schedules runs, calls registry.setSummary
+src/summary/summarizer.ts  Summarizer: listens to the registry, schedules runs, calls registry.setSummary and setGuessedTitle
 src/transcript/modelLabel.ts  pure: lastModelIn (model id of the last assistant reply in transcript JSONL), modelLabel ("claude-opus-5-5" → "Opus 5.5")
 src/transcript/readModel.ts   readTranscriptModel: reads the last 256 KB of a transcript, returns the label
+src/transcript/aiTitle.ts     pure: aiTitleIn (newest Claude Code `ai-title` in transcript JSONL), clipTitle (one line, SESSION_TITLE_MAX)
 src/activity/transcriptReader.ts  TranscriptReader: reads a transcript from where it left off, whole lines only, one read at a time per file; the protocol's `activityEntriesIn` and `workingDirectoryIn` say what the lines mean
 src/activity/catchUp.ts           CatchUp: reads a transcript again at growing delays after a `Stop` that showed no reply yet, until it does (`start`, `cancel`, `stop`)
 src/activity/activityStore.ts     ActivityStore: the last 200 entries per session; `append` (from the transcript), `noteAsked` (a hook's prompt, shown at once; the transcript's copy of it is not sent again, and when the transcript puts it elsewhere the next frame is `full`), `forget`; event `activity` carries new entries as a frame
@@ -229,13 +230,15 @@ Read PROTOCOL.md "Prompt hook" and "Prompts" first. A phone can answer a permiss
 
 ## Summaries (`src/summary/`)
 
-Each session carries `summary`, one sentence on what it is working on, shown on the phone's list. The daemon writes it with Haiku through the `claude` CLI, so it uses the Mac's Claude Code login and needs no API key.
+Each session carries `summary`, one sentence on what it is working on, and `title`, a few words naming it, shown as the row's heading on the phone and the Mac with the session's `name` beneath. The daemon writes both with Haiku through the `claude` CLI (one reply: the title on line 1, the summary on line 2), so it uses the Mac's Claude Code login and needs no API key.
+
+- `title` for a Claude session is Claude Code's own title, the same one a past conversation shows: every transcript read (`readActivity` in `server.ts`) looks for the newest `ai-title` line (`aiTitleIn`) and calls `registry.setAiTitle`. The summarizer's title (`setGuessedTitle`) shows only until Claude Code has written one, and for Codex and shell sessions. Both are saved in `sessions.json`.
 
 - Triggers: status becomes `working` (run 8 s later, so the screen shows the task), status becomes `waiting` (run now), and a `UserPromptSubmit` prompt (kept, last three per session). A pending run absorbs later triggers.
 - Limits: one run per session per minute (`summaryDelay`), one run at a time overall, and no run when the model input (prompts + last 60 screen lines) hashes the same as last time. A failed run clears the hash so the next trigger retries; only the first failure in a row is a warning.
 - The call is `claude -p --model haiku --tools "" --setting-sources "" --strict-mcp-config --no-session-persistence --system-prompt …`, run in the temp folder with `GRENADE_SESSION` removed. No settings means no hooks, so a summary never reports status for itself. Do not use `--bare`: it skips the keychain, so a subscription login stops working.
 - A run takes about 2–6 s, and the first run after boot can take 30 s. The timeout is 60 s.
-- `summary` is saved in `sessions.json` and restored on `adopt()`. Off: `--no-summaries`, `GRENADE_SUMMARIES=off`, or no `claude` found (logged once at start).
+- `summary` and both titles are saved in `sessions.json` and restored on `adopt()`. Off: `--no-summaries`, `GRENADE_SUMMARIES=off`, or no `claude` found (logged once at start).
 
 ## Activity (`src/activity/`)
 
