@@ -364,6 +364,11 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.persist();
   }
 
+  /** The transcript a hook named for a session, if any. */
+  transcriptOf(id: string): string | undefined {
+    return this.records.get(id)?.transcript;
+  }
+
   /** Sessions with a known transcript, to read their activity from (PROTOCOL.md "Activity"). */
   transcripts(): { id: string; path: string }[] {
     return [...this.records.values()].flatMap((r) => (r.transcript ? [{ id: r.session.id, path: r.transcript }] : []));

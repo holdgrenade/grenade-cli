@@ -97,6 +97,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
     unpair: (token) => events.push(`unpair:${token}`),
+    interrupted: (id) => events.push(`interrupted:${id}`),
     daemon: { id: "d_1", name: "Mac", version: "0.1.0" },
     log: silentLogger,
     out: (f) => out.push(f),
@@ -345,6 +346,39 @@ describe("Connection activity", () => {
     expect(out.at(-1)).toEqual(frame);
     activity.emit("activity", { ...frame, sessionId: "gr-other" });
     expect(out.at(-1)).toEqual(frame);
+  });
+
+  it("leaves stopped entries out for an app from before them", async () => {
+    const { conn, activity, out } = connect();
+    const stopped = { kind: "stopped", text: "Stopped", at: "2026-10-02T03:22:39.000Z" } as const;
+    activity.entries.set(session.id, [...activity.entriesOf(session.id), stopped]);
+    // The hello fixture is iPhone app 0.1.0.
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    expect(out.at(-1)).toMatchObject({ type: "activity", full: true, entries: [{ kind: "said" }] });
+    const sent = out.length;
+    activity.emit("activity", { type: "activity", sessionId: session.id, entries: [stopped] });
+    expect(out).toHaveLength(sent);
+  });
+
+  it("sends stopped entries to an app that reads them", async () => {
+    const { conn, activity, out } = connect();
+    const stopped = { kind: "stopped", text: "Stopped", at: "2026-10-02T03:22:39.000Z" } as const;
+    const hello = JSON.parse(fixture("client.hello.json"));
+    await conn.handleMessage(JSON.stringify({ ...hello, client: { ...hello.client, version: "1.0.8" } }));
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    activity.emit("activity", { type: "activity", sessionId: session.id, entries: [stopped] });
+    expect(out.at(-1)).toEqual({ type: "activity", sessionId: session.id, entries: [stopped] });
+  });
+
+  it("looks for an interrupt after Esc or Ctrl-C, not after other keys", async () => {
+    const { conn, events } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    const key = (k: string) => conn.handleMessage(JSON.stringify({ type: "key", sessionId: session.id, key: k }));
+    await key("escape");
+    await key("ctrl-c");
+    await key("enter");
+    expect(events.filter((e) => e.startsWith("interrupted"))).toEqual([`interrupted:${session.id}`, `interrupted:${session.id}`]);
   });
 
   it("sends no activity for a session without a transcript", async () => {

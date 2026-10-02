@@ -2,7 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -98,6 +98,8 @@ export interface ConnectionDeps {
   prompts?: PromptsPort;
   /** What the agent said and was asked (PROTOCOL.md "Activity"). Absent means this daemon sends none. */
   activity?: ActivityPort;
+  /** A client pressed a key that interrupts (Esc or Ctrl-C): an interrupt fires no hook, so the transcript is read for it. */
+  interrupted?(sessionId: string): void;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -114,6 +116,8 @@ export class Connection {
   private authed = false;
   /** The token of the `hello`, once it was accepted. */
   private token: string | null = null;
+  /** Who said `hello`: which activity entries it can read (`activityFor`). */
+  private client: ClientInfo | null = null;
   /** Set when the pairing behind this connection ended; frames that still arrive are ignored. */
   private over = false;
   private readonly subscriptions = new Set<string>();
@@ -130,7 +134,9 @@ export class Connection {
   private readonly onGroups = (f: GroupsFrame) => this.send(f);
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   private readonly onActivity = (f: ActivityFrame) => {
-    if (this.subscriptions.has(f.sessionId)) this.send(f);
+    if (!this.subscriptions.has(f.sessionId)) return;
+    const entries = this.entriesFor(f.entries);
+    if (entries.length > 0 || f.full) this.send({ ...f, entries });
   };
 
   private readonly sentInputs: SentInputs;
@@ -185,6 +191,11 @@ export class Connection {
     }
   }
 
+  /** Activity entries as this client can read them: without `stopped` for an app from before it. */
+  private entriesFor(entries: ActivityEntry[]): ActivityEntry[] {
+    return this.client ? activityFor(this.client, entries) : entries;
+  }
+
   /** The socket closed; drop subscriptions and listeners. */
   handleClose(): void {
     (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(this.helloTimer);
@@ -229,6 +240,7 @@ export class Connection {
     if (!this.d.sealed && this.d.acceptsPlain?.(frame.token) !== true) return this.fail("unsupported_protocol", PLAIN_REFUSED, "hello", true);
     this.authed = true;
     this.token = frame.token;
+    this.client = frame.client;
     this.d.onHello?.(this, frame.token, frame.client);
     this.stopWatchingPush = this.d.push?.watch?.(frame.token, (state) => this.send(state));
     (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(this.helloTimer);
@@ -271,7 +283,7 @@ export class Connection {
         if (cached) this.send(cached);
         // Only Claude Code has a transcript to read; the phone hides the plain view for the others.
         if (this.d.activity && r.get(frame.sessionId)?.agent === "claude") {
-          this.send({ type: "activity", sessionId: frame.sessionId, entries: this.d.activity.entriesOf(frame.sessionId), full: true });
+          this.send({ type: "activity", sessionId: frame.sessionId, entries: this.entriesFor(this.d.activity.entriesOf(frame.sessionId)), full: true });
         }
         return;
       }
@@ -285,7 +297,9 @@ export class Connection {
         return this.send({ type: "input.sent", id: frame.id, sessionId: frame.sessionId });
       }
       case "key":
-        return r.sendKey(frame.sessionId, frame.key);
+        await r.sendKey(frame.sessionId, frame.key);
+        if (frame.key === "escape" || frame.key === "ctrl-c") this.d.interrupted?.(frame.sessionId);
+        return;
       case "resize":
         return r.resize(frame.sessionId, frame.cols, frame.rows);
       case "history":

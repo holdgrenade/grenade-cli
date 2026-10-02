@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
+import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
 import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.js";
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
@@ -162,11 +162,19 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       activity.append(id, entries);
       const cwd = workingDirectoryIn(jsonl);
       if (cwd) registry.setCwd(id, cwd);
-      // True when the agent's reply was among the new lines.
-      return entries.some((e) => e.kind === "said");
+      // The user interrupted the turn: no hook says so, and Claude Code is back at its prompt.
+      if (endsStopped(entries) && registry.get(id)?.status === "working") registry.applyHook(id, "idle");
+      return entries;
     });
   // A Stop can come before the reply is in the transcript; keep reading until it is.
-  const catchUp = new CatchUp(readActivity);
+  const catchUp = new CatchUp((id, path) => readActivity(id, path).then((entries) => entries.some((e) => e.kind === "said")));
+  // An interrupt fires no hook: after a client's Esc or Ctrl-C, read until the transcript records it.
+  const interruptCatchUp = new CatchUp((id, path) => readActivity(id, path).then((entries) => entries.some((e) => e.kind === "stopped")));
+  const interrupted = (id: string) => {
+    const session = registry.get(id);
+    const path = registry.transcriptOf(id);
+    if (session?.agent === "claude" && session.status === "working" && path) interruptCatchUp.start(id, path);
+  };
   // The store lives in memory: after a restart, read every saved transcript from its start rather than wait for
   // each session's next hook, so a phone sees what was said the moment it subscribes.
   for (const { id, path } of registry.transcripts()) {
@@ -190,9 +198,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           .then((model) => model && registry.setModel(id, model))
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));
         catchUp.cancel(id);
+        interruptCatchUp.cancel(id);
         readActivity(id, path)
-          .then((said) => {
-            if (event === "Stop" && !said) catchUp.start(id, path);
+          .then((entries) => {
+            if (event === "Stop" && !entries.some((e) => e.kind === "said")) catchUp.start(id, path);
           })
           .catch((e) => log.debug("Could not read the activity from a transcript", { session: id, path, error: e }));
       },
@@ -268,6 +277,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     prompts.closeSession(id);
     activity.forget(id);
     catchUp.cancel(id);
+    interruptCatchUp.cancel(id);
   });
   registry.on("updated", (s) => {
     if (s.status === "gone") prompts.closeSession(s.id);
@@ -309,6 +319,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       attachments,
       sentInputs,
       activity,
+      interrupted,
       isValidToken: (t) => tokens.has(t),
       sealed: via.sealed,
       route: via.route,
@@ -457,6 +468,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       prompts.closeAll();
       summarizer?.stop();
       catchUp.stop();
+      interruptCatchUp.stop();
       await discovery?.stop();
       for (const c of wss.clients) c.close(1001, "daemon stopping");
       await Promise.all([closeServer(wss), closeServer(http), closeServer(control)]);
