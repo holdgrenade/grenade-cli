@@ -5,6 +5,9 @@
 import { EventEmitter } from "node:events";
 import { ACTIVITY_KEEP, STOPPED_TEXT, activityText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
 
+/** The `text` of an `errored` entry when no message is available. */
+export const ERRORED_TEXT = "An error occurred.";
+
 export interface ActivityEvents {
   /** New entries of one session, in order; or, with `full`, everything held, when the order the phone has is wrong. */
   activity: [frame: ActivityFrame];
@@ -97,6 +100,16 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     const t = this.track(id);
     if (t.entries.at(-1)?.kind === "stopped") return;
     t.pendingStop = entry;
+    t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
+    this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
+  }
+
+  /** The agent stopped with an error: shown at once as an `errored` card. */
+  noteErrored(id: string, message: string, at: string): void {
+    const text = activityText(message.trim() || ERRORED_TEXT);
+    const entry: ActivityEntry = { kind: "errored", text, at };
+    const t = this.track(id);
+    if (t.entries.at(-1)?.kind === "errored") return;
     t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
