@@ -18,6 +18,7 @@ import {
   type Screen,
 } from "./parse.js";
 import { parsePidList, parsePsTable, processTree } from "./processes.js";
+import { parseWindowWidths, type WindowWidth } from "../sessions/widthFloor.js";
 
 export class TmuxError extends Error {
   constructor(message: string, readonly args: string[]) {
@@ -41,6 +42,8 @@ export interface Tmux {
   resize(id: string, cols: number, rows?: number): Promise<void>;
   /** Undo `resize`: the window follows the attached Mac terminals again. */
   releaseSize(id: string): Promise<void>;
+  /** Each Grenade window's width and the widest Mac terminal attached to it (`widthFloor.ts`). */
+  windowWidths(): Promise<Map<string, WindowWidth>>;
   killSession(id: string): Promise<void>;
 }
 
@@ -164,6 +167,16 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
     async releaseSize(id) {
       // -A drops the manual size: the window fits the largest attached client, or keeps its size when none is.
       await run(["resize-window", "-A", "-t", pane(id)]);
+    },
+    async windowWidths() {
+      try {
+        const windows = await run(["list-windows", "-a", "-F", "#{session_name} #{window_width}"]);
+        const clients = await run(["list-clients", "-F", "#{session_name} #{client_control_mode} #{client_width}"]);
+        return parseWindowWidths(windows, clients);
+      } catch (e) {
+        if (isNoServer(e)) return new Map();
+        throw e;
+      }
     },
     async killSession(id) {
       // Collect the pane's process tree first: once tmux is gone, survivors are reparented to launchd and untraceable.

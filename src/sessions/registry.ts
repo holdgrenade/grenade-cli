@@ -16,6 +16,7 @@ import type { Tmux } from "../tmux/tmux.js";
 import { nextHistoryMark, type HistoryMark } from "./historyEpoch.js";
 import { defaultGroupFor, isJoinableGroup, membersInOrder, nextOrder, otherMembers, placeAt } from "./groups.js";
 import { initialStatus, reduceStatus, shownWaitingFor, type StatusState } from "./status.js";
+import { WIDTH_FLOOR, onRelease, onSweep } from "./widthFloor.js";
 
 export interface RegistryEvents {
   /** A brand-new session (not an adopted one). */
@@ -39,6 +40,8 @@ interface Record_ {
   subscribers: number;
   /** The connection whose `resize` sized the window, if any; released when it gives the width back or the last subscriber leaves. */
   sizedBy: object | null;
+  /** Held at `WIDTH_FLOOR` because every Mac terminal on it is narrower (`widthFloor.ts`). */
+  floored: boolean;
   /** Epoch of the pane's history indexes (see historyEpoch.ts). Null until the first capture. */
   mark: HistoryMark | null;
   /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
@@ -276,6 +279,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const r = this.require(id);
     await this.tmux.resize(id, cols, rows);
     r.sizedBy = by;
+    r.floored = false;
   }
 
   /** `resize` with `cols: null`: the window fits the Mac terminals again, unless another client has sized it since. */
@@ -283,7 +287,38 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const r = this.require(id);
     if (r.sizedBy !== by) return;
     r.sizedBy = null;
-    await this.tmux.releaseSize(id);
+    await this.giveWidthBack(id, r);
+  }
+
+  /** The window fits the Mac terminals again, or the floor when they are all narrower (`widthFloor.ts`). */
+  private async giveWidthBack(id: string, r: Record_): Promise<void> {
+    const widest = (await this.tmux.windowWidths()).get(id)?.widest ?? null;
+    if (r.sizedBy) return; // another client sized it meanwhile
+    if (onRelease(widest) === "floor") {
+      await this.tmux.resize(id, WIDTH_FLOOR);
+      r.floored = true;
+    } else {
+      await this.tmux.releaseSize(id);
+      r.floored = false;
+    }
+  }
+
+  /** The poller's 1 s sweep: hold windows no Grenade client sizes at the floor while the Mac terminals are narrower. */
+  async enforceWidthFloor(): Promise<void> {
+    const widths = await this.tmux.windowWidths();
+    for (const [id, r] of this.records) {
+      const window = widths.get(id);
+      if (!window || r.sizedBy || r.session.status === "gone") continue;
+      const action = onSweep(window, r.floored);
+      if (action === "floor") {
+        await this.tmux.resize(id, WIDTH_FLOOR);
+        r.floored = true;
+        this.log.debug("Held a window at the width floor", { session: id, width: window.width, widest: window.widest });
+      } else if (action === "follow") {
+        await this.tmux.releaseSize(id);
+        r.floored = false;
+      }
+    }
   }
 
   /** Scrollback rows before history index `before` (see PROTOCOL.md "Scrollback"). Throws a TmuxError for a gone pane. */
@@ -376,7 +411,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     // Nobody is looking any more: hand the width back to the Mac terminals.
     if (r.subscribers === 0 && r.sizedBy) {
       r.sizedBy = null;
-      this.tmux.releaseSize(id).catch((e) => this.log.debug("Could not release the phone width", { session: id, error: e }));
+      this.giveWidthBack(id, r).catch((e) => this.log.debug("Could not release the phone width", { session: id, error: e }));
     }
   }
 
@@ -444,7 +479,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle });
     this.persist();
     this.emit("updated", session);
     return session;

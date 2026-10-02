@@ -7,10 +7,15 @@ import type { Session } from "@grenade/protocol";
 import { byGroupOrder, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
 import { BadCwdError, SessionRegistry, UnknownGroupError } from "../src/sessions/registry.js";
 import type { Tmux } from "../src/tmux/tmux.js";
+import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
+
+/** Lets a release that asks tmux first (`giveWidthBack`) finish. */
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function fakeTmux(live: string[] = []) {
   const created: { id: string; cwd: string }[] = [];
   const sizing: string[] = [];
+  const widths = new Map<string, WindowWidth>();
   const tmux: Tmux = {
     async listSessions() { return live; },
     async hasSession() { return false; },
@@ -20,11 +25,12 @@ function fakeTmux(live: string[] = []) {
     async applySessionOptions() {},
     async sendText() {},
     async sendKey() {},
-    async resize(id) { sizing.push(`resize:${id}`); },
+    async resize(id, cols) { sizing.push(cols === WIDTH_FLOOR ? `floor:${id}` : `resize:${id}`); },
     async releaseSize(id) { sizing.push(`release:${id}`); },
+    async windowWidths() { return widths; },
     async killSession() {},
   };
-  return { tmux, created, sizing };
+  return { tmux, created, sizing, widths };
 }
 
 describe("SessionRegistry.create", () => {
@@ -57,7 +63,7 @@ describe("phone width", () => {
     const t = fakeTmux();
     const registry = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: () => true });
     const s = await registry.create({ name: "a", cwd: "/Users/me", agent: "shell" });
-    return { registry, id: s.id, sizing: t.sizing };
+    return { registry, id: s.id, sizing: t.sizing, widths: t.widths };
   };
 
   it("gives the width back when the last subscriber leaves", async () => {
@@ -68,6 +74,7 @@ describe("phone width", () => {
     registry.unsubscribe(id);
     expect(sizing).toEqual([`resize:${id}`]);
     registry.unsubscribe(id);
+    await flush();
     expect(sizing).toEqual([`resize:${id}`, `release:${id}`]);
   });
 
@@ -84,6 +91,7 @@ describe("phone width", () => {
     await registry.releaseSize(id, mac);
     expect(sizing).toEqual([`resize:${id}`, `release:${id}`, `resize:${id}`, `resize:${id}`]);
     registry.unsubscribe(id);
+    await flush();
     expect(sizing.at(-1)).toBe(`release:${id}`);
   });
 
@@ -98,7 +106,35 @@ describe("phone width", () => {
     registry.unsubscribe(id);
     registry.subscribe(id);
     registry.unsubscribe(id);
+    await flush();
     expect(sizing).toEqual([`resize:${id}`, `release:${id}`]);
+  });
+
+  it("holds the window at the floor when every Mac terminal on it is narrower", async () => {
+    const { registry, id, sizing, widths } = await make();
+    widths.set(id, { width: 46, widest: 11 });
+    await registry.resize(id, 46, undefined, phone);
+    await registry.releaseSize(id, phone);
+    expect(sizing).toEqual([`resize:${id}`, `floor:${id}`]);
+    // Held: the sweep leaves it while the terminals stay narrow, and lets it follow once one is wide.
+    widths.set(id, { width: WIDTH_FLOOR, widest: 11 });
+    await registry.enforceWidthFloor();
+    expect(sizing).toEqual([`resize:${id}`, `floor:${id}`]);
+    widths.set(id, { width: WIDTH_FLOOR, widest: 120 });
+    await registry.enforceWidthFloor();
+    expect(sizing).toEqual([`resize:${id}`, `floor:${id}`, `release:${id}`]);
+  });
+
+  it("floors a narrow window nobody sizes, and never one a client sizes", async () => {
+    const { registry, id, sizing, widths } = await make();
+    widths.set(id, { width: 11, widest: 11 });
+    await registry.resize(id, 46, undefined, phone);
+    await registry.enforceWidthFloor();
+    expect(sizing).toEqual([`resize:${id}`]);
+    await registry.releaseSize(id, phone);
+    widths.set(id, { width: 11, widest: 11 });
+    await registry.enforceWidthFloor();
+    expect(sizing).toEqual([`resize:${id}`, `floor:${id}`]);
   });
 });
 

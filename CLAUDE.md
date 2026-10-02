@@ -103,7 +103,8 @@ src/sessions/status.ts     pure status reducer (see below)
 src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt)
 src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
 src/sessions/groupOrderStore.ts GroupOrderStore: that order for every client, follows the registry's `updated`/`removed`, `move` for `group.move`, event `changed` (a `groups` frame), groups.json
-src/sessions/poller.ts     timers: 200 ms capture of subscribed sessions, 1 s sweep of all sessions
+src/sessions/poller.ts     timers: 200 ms capture of subscribed sessions, 1 s sweep of all sessions (and the width floor)
+src/sessions/widthFloor.ts pure: the width floor (`WIDTH_FLOOR` 60): `onRelease`, `onSweep`, `parseWindowWidths` (window width and widest Mac terminal per session, control-mode clients left out)
 src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen tail), parseSummaryReply (line 1 title, line 2 summary)
 src/summary/summaryTiming.ts  pure: summaryDelay (wanted delay vs. one run per minute)
 src/summary/claudeCli.ts   resolveClaudeBin + runClaudeSummary: `claude -p --model haiku`, stdin in, reply out
@@ -187,6 +188,10 @@ Every live session gets a tab or window running `tmux attach-session -t =<id>`, 
 - Tabs are tagged with the iTerm session variable `user.grenadeSession = <id>`. The AppleScript builders are pure and tested; `ITermMirror` runs one `osascript` at a time through a queue, and a failed script never blocks the next.
 - The tab runs the absolute tmux path (`resolveTmuxBin`) because an iTerm command session has no shell profile. With iTerm's default profile the tab also closes by itself when the attach exits, so the close script often reports 0 closed; that is fine.
 - Default `auto`: iTerm2 tabs whenever iTerm2 is installed, else Terminal.app windows (`/Applications/iTerm.app` or `~/Applications/iTerm.app`), and `isITermInstalled` is asked again at every event, so iTerm2 installed after the daemon started (a fresh Mac, `grenade setup` first) needs no restart: at the next event the mirror catches up once (`catchUp`: lists the tagged tabs, opens one for every live session without) and goes on as usual. A catch-up that fails (iTerm not allowed to be controlled, say) is tried again at the next event. `--terminal iterm` insists, `--terminal terminal` keeps Terminal.app, `--terminal none` or `GRENADE_TERMINAL=none` turns it off. Detaching a tab with Ctrl-b d leaves the session running; closing a tab by hand does too. Only `grenade kill` ends an agent.
+
+## Width floor (`src/sessions/widthFloor.ts`)
+
+tmux sizes a window to the terminal attached last. An iTerm tab split for a group of four in a narrow window gave each pane 11 columns, the agents wrapped everything they wrote at 11, and a phone that opened the session later scrolled back through a column of words (2026-10-02). So a window no Grenade client sizes never follows the Mac terminals below 60 columns: when a client gives the width back (`releaseSize`, the last subscriber leaving) and every attached terminal is narrower, the registry resizes the window to 60 instead of `resize-window -A` (`floored`); the 1 s sweep (`enforceWidthFloor`) does the same for a window that got narrow on its own (a new session in a narrow split, a tab made narrower), lets a narrow window fit a wide terminal that is attached, and lets a floored window follow again (`-A`) once a terminal is 60 or wider. A narrow pane then shows the window's left part. Windows a client sizes (`resize`, `term.open`) are never touched: a phone is narrower than 60 on purpose. Grenade's own control-mode clients never count as Mac terminals.
 
 ## Live terminal (`src/sessions/termStream.ts`)
 
