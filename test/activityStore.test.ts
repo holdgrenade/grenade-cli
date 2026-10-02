@@ -13,7 +13,25 @@ function store() {
   return { s, frames };
 }
 
+const stopped = (when = at): ActivityEntry => ({ kind: "stopped", text: "Stopped", at: when });
+
 describe("ActivityStore", () => {
+  it("puts in a stop the screen saw at once, once, and not the transcript's copy of it", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [asked("go")]);
+    s.noteStopped("gr-a", "2026-09-30T14:02:12.000Z");
+    s.noteStopped("gr-a", "2026-09-30T14:02:13.000Z");
+    expect(s.entriesOf("gr-a").map((e) => e.kind)).toEqual(["asked", "stopped"]);
+    expect(frames.at(-1)).toEqual({ type: "activity", sessionId: "gr-a", entries: [stopped("2026-09-30T14:02:12.000Z")] });
+    // The transcript's own line turns up late, with the next prompt.
+    s.append("gr-a", [stopped(), asked("again")]);
+    expect(s.entriesOf("gr-a").map((e) => e.kind)).toEqual(["asked", "stopped", "asked"]);
+    expect(frames.at(-1)!.entries.map((e) => e.kind)).toEqual(["asked"]);
+    // A later stop is a new one.
+    s.append("gr-a", [stopped()]);
+    expect(s.entriesOf("gr-a").map((e) => e.kind)).toEqual(["asked", "stopped", "asked", "stopped"]);
+  });
+
   it("appends in order and sends each batch as one frame", () => {
     const { s, frames } = store();
     s.append("gr-a", [asked("fix it"), said("On it.")]);

@@ -3,7 +3,7 @@
  * each, and the `activity` frames that carry new ones to subscribed phones.
  */
 import { EventEmitter } from "node:events";
-import { ACTIVITY_KEEP, activityText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
+import { ACTIVITY_KEEP, STOPPED_TEXT, activityText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
 
 export interface ActivityEvents {
   /** New entries of one session, in order; or, with `full`, everything held, when the order the phone has is wrong. */
@@ -17,6 +17,8 @@ interface Track {
    * not sent again: the phone already shows the hook's entry, and showed it twice before this was so.
    */
   pending: ActivityEntry | null;
+  /** A `stopped` entry put in from the screen (`noteStopped`): the transcript's own, if it comes, is not sent again. */
+  pendingStop: ActivityEntry | null;
 }
 
 export class ActivityStore extends EventEmitter<ActivityEvents> {
@@ -31,6 +33,12 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
   append(id: string, entries: ActivityEntry[]): void {
     if (entries.length === 0) return;
     const t = this.track(id);
+    if (t.pendingStop) {
+      t.pendingStop = null;
+      const copy = entries.findIndex((e) => e.kind === "stopped");
+      if (copy >= 0) entries = entries.filter((_, i) => i !== copy);
+      if (entries.length === 0) return;
+    }
     const pending = t.pending;
     const copy = pending ? entries.findIndex((e) => e.kind === "asked" && e.text === pending.text) : -1;
     if (!pending || copy < 0) {
@@ -65,6 +73,19 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
 
+  /**
+   * The user stopped the agent and the screen shows it at its prompt, but the transcript has no line for it (a prompt
+   * stopped before the agent wrote anything is taken back without one): the `stopped` entry, at once.
+   */
+  noteStopped(id: string, at: string): void {
+    const entry: ActivityEntry = { kind: "stopped", text: STOPPED_TEXT, at };
+    const t = this.track(id);
+    if (t.entries.at(-1)?.kind === "stopped") return;
+    t.pendingStop = entry;
+    t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
+    this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
+  }
+
   /** The session is gone. */
   forget(id: string): void {
     this.tracks.delete(id);
@@ -73,7 +94,7 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
   private track(id: string): Track {
     let t = this.tracks.get(id);
     if (!t) {
-      t = { entries: [], pending: null };
+      t = { entries: [], pending: null, pendingStop: null };
       this.tracks.set(id, t);
     }
     return t;

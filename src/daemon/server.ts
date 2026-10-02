@@ -22,6 +22,7 @@ import { readTranscriptModel } from "../transcript/readModel.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
+import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
@@ -168,8 +169,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     });
   // A Stop can come before the reply is in the transcript; keep reading until it is.
   const catchUp = new CatchUp((id, path) => readActivity(id, path).then((entries) => entries.some((e) => e.kind === "said")));
-  // An interrupt fires no hook: after a client's Esc or Ctrl-C, read until the transcript records it.
-  const interruptCatchUp = new CatchUp((id, path) => readActivity(id, path).then((entries) => entries.some((e) => e.kind === "stopped")));
+  // An interrupt fires no hook: after a client's Esc or Ctrl-C, read until the transcript records it. A prompt
+  // stopped before the agent wrote anything leaves no line, so once the screen shows Claude Code at its prompt the
+  // session is idle and gets its `stopped` entry anyway.
+  const interruptCatchUp = new CatchUp(async (id, path) => {
+    const entries = await readActivity(id, path);
+    if (entries.some((e) => e.kind === "stopped")) return true;
+    const screen = registry.screenOf(id);
+    if (registry.get(id)?.status !== "working" || !screen || claudeIsWorking(screen.lines)) return false;
+    activity.noteStopped(id, new Date().toISOString());
+    registry.applyHook(id, "idle");
+    return true;
+  });
   const interrupted = (id: string) => {
     const session = registry.get(id);
     const path = registry.transcriptOf(id);
