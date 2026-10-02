@@ -30,6 +30,8 @@ grenade ungroup <name>           # move <name> out into a group of its own
 grenade open <name>              # tmux attach; Ctrl-b d detaches
 grenade kill <name>
 grenade install-hooks [--print] [--remove] [--port 7788]   # edits ~/.claude/settings.json
+grenade update [--check] [--now] # install the latest release with Homebrew or npm and restart grenaded into it
+grenade update --auto on|off     # whether grenaded installs new releases by itself (on unless turned off)
 grenade relay on [url] [--key K] # use a relay (default: the main relay, OFFICIAL_RELAY_URL); reloads a running daemon
 grenade relay off                # forget the relay and this Mac's id there
 grenade relay status             # url, relay id, online/offline, public + local IPs, phones piped through it
@@ -73,7 +75,7 @@ src/daemon/connections.ts  LiveConnections: the connections that said hello, by 
 src/daemon/devices.ts      pure: `Device` (a paired phone without its token), `matchDevice` (id, name, unique prefix; never guesses), `ago`
 src/daemon/pairCheck.ts    pure: the 4 check digits of a typed pairing code (`pairCheck`, `typedCode`, `spacedCode`)
 src/daemon/loopback.ts     pure: `isLoopback(address)`, for routes only this Mac may call
-src/daemon/control.ts      loopback JSON API for the CLI (status incl. `relayLink`, sessions CRUD, pair-code, devices: list and unpair, POST /relay/reload)
+src/daemon/control.ts      loopback JSON API for the CLI and the Mac app (status incl. `relayLink` and `update`, sessions CRUD, pair-code, devices: list and unpair, POST /relay/reload, GET /update, POST /update/check and /update/install)
 src/daemon/pairing.ts      PairingCodes (pure: a 6-digit code and the 22-character secret of the pairing offer, minted together, 2 min, 5 tries shared, using one voids both; `liveSecret`, `onChange`) + TokenStore (grt_ tokens, tokens.json; each record has a device `id`, `lastSeen`, `sealed`; `revoke`, `revokeAll`, `revokeIdle`; onChange fires when the set of tokens changes)
 src/relay/relayConfig.ts   relay.json {url, key?, id, secret}: load/save/remove; pure normalizeRelayUrl, relayWsUrl, relayConfigFor, applyRelayInfo
 src/relay/e2eKey.ts        the daemon's long-term X25519 key (e2e-key, 0600), made on first start
@@ -124,6 +126,12 @@ src/push/pushConfig.ts     push.json {enabled?, url?, key?, atMacSeconds?}: load
 src/push/pushDevices.ts    PushDevices: push-devices.json (0600), one registration per paired phone, keyed by device id; prune
 src/push/startPush.ts      startPush(): builds the Pusher from the files and the daemon's registry, tokens and key
 src/cli/pushCommand.ts     `grenade push on | off | status | test`; statusLines and testLine are pure
+src/cli/updateCommand.ts   `grenade update` (`--check`, `--now`, `--auto on|off`): installs with the installer of this copy, then restarts the agent
+src/update/versions.ts     pure: compare versions, the latest from the tap's formula or npm's answer, `installerFor` (absolute brew/npm paths from the command's real path), `InstallState`, notice and status lines
+src/update/updateChecker.ts UpdateChecker: asks for the latest every 6 h, installs it itself (auto) or on `installNow`, retries a failure after 1 h, restarts into a newer version on disk once nothing is busy
+src/update/installer.ts    runInstall: runs brew or npm asynchronously with a time limit; `pinned`, `needsAdmin`; installError (pure) puts a failure in a few words
+src/update/autoSetting.ts  ~/.grenade/update.json `{ "auto": false }` turns automatic installs off; read at every check
+src/update/installedVersion.ts, underLaunchd.ts  the version on disk behind the command; whether this is the launchd agent
 scripts/smoke.mjs          end-to-end check against a running daemon (needs tmux)
 scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run against a daemon that pushes through the main relay
 scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
@@ -275,6 +283,14 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 - **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`; iTerm2 is optional and never offered), hooks, launchd agent, relay, pairing. After pairing it prints `nextSteps`: how to start an agent, and that it opens in an iTerm2 tab or a Terminal window, with a link to the docs' iTerm2 section. It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
 - **The agent** is `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist`, loaded into `gui/<uid>` (the login session, which has the Keychain that `claude -p` needs). `RunAtLoad`, `KeepAlive` on a failed exit only, `ThrottleInterval` 10 s, and `AbandonProcessGroup` so tmux outlives the daemon. Its `PATH` is the one of the terminal that installed it: launchd's own is bare, and agents started in tmux inherit the daemon's. `GRENADE_*`, `TMUX_BIN`, `TMUX_TMPDIR`, `CLAUDE_BIN` and `CLAUDE_CONFIG_DIR` that are set at install time go into the plist too. What the daemon prints before its logger is up lands in `~/.grenade/launchd.log`.
 - **Pairing** (PROTOCOL.md "Pairing offer (QR code)" and "Pairing inside the encrypted channel"): `POST /pair-code` mints code and secret and answers with `typed` and `offer`. `Connection.handlePair` takes a sealed `pair` with either, on the LAN socket or a relay pipe, through `ConnectionDeps.pair` → `pairPhone` in `server.ts`, which issues the token with `sealed: true`. While the secret is live its access hash is in the list the relay link uploads (`accessHashes` in `server.ts`); `PairingCodes.onChange` and a timer at the end of the two minutes send the list again. `pair` outside the encrypted channel is answered `unsupported_protocol` and is not counted as a try.
+
+## Updates (`src/update/`)
+
+- **Where "latest" comes from is what installs it.** A Homebrew copy reads the tap's formula, an npm copy npm's registry (`NPM_LATEST_URL`), so a copy is never offered a version its installer cannot deliver (npm is stuck at 0.1.0 while the account is suspended: npm copies then see nothing). A copy built from source (`installerFor` → null) is never installed over; `grenade update` says to pull and rebuild.
+- **The daemon installs by itself** unless `grenade update --auto off`: when a check finds a newer release it runs `<prefix>/bin/brew update` + `brew upgrade grenade`, or `npm install -g @holdgrenade/cli@latest` with the npm beside the global folder (`<prefix>/bin/npm`, else beside the node running it), always by absolute path because launchd's PATH has neither. `HOMEBREW_NO_INSTALL_CLEANUP` and `HOMEBREW_NO_AUTO_UPDATE` are set. It is asynchronous and limited to 10 minutes. Then the existing rule restarts into it once no session is busy.
+- **It stays out of the way:** `brew pin grenade` is honoured (`pinned`, not tried again for that version); an npm global folder this user cannot write gives `needsAdmin` with the `sudo` command, never a sudo attempt; a failure (brew busy, offline) is `failed` with a short reason (`installError`) and tried again after an hour while auto is on.
+- **Side effect to know:** `brew upgrade grenade` also upgrades outdated dependencies, `node` and `tmux`. That is why `--auto off` and `brew pin` exist; npm copies replace only Grenade.
+- **The Mac app** shows the state (`GET /update`: `method`, `auto`, `install`) at the foot of its sidebar and its Update and Try Again buttons call `POST /update/install`, which starts the install whether auto is on or not and answers at once with `installing`.
 
 ## Invariants
 

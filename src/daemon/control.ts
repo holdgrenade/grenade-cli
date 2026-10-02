@@ -3,6 +3,7 @@
  *   GET  /status            → { id, name, version, key, relay, uptimeMs, sessions, relayLink, update }
  *   GET  /update            → UpdateStatus   (the version on disk, the latest release from the tap, when it was read)
  *   POST /update/check      → UpdateStatus   (reads the tap now)
+ *   POST /update/install    → UpdateStatus   (installs the latest release now, in the background; the Mac app's Update)
  *   POST /relay/reload      → RelayStatus (re-reads relay.json, restarts the relay link)
  *   GET  /sessions          → Session[]
  *   POST /sessions          { name, cwd, agent, group? } → Session
@@ -52,7 +53,7 @@ export interface ControlDeps {
   log: Logger;
   relay: { status(): RelayStatus; reload(): RelayStatus };
   push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
-  updates: { current(): UpdateStatus; checkTap(): Promise<UpdateStatus> };
+  updates: { current(): UpdateStatus; checkTap(): Promise<UpdateStatus>; installNow(): Promise<UpdateStatus> };
   /** Test cards. Absent means this daemon has no prompts to offer. */
   promptTests?: {
     start(sessionId: string, kind: PromptKind, waitMs: number): PromptFrame;
@@ -79,6 +80,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   }
   if (method === "GET" && url.pathname === "/update") return sendJson(res, 200, d.updates.current());
   if (method === "POST" && url.pathname === "/update/check") return sendJson(res, 200, await d.updates.checkTap());
+  if (method === "POST" && url.pathname === "/update/install") return sendJson(res, 200, await d.updates.installNow());
   if (method === "POST" && url.pathname === "/relay/reload") return sendJson(res, 200, d.relay.reload());
   if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());

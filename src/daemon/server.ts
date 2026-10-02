@@ -43,9 +43,10 @@ import { localIpv4 } from "../relay/localIps.js";
 import { PhonePipe } from "../relay/phonePipe.js";
 import { applyRelayInfo, loadRelayConfig } from "../relay/relayConfig.js";
 import { RelayLink, type RelayStatus } from "../relay/relayLink.js";
-import { installedVersion } from "../update/installedVersion.js";
+import { readAuto } from "../update/autoSetting.js";
+import { installedVersion, resolveProgram } from "../update/installedVersion.js";
 import { UpdateChecker } from "../update/updateChecker.js";
-import { isBusy } from "../update/versions.js";
+import { installerFor, isBusy } from "../update/versions.js";
 import { startPush } from "../push/startPush.js";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
@@ -85,9 +86,10 @@ export interface DaemonOptions {
   /**
    * Updates (src/update/): ask the tap for the latest release (default on unless GRENADE_UPDATE_CHECK=off), watch the
    * version on disk behind `program` (the `grenade` command; none: nothing to watch), and call `restart` once a newer
-   * one is there and no session is busy. Without `restart` the daemon only logs it.
+   * one is there and no session is busy. Without `restart` the daemon only logs it. With `program` it also installs a
+   * newer release itself, with the installer of that copy, unless `grenade update --auto off` (or `auto` here) says not.
    */
-  updates?: { checkTap?: boolean; program?: string; restart?(installed: string): void };
+  updates?: { checkTap?: boolean; program?: string; restart?(installed: string): void; auto?: boolean };
 }
 
 export interface RunningDaemon {
@@ -399,6 +401,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     busy: () => registry.list().some(isBusy),
     checkTap: opts.updates?.checkTap ?? process.env["GRENADE_UPDATE_CHECK"] !== "off",
     ...(opts.updates?.restart ? { restart: opts.updates.restart } : {}),
+    installer: opts.updates?.program ? installerFor(resolveProgram(opts.updates.program) ?? opts.updates.program, process.execPath) : null,
+    auto: () => opts.updates?.auto ?? readAuto(),
   });
 
   const relayStatus = (): RelayStatus => relayLink?.status() ?? { state: "off", phones: 0, ...(opts.relay === false ? { disabled: true } : {}) };

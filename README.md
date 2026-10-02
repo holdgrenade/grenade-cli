@@ -55,7 +55,12 @@ grenade push status      # push notifications: on or off, through which relay, w
 grenade push test        # send every registered phone a test notification
 grenade push on          # send them also with remote access off, through the main relay
 grenade push off         # send none (grenade push auto: on while remote access is on, the default)
+
+grenade update           # install the latest version now (grenaded also does it by itself)
+grenade update --auto off  # stop grenaded installing new versions by itself (grenade update --auto on: back)
 ```
+
+Grenade keeps itself up to date: grenaded checks for a new version every few hours, installs it with Homebrew or npm (whichever installed it), and switches over once no session is working; your sessions keep running. With Homebrew this also upgrades its `node` and `tmux` when they are outdated. `brew pin grenade` or `grenade update --auto off` stops it.
 
 ### On the Mac
 

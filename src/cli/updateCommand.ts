@@ -1,16 +1,19 @@
 /**
  * `grenade update`: install the latest release with the package manager that installed this copy (Homebrew or npm),
- * then run it. Like `claude update`, it is the user who asks; the daemon only checks and says that one is out.
+ * then run it. The daemon also does this by itself (`UpdateChecker`); `--auto off` stops that, `--auto on` brings it back.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { Command } from "commander";
 import type { Session } from "@grenade/protocol";
 import { VERSION } from "../config.js";
 import { restartService, serviceStatus } from "../service/launchd.js";
 import { SERVICE_LABEL } from "../service/launchdPlist.js";
-import { installedVersion, installMethod } from "../update/installedVersion.js";
-import { fetchFormula } from "../update/updateChecker.js";
-import { isBusy, isNewer, latestFromFormula, updateCommandsFor } from "../update/versions.js";
+import { readAuto, writeAuto } from "../update/autoSetting.js";
+import { writable } from "../update/installer.js";
+import { installedVersion, installMethod, resolveProgram } from "../update/installedVersion.js";
+import { fetchFormula, fetchNpm } from "../update/updateChecker.js";
+import { installCommands, installerFor, isBusy, isNewer, latestFromFormula, latestFromNpm, NPM_ADMIN_COMMAND } from "../update/versions.js";
 import type { Control } from "./controlClient.js";
 
 const RESTART_WAIT_MS = 30_000;
@@ -26,14 +29,18 @@ export function registerUpdateCommand(program: Command, d: UpdateCommandDeps): v
     .option("--check", "only say whether a new version is out")
     .option("--now", "restart grenaded even while an agent is working")
     .option("--label <label>", "launchd label of the agent to restart", SERVICE_LABEL)
-    .action(async (o: { check?: boolean; now?: boolean; label: string }) => {
+    .option("--auto <on|off>", "whether grenaded installs new versions by itself (on unless turned off)")
+    .action(async (o: { check?: boolean; now?: boolean; label: string; auto?: string }) => {
+      if (o.auto !== undefined) return setAuto(o.auto);
       const command = process.argv[1];
       if (!command) throw new Error("cannot tell where the grenade command is installed");
       const before = installedVersion(command) ?? VERSION;
-      const latest = latestFromFormula(await fetchFormula().catch((e: unknown) => {
+      const method = installMethod(command);
+      // An npm copy asks npm: the tap may name a version npm does not have.
+      const latest = await (method === "npm" ? fetchNpm().then(latestFromNpm) : fetchFormula().then(latestFromFormula)).catch((e: unknown) => {
         throw new Error(`could not check for a new version: ${e instanceof Error ? e.message : String(e)}`);
-      }));
-      if (!latest) throw new Error("could not read the latest version from the Homebrew tap");
+      });
+      if (!latest) throw new Error(`could not read the latest version from ${method === "npm" ? "npm" : "the Homebrew tap"}`);
       d.control("POST", "/update/check").catch(() => undefined); // the daemon's notice follows at once
 
       if (!isNewer(latest, before)) {
@@ -43,15 +50,19 @@ export function registerUpdateCommand(program: Command, d: UpdateCommandDeps): v
       }
       if (o.check) return console.log(`Grenade ${latest} is out (you have ${before}). Install it with: grenade update`);
 
-      const method = installMethod(command);
-      const commands = updateCommandsFor(method);
-      if (!commands) {
+      const installer = installerFor(resolveProgram(command) ?? command, process.execPath);
+      if (!installer) {
         return fail(`Grenade ${latest} is out, but this copy (${before}) was built from source. Pull and rebuild it, or install it with: brew install holdgrenade/tap/grenade`);
       }
+      const npm = installer.method === "npm" ? installer.npm.find((p) => existsSync(p)) ?? "npm" : "";
+      if (installer.method === "npm" && !installer.writes.every(writable)) {
+        return fail(`Grenade ${latest} is out. npm's global folder belongs to another user, so install it with: ${NPM_ADMIN_COMMAND}`);
+      }
+      const commands = installCommands(installer, npm);
       console.log(`Updating Grenade ${before} → ${latest} with ${method === "brew" ? "Homebrew" : "npm"}…`);
       for (const [bin, ...args] of commands) {
         console.log(`$ ${[bin, ...args].join(" ")}`);
-        const r = spawnSync(bin!, args, { stdio: "inherit", env: { ...process.env, HOMEBREW_NO_ENV_HINTS: "1" } });
+        const r = spawnSync(bin!, args, { stdio: "inherit", env: { ...process.env, HOMEBREW_NO_ENV_HINTS: "1", HOMEBREW_NO_AUTO_UPDATE: "1" } });
         if (r.error) return fail(`could not run ${bin}: ${r.error.message}`);
         if (r.status !== 0) return fail(`${bin} failed (exit ${r.status ?? "?"}); Grenade is still ${before}`);
       }
@@ -82,6 +93,14 @@ async function runInstalled(d: UpdateCommandDeps, label: string, installed: stri
     if (v === installed) return console.log(`grenaded ${installed} is running. Your sessions kept running in tmux; phones reconnect by themselves.`);
   }
   fail(`grenaded did not come back as ${installed} within ${RESTART_WAIT_MS / 1000} s. See: grenade service status`);
+}
+
+function setAuto(value: string): void {
+  if (value !== "on" && value !== "off") return fail("--auto takes on or off");
+  writeAuto(value === "on");
+  console.log(readAuto()
+    ? "grenaded installs new versions of Grenade by itself, then restarts into them once no session is working."
+    : "grenaded no longer installs new versions by itself. It still says when one is out; install it with: grenade update");
 }
 
 function fail(msg: string): never {
