@@ -8,6 +8,7 @@ import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
 import type { Route } from "./devices.js";
 import { SentInputs } from "./sentInputs.js";
+import { isInterrupt } from "../tmux/termPaint.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
@@ -73,6 +74,22 @@ export interface ConversationsPort {
   resume(input: { name: string; group?: string | undefined; conversationId: string }): Promise<Session | null>;
 }
 
+/** One client's live terminal on one session (PROTOCOL.md "Live terminal"); `TermStream` in the daemon. */
+export interface TermHandle {
+  input(bytes: Buffer): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
+/** What a live terminal needs from the connection that opened it. */
+export interface TermOpen {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  output(data: Buffer, reset: boolean): void;
+  closed(reason: "ended" | "failed"): void;
+}
+
 /** The slice of GroupOrderStore a connection needs (PROTOCOL.md "Group order"). */
 export interface GroupsPort {
   frame(): GroupsFrame;
@@ -116,6 +133,8 @@ export interface ConnectionDeps {
   conversations?: ConversationsPort;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
+  /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
+  openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
   sentInputs?: SentInputs;
   daemon: DaemonInfo;
@@ -135,11 +154,14 @@ export class Connection {
   /** Set when the pairing behind this connection ended; frames that still arrive are ignored. */
   private over = false;
   private readonly subscriptions = new Set<string>();
+  /** Live terminals this client has open, by session. */
+  private readonly terms = new Map<string, TermHandle>();
   private stopWatchingPush: (() => void) | undefined;
   private helloTimer: unknown;
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
   private readonly onRemoved = (id: string) => {
     this.subscriptions.delete(id);
+    this.closeTerm(id);
     this.send({ type: "session.removed", sessionId: id });
   };
   private readonly onScreen = (f: ScreenFrame) => {
@@ -215,6 +237,7 @@ export class Connection {
     (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(this.helloTimer);
     for (const id of this.subscriptions) this.d.registry.unsubscribe(id);
     this.subscriptions.clear();
+    for (const id of [...this.terms.keys()]) this.closeTerm(id);
     if (this.authed) {
       this.d.registry.off("updated", this.onUpdated);
       this.d.registry.off("removed", this.onRemoved);
@@ -317,6 +340,20 @@ export class Connection {
       case "resize":
         if (frame.cols === null) return r.releaseSize(frame.sessionId, this);
         return r.resize(frame.sessionId, frame.cols, frame.rows, this);
+      case "term.open":
+        return this.openTerm(frame.sessionId, frame.cols, frame.rows);
+      case "term.input": {
+        const term = this.terms.get(frame.sessionId);
+        if (!term) return this.fail("bad_frame", "term.open first", frame.type);
+        const bytes = Buffer.from(frame.data, "base64");
+        term.input(bytes);
+        if (isInterrupt(bytes)) this.d.interrupted?.(frame.sessionId);
+        return;
+      }
+      case "term.resize":
+        return this.terms.get(frame.sessionId)?.resize(frame.cols, frame.rows);
+      case "term.close":
+        return this.closeTerm(frame.sessionId);
       case "history":
         return this.send(await r.history(frame.sessionId, frame.before, frame.count));
       case "seen":
@@ -384,6 +421,33 @@ export class Connection {
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });
       }
     }
+  }
+
+  private openTerm(sessionId: string, cols: number, rows: number): void {
+    if (!this.d.openTerm) return this.fail("bad_frame", "this daemon streams no terminal", "term.open");
+    this.requireSession(sessionId);
+    this.closeTerm(sessionId);
+    const term = this.d.openTerm({
+      sessionId,
+      cols,
+      rows,
+      output: (data, reset) => {
+        if (this.terms.get(sessionId) === term) this.send({ type: "term.output", sessionId, data: data.toString("base64"), ...(reset ? { reset: true as const } : {}) });
+      },
+      closed: (reason) => {
+        if (this.terms.get(sessionId) !== term) return;
+        this.terms.delete(sessionId);
+        this.send({ type: "term.closed", sessionId, reason });
+      },
+    });
+    this.terms.set(sessionId, term);
+  }
+
+  private closeTerm(sessionId: string): void {
+    const term = this.terms.get(sessionId);
+    if (!term) return;
+    this.terms.delete(sessionId);
+    term.close();
   }
 
   private requireSession(id: string): void {

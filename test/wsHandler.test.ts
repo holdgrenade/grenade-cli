@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type ConversationsPort } from "../src/daemon/wsHandler.js";
+import { Connection, type ConversationsPort, type TermHandle, type TermOpen } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
@@ -73,7 +73,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -96,6 +96,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     route: "lan",
     ...(opts.acceptsPlain ? { acceptsPlain: opts.acceptsPlain } : {}),
     ...(opts.conversations ? { conversations: opts.conversations } : {}),
+    ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
     unpair: (token) => events.push(`unpair:${token}`),
@@ -157,10 +158,13 @@ describe("Connection", () => {
       async delete() { return null; },
       async resume({ name }) { return { ...session, id: `gr-${name}`, name }; },
     };
-    const { conn, out } = connect({ conversations: everything });
-    // `unpair` ends the connection, so it goes last.
-    const names = readdirSync(fixtures).filter((n) => n.startsWith("client.") && n !== "client.unpair.json");
-    for (const name of [...names, "client.unpair.json"]) {
+    const term = { input() {}, resize() {}, close() {} };
+    const { conn, out } = connect({ conversations: everything, openTerm: () => term });
+    // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
+    const first = ["client.hello.json", "client.term.open.json"];
+    const last = ["client.term.close.json", "client.unpair.json"];
+    const names = readdirSync(fixtures).filter((n) => n.startsWith("client.") && !first.includes(n) && !last.includes(n));
+    for (const name of [...first, ...names, ...last]) {
       const before = out.length;
       await conn.handleMessage(fixture(name));
       const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
@@ -492,5 +496,68 @@ describe("Connection: conversations", () => {
     b.out.length = 0;
     await b.conn.handleMessage(JSON.stringify({ type: "conversations" }));
     expect(b.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "conversations" });
+  });
+});
+
+describe("Connection live terminal", () => {
+  const hello = fixture("client.hello.json").replace(/"token":"[^"]*"/, '"token":"grt_example_token"');
+
+  function withTerm() {
+    const opened: TermOpen[] = [];
+    const calls: string[] = [];
+    const c = connect({
+      openTerm(open) {
+        opened.push(open);
+        return {
+          input: (b) => calls.push(`input:${b.toString("hex")}`),
+          resize: (cols, rows) => calls.push(`resize:${cols}x${rows}`),
+          close: () => calls.push("close"),
+        };
+      },
+    });
+    return { ...c, opened, calls };
+  }
+
+  it("opens, streams output as base64, passes input and resize, and closes", async () => {
+    const { conn, out, opened, calls, events } = withTerm();
+    await conn.handleMessage(hello);
+    out.length = 0;
+    await conn.handleMessage(fixture("client.term.open.json"));
+    expect(opened[0]).toMatchObject({ sessionId: "gr-a1b2c3", cols: 46, rows: 30 });
+    opened[0]!.output(Buffer.from("\x1bc/"), true);
+    expect(out).toEqual([{ type: "term.output", sessionId: "gr-a1b2c3", data: Buffer.from("\x1bc/").toString("base64"), reset: true }]);
+    await conn.handleMessage(fixture("client.term.input.json"));
+    await conn.handleMessage(JSON.stringify({ type: "term.input", sessionId: "gr-a1b2c3", data: "Gw==" }));
+    await conn.handleMessage(fixture("client.term.resize.json"));
+    await conn.handleMessage(fixture("client.term.close.json"));
+    expect(calls).toEqual(["input:2f", "input:1b", "resize:120x40", "close"]);
+    expect(events).toContain("interrupted:gr-a1b2c3");
+  });
+
+  it("refuses input without an open stream", async () => {
+    const { conn, out } = withTerm();
+    await conn.handleMessage(hello);
+    out.length = 0;
+    await conn.handleMessage(fixture("client.term.input.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "term.input" });
+  });
+
+  it("says term.closed when the stream ends by itself, and closes streams when the socket closes", async () => {
+    const { conn, out, opened, calls } = withTerm();
+    await conn.handleMessage(hello);
+    await conn.handleMessage(fixture("client.term.open.json"));
+    opened[0]!.closed("ended");
+    expect(out.at(-1)).toEqual({ type: "term.closed", sessionId: "gr-a1b2c3", reason: "ended" });
+    await conn.handleMessage(fixture("client.term.open.json"));
+    conn.handleClose();
+    expect(calls).toEqual(["close"]);
+  });
+
+  it("answers bad_frame when the daemon streams no terminal", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(hello);
+    out.length = 0;
+    await conn.handleMessage(fixture("client.term.open.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "term.open" });
   });
 });

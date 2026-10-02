@@ -14,6 +14,7 @@ import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
 import { SessionRegistry } from "../sessions/registry.js";
 import { GroupOrderStore } from "../sessions/groupOrderStore.js";
+import { TermStream } from "../sessions/termStream.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
 import { Summarizer } from "../summary/summarizer.js";
 import { TerminalMirror, defaultTerminal, type TerminalKind } from "../terminal/mirror.js";
@@ -113,7 +114,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
   const tmux = opts.tmux ?? createTmux();
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
@@ -398,6 +399,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       prompts,
       groups: groupOrder,
       conversations,
+      openTerm(open) {
+        const stream = new TermStream({
+          ...open,
+          resize: (cols, rows, by) => registry.resize(open.sessionId, cols, rows, by),
+          release: (by) => registry.releaseSize(open.sessionId, by),
+          log,
+        });
+        stream.start();
+        return stream;
+      },
       unpair(token) {
         const id = tokens.get(token)?.id;
         const gone = id ? tokens.revoke(id) : undefined;
