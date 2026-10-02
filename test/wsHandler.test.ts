@@ -178,6 +178,34 @@ describe("Connection", () => {
     expect(out.find((f) => f.type === "screen")).toMatchObject({ seq: 1 });
   });
 
+  it("acknowledges an input with an id and types a repeat of it once", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.input.json"));
+    await conn.handleMessage(fixture("client.input.json"));
+    const sent = { type: "input.sent", id: "6f1c2a3e-4b5d-4e6f-8a9b-0c1d2e3f4a5b", sessionId: "gr-a1b2c3" };
+    expect(registry.calls).toEqual(["input:gr-a1b2c3:Use tmux so I can still attach from the desktop:true"]);
+    expect(out.filter((f) => f.type === "input.sent")).toEqual([sent, sent]);
+  });
+
+  it("answers nothing to an input without an id", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    const before = out.length;
+    await conn.handleMessage(JSON.stringify({ type: "input", sessionId: "gr-a1b2c3", text: "hi", submit: true }));
+    expect(registry.calls).toEqual(["input:gr-a1b2c3:hi:true"]);
+    expect(out.length).toBe(before);
+  });
+
+  it("gives the id back with the error when an input cannot be typed", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    registry.sendText = async () => { throw new Error("can't find session: gr-a1b2c3"); };
+    await conn.handleMessage(fixture("client.input.json"));
+    expect(out.at(-1)).toEqual({ type: "error", code: "unknown_session", message: "can't find session: gr-a1b2c3", ref: "input", id: "6f1c2a3e-4b5d-4e6f-8a9b-0c1d2e3f4a5b" });
+    expect(out.some((f) => f.type === "input.sent")).toBe(false);
+  });
+
   it("saves an attachment and answers with its path", async () => {
     const { conn, out, saved } = connect();
     await conn.handleMessage(fixture("client.hello.json"));

@@ -66,7 +66,8 @@ src/config.ts              paths under GRENADE_HOME, daemon id, default name, VE
 src/log.ts                 leveled logger → stderr (local time, color on a TTY) + daemon.log (ISO time); plain sentences + `key=value`, `formatLine` is pure; `silentLogger` for tests
 src/frames.ts              narrowed frame types (ScreenFrame) derived from the protocol unions
 src/daemon/server.ts       startDaemon(): HTTP (/pair, /hooks/claude, /health) + WS (/ws) on :7788, control on 127.0.0.1:7789, the relay link; `makeConnection(out, close, {route, sealed})` builds the same Connection for a LAN socket and a relay pipe; ends pairings (`devices`, `closeConnectionsOf`) and unpairs idle phones hourly
-src/daemon/wsHandler.ts    Connection: one per socket; hello/auth (refuses a plain `hello`), subscriptions, `unpair`, dispatch to registry (and `attachment` to the store). Transport-agnostic.
+src/daemon/wsHandler.ts    Connection: one per socket; hello/auth (refuses a plain `hello`), subscriptions, `unpair`, dispatch to registry (and `attachment` to the store); an `input` with an `id` is answered `input.sent`, or `error` with the `id`. Transport-agnostic.
+src/daemon/sentInputs.ts   SentInputs: the `input` ids already typed (the last 1000, for 10 minutes), shared by every connection, so a prompt a phone sends again after a dropped connection is typed once (PROTOCOL.md "Sending prompts")
 src/daemon/lanSocket.ts    LanSocket: one WebSocket from the Wi‑Fi; its first frame decides: the E2E handshake → `SealedPipe`, anything else → a plain Connection. No `ws` import
 src/daemon/connections.ts  LiveConnections: the connections that said hello, by token; what `grenade devices` shows as connected and what an unpair closes
 src/daemon/devices.ts      pure: `Device` (a paired phone without its token), `matchDevice` (id, name, unique prefix; never guesses), `ago`

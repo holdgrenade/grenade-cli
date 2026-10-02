@@ -7,6 +7,7 @@ import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
 import type { Route } from "./devices.js";
+import { SentInputs } from "./sentInputs.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
@@ -99,6 +100,8 @@ export interface ConnectionDeps {
   activity?: ActivityPort;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
+  /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
+  sentInputs?: SentInputs;
   daemon: DaemonInfo;
   log: Logger;
   out(frame: DaemonFrame): void;
@@ -130,7 +133,10 @@ export class Connection {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
   };
 
+  private readonly sentInputs: SentInputs;
+
   constructor(private readonly d: ConnectionDeps) {
+    this.sentInputs = d.sentInputs ?? new SentInputs();
     this.helloTimer = this.startHelloTimer();
   }
 
@@ -163,17 +169,19 @@ export class Connection {
     try {
       await this.dispatch(frame);
     } catch (e) {
-      if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type);
-      if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type);
-      if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type);
+      // An `input` with an id gets its id back, so the phone knows which prompt did not arrive.
+      const id = frame.type === "input" ? frame.id : undefined;
+      if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
+      if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
+      if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
       const msg = e instanceof Error ? e.message : String(e);
       // The tmux session ended before the 1 s sweep marked it gone; the phone just needs to know.
       if (/can't find session/i.test(msg)) {
         this.d.log.debug(`Ignored ${frame.type}: session has ended`, { error: msg });
-        return this.fail("unknown_session", msg, frame.type);
+        return this.fail("unknown_session", msg, frame.type, false, id);
       }
       this.d.log.error(`Could not handle ${frame.type} from phone`, { error: msg });
-      this.fail(/tmux/i.test(msg) ? "tmux_failed" : "internal", msg, frame.type);
+      this.fail(/tmux/i.test(msg) ? "tmux_failed" : "internal", msg, frame.type, false, id);
     }
   }
 
@@ -270,8 +278,12 @@ export class Connection {
       case "unsubscribe":
         if (this.subscriptions.delete(frame.sessionId)) r.unsubscribe(frame.sessionId);
         return;
-      case "input":
-        return r.sendText(frame.sessionId, frame.text, frame.submit);
+      case "input": {
+        if (frame.id === undefined) return r.sendText(frame.sessionId, frame.text, frame.submit);
+        // With an id the phone may send it again after a dropped connection: type it once, answer every time.
+        await this.sentInputs.once(`${this.token}\n${frame.id}`, () => r.sendText(frame.sessionId, frame.text, frame.submit));
+        return this.send({ type: "input.sent", id: frame.id, sessionId: frame.sessionId });
+      }
       case "key":
         return r.sendKey(frame.sessionId, frame.key);
       case "resize":
@@ -327,8 +339,8 @@ export class Connection {
     this.d.out(frame);
   }
 
-  private fail(code: ErrorCode, message: string, ref?: string, closeAfter = false): void {
-    this.send(ref === undefined ? { type: "error", code, message } : { type: "error", code, message, ref });
+  private fail(code: ErrorCode, message: string, ref?: string, closeAfter = false, id?: string): void {
+    this.send({ type: "error", code, message, ...(ref === undefined ? {} : { ref }), ...(id === undefined ? {} : { id }) });
     if (closeAfter) this.d.close(CLOSE_UNAUTHORIZED, code);
   }
 }

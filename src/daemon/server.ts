@@ -50,6 +50,7 @@ import { startPush } from "../push/startPush.js";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
+import { SentInputs } from "./sentInputs.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -103,7 +104,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
   const tmux = opts.tmux ?? createTmux();
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
@@ -292,6 +293,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     },
   };
 
+  /** The prompts phones sent with an id, so one sent again after a dropped connection is typed once. */
+  const sentInputs = new SentInputs();
+
   /** One protocol connection, the same for a LAN socket and a relay pipe. */
   const makeConnection = (
     out: (frame: DaemonFrame) => void,
@@ -301,6 +305,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     new Connection({
       registry,
       attachments,
+      sentInputs,
       activity,
       isValidToken: (t) => tokens.has(t),
       sealed: via.sealed,
