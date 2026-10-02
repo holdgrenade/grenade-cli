@@ -31,9 +31,8 @@ describe("problems", () => {
     expect(problems({ ...fine, platform: "linux" })).toMatchObject([{ what: "platform", blocks: true }]);
   });
 
-  it("offers iTerm2 without stopping", () => {
-    expect(problems({ ...fine, iterm: false })).toMatchObject([{ what: "iterm", blocks: false, fix: "brew install --cask iterm2" }]);
-    expect(problems({ ...fine, iterm: false, brew: false })[0]?.fix).toBeUndefined();
+  it("never asks for iTerm2", () => {
+    expect(problems({ ...fine, iterm: false })).toEqual([]);
   });
 
   it("only warns when no agent is installed yet", () => {
@@ -45,7 +44,8 @@ describe("problems", () => {
 describe("nextSteps", () => {
   it("says where the agent shows up, with and without iTerm2", () => {
     expect(nextSteps(true).join("\n")).toContain("tab of its own in iTerm2");
-    expect(nextSteps(false).join("\n")).toContain("brew install --cask iterm2");
+    expect(nextSteps(false).join("\n")).toContain("Terminal window of its own");
+    expect(nextSteps(false).join("\n")).toContain("holdgrenade.com/docs#iterm2");
     expect(nextSteps(false).join("\n")).toContain("Terminal window");
     expect(nextSteps(false)[0]).toContain("grenade new myproject");
   });

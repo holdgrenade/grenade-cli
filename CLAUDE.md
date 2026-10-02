@@ -57,9 +57,9 @@ src/pairing/pairingWatch.ts pure: what became of the last pair code (none, waiti
 src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `servicePath` (the PATH the agent runs with), `stableProgram` (no versioned Cellar path)
 src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, pid, last exit)
 src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`
-src/setup/requirements.ts  pure: what is missing (macOS, Node 22+, tmux 3.2+, an agent; iTerm2 as an offer that never blocks) and the command that fixes it; `findRequirements.ts` looks
+src/setup/requirements.ts  pure: what is missing (macOS, Node 22+, tmux 3.2+, an agent; iTerm2 is never asked for) and the command that fixes it; `findRequirements.ts` looks
 src/setup/hooksNotice.ts   pure: `addedHooks(before, after)` and the text shown before `~/.claude/settings.json` is touched
-src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that it opens in an iTerm2 tab (or how to get one)
+src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that it opens in an iTerm2 tab or a Terminal window (and where the docs say how to use iTerm2)
 src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
 src/setup/answer.ts, ask.ts pure `readYesNo`; `askYesNo` on the terminal
 src/config.ts              paths under GRENADE_HOME, daemon id, default name, VERSION
@@ -90,7 +90,9 @@ src/attachments/attachmentStore.ts createAttachmentStore(dir): writes <dir>/<ses
 src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
 src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command
 src/sessions/registry.ts   SessionRegistry: Session objects, status machine driver, screen cache, persistence, events
-src/terminal/iterm.ts      ITermMirror: one iTerm2 tab per live session (AppleScript via osascript), tagged with `user.grenadeSession`
+src/terminal/mirror.ts     TerminalMirror: one tab or window per live session in the chosen terminal (`auto | iterm | terminal | none`), `relayoutSteps` pure
+src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`
+src/terminal/appleTerminal.ts AppleTerminalAdapter: one Terminal.app window per session, the default without iTerm2
 src/sessions/status.ts     pure status reducer (see below)
 src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt)
 src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
@@ -154,9 +156,9 @@ Sessions that belong together share an opaque `group` id (`g-` + 6 hex). A group
 - Control API: `PUT /sessions/:id/group {group, index?}`. The CLI's `--with`/`group` look up the other session's group first.
 - The order the groups themselves are listed in (PROTOCOL.md "Group order") is the daemon's too, so a group moved on the phone moves in the Mac app and on every other phone. `GroupOrderStore` keeps it: a group that appears goes to the top, a session moved out lands right under the group it left (it remembers each session's last group to tell), a group with no session left is dropped, and without a saved order the groups are listed newest first. Saved in `groups.json` beside `sessions.json` (none when sessions are in memory only). `Connection` sends `groups` after `sessions` on `hello` and forwards every `changed`; `group.move` answers with `groups` to everyone, or to the sender alone when nothing moved.
 
-## Terminal mirror (`src/terminal/iterm.ts`)
+## Terminal mirror (`src/terminal/mirror.ts`)
 
-Every live session gets an iTerm2 tab running `tmux attach-session -t =<id>`, so all agents are visible on the Mac at once.
+Every live session gets a tab or window running `tmux attach-session -t =<id>`, so all agents are visible on the Mac at once. iTerm2 is optional: without it each session opens in a Terminal.app window of its own (`appleTerminal.ts`; groups do not split there and nothing moves on a regroup). With it (`iterm.ts`) a group is one tab of split panes, as below.
 
 - Panes of a group run left to right in group order. `split vertically` puts the new pane to the right, so a pane always splits the member before it.
 - `created` → open a tab in the current iTerm window (a window is made if none), or, when another member of its group already has a pane, split the nearest earlier member's pane (`splitPaneScript`; falls back to a tab if the pane was closed by hand).
@@ -164,7 +166,7 @@ Every live session gets an iTerm2 tab running `tmux attach-session -t =<id>`, so
 - On daemon start, tabs are opened for adopted sessions that have none, in group order so each group's first session gets the tab; existing tabs are found by their tag, never by title (tmux rewrites titles).
 - Tabs are tagged with the iTerm session variable `user.grenadeSession = <id>`. The AppleScript builders are pure and tested; `ITermMirror` runs one `osascript` at a time through a queue, and a failed script never blocks the next.
 - The tab runs the absolute tmux path (`resolveTmuxBin`) because an iTerm command session has no shell profile. With iTerm's default profile the tab also closes by itself when the attach exits, so the close script often reports 0 closed; that is fine.
-- Default `auto`: tabs whenever iTerm2 is installed (`/Applications/iTerm.app` or `~/Applications/iTerm.app`), and `isITermInstalled` is asked again at every event, so iTerm2 installed after the daemon started (a fresh Mac, `grenade setup` first) needs no restart: at the next event the mirror catches up once (`catchUp`: lists the tagged tabs, opens one for every live session without) and goes on as usual. A catch-up that fails (iTerm not allowed to be controlled, say) is tried again at the next event. `--terminal iterm` insists, `--terminal none` or `GRENADE_TERMINAL=none` turns it off. Detaching a tab with Ctrl-b d leaves the session running; closing a tab by hand does too. Only `grenade kill` ends an agent.
+- Default `auto`: iTerm2 tabs whenever iTerm2 is installed, else Terminal.app windows (`/Applications/iTerm.app` or `~/Applications/iTerm.app`), and `isITermInstalled` is asked again at every event, so iTerm2 installed after the daemon started (a fresh Mac, `grenade setup` first) needs no restart: at the next event the mirror catches up once (`catchUp`: lists the tagged tabs, opens one for every live session without) and goes on as usual. A catch-up that fails (iTerm not allowed to be controlled, say) is tried again at the next event. `--terminal iterm` insists, `--terminal terminal` keeps Terminal.app, `--terminal none` or `GRENADE_TERMINAL=none` turns it off. Detaching a tab with Ctrl-b d leaves the session running; closing a tab by hand does too. Only `grenade kill` ends an agent.
 
 ## Attachments (`src/attachments/`)
 
@@ -269,7 +271,7 @@ Read PROTOCOL.md "Remote access (relay)" first. Off until `grenade relay on [url
 Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `grenade setup`.
 
 - **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/holdgrenade-cli-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g @holdgrenade/cli` both install that tarball. Development still runs from `dist/` built by `tsc`.
-- **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`, and `brew install --cask iterm2` as an option that a no or a failure does not stop setup on), hooks, launchd agent, relay, pairing. After pairing it prints `nextSteps`: how to start an agent, and that it opens in an iTerm2 tab (or how to get that). It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
+- **Setup** runs five steps and skips each one that is done: requirements (offers `brew install tmux`; iTerm2 is optional and never offered), hooks, launchd agent, relay, pairing. After pairing it prints `nextSteps`: how to start an agent, and that it opens in an iTerm2 tab or a Terminal window, with a link to the docs' iTerm2 section. It changes `~/.claude/settings.json` and turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` both are left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
 - **The agent** is `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist`, loaded into `gui/<uid>` (the login session, which has the Keychain that `claude -p` needs). `RunAtLoad`, `KeepAlive` on a failed exit only, `ThrottleInterval` 10 s, and `AbandonProcessGroup` so tmux outlives the daemon. Its `PATH` is the one of the terminal that installed it: launchd's own is bare, and agents started in tmux inherit the daemon's. `GRENADE_*`, `TMUX_BIN`, `TMUX_TMPDIR`, `CLAUDE_BIN` and `CLAUDE_CONFIG_DIR` that are set at install time go into the plist too. What the daemon prints before its logger is up lands in `~/.grenade/launchd.log`.
 - **Pairing** (PROTOCOL.md "Pairing offer (QR code)" and "Pairing inside the encrypted channel"): `POST /pair-code` mints code and secret and answers with `typed` and `offer`. `Connection.handlePair` takes a sealed `pair` with either, on the LAN socket or a relay pipe, through `ConnectionDeps.pair` → `pairPhone` in `server.ts`, which issues the token with `sealed: true`. While the secret is live its access hash is in the list the relay link uploads (`accessHashes` in `server.ts`); `PairingCodes.onChange` and a timer at the end of the two minutes send the list again. `pair` outside the encrypted channel is answered `unsupported_protocol` and is not counted as a try.
 

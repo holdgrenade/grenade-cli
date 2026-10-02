@@ -1,5 +1,5 @@
 /**
- * `grenade setup`: the whole first run in one command. Checks what Grenade needs (and offers iTerm2), offers the Claude Code hooks,
+ * `grenade setup`: the whole first run in one command. Checks what Grenade needs, offers the Claude Code hooks,
  * starts grenaded at login, offers the relay, and ends on the QR code for the phone. Every step that is already
  * done is skipped, so it is safe to run again.
  */

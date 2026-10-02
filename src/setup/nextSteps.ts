@@ -8,9 +8,9 @@ export function nextSteps(iterm: boolean): string[] {
     );
   } else {
     lines.push(
-      "It opens in a Terminal window of its own. With iTerm2 (brew install --cask iterm2) the sessions of a folder",
-      "sit side by side in one tab instead; no restart needed. Any terminal attaches with: grenade open myproject",
+      "It opens in a Terminal window of its own. Any terminal attaches with: grenade open myproject",
       "The first time, macOS may ask whether grenaded (it says node) may control Terminal: allow it, or no window appears.",
+      "Prefer iTerm2? Install it and the sessions of a folder sit side by side in one tab: https://www.holdgrenade.com/docs#iterm2",
     );
   }
   return lines;
