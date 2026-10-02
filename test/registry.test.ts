@@ -51,6 +51,8 @@ describe("SessionRegistry.create", () => {
 });
 
 describe("phone width", () => {
+  const mac = {};
+  const phone = {};
   const make = async () => {
     const t = fakeTmux();
     const registry = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: () => true });
@@ -62,11 +64,27 @@ describe("phone width", () => {
     const { registry, id, sizing } = await make();
     registry.subscribe(id);
     registry.subscribe(id);
-    await registry.resize(id, 46);
+    await registry.resize(id, 46, undefined, mac);
     registry.unsubscribe(id);
     expect(sizing).toEqual([`resize:${id}`]);
     registry.unsubscribe(id);
     expect(sizing).toEqual([`resize:${id}`, `release:${id}`]);
+  });
+
+  it("gives the width back on request, only to the client that sized it last", async () => {
+    const { registry, id, sizing } = await make();
+    registry.subscribe(id);
+    await registry.resize(id, 46, undefined, mac);
+    await registry.releaseSize(id, phone);
+    expect(sizing).toEqual([`resize:${id}`]);
+    await registry.releaseSize(id, mac);
+    expect(sizing).toEqual([`resize:${id}`, `release:${id}`]);
+    await registry.resize(id, 46, undefined, mac);
+    await registry.resize(id, 40, undefined, phone);
+    await registry.releaseSize(id, mac);
+    expect(sizing).toEqual([`resize:${id}`, `release:${id}`, `resize:${id}`, `resize:${id}`]);
+    registry.unsubscribe(id);
+    expect(sizing.at(-1)).toBe(`release:${id}`);
   });
 
   it("does not release a window no phone resized, and releases only once", async () => {
@@ -76,7 +94,7 @@ describe("phone width", () => {
     registry.unsubscribe(id);
     expect(sizing).toEqual([]);
     registry.subscribe(id);
-    await registry.resize(id, 46);
+    await registry.resize(id, 46, undefined, mac);
     registry.unsubscribe(id);
     registry.subscribe(id);
     registry.unsubscribe(id);

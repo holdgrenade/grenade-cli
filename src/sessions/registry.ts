@@ -37,8 +37,8 @@ interface Record_ {
   hash: string;
   seq: number;
   subscribers: number;
-  /** A phone set the window width with `resize`; released when the last subscriber leaves. */
-  phoneSized: boolean;
+  /** The connection whose `resize` sized the window, if any; released when it gives the width back or the last subscriber leaves. */
+  sizedBy: object | null;
   /** Epoch of the pane's history indexes (see historyEpoch.ts). Null until the first capture. */
   mark: HistoryMark | null;
   /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
@@ -256,10 +256,19 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     await this.tmux.sendKey(id, key);
   }
 
-  async resize(id: string, cols: number, rows?: number): Promise<void> {
+  /** `by` is the connection that asked, so a later `releaseSize` from it undoes only its own width. */
+  async resize(id: string, cols: number, rows: number | undefined, by: object): Promise<void> {
     const r = this.require(id);
     await this.tmux.resize(id, cols, rows);
-    r.phoneSized = true;
+    r.sizedBy = by;
+  }
+
+  /** `resize` with `cols: null`: the window fits the Mac terminals again, unless another client has sized it since. */
+  async releaseSize(id: string, by: object): Promise<void> {
+    const r = this.require(id);
+    if (r.sizedBy !== by) return;
+    r.sizedBy = null;
+    await this.tmux.releaseSize(id);
   }
 
   /** Scrollback rows before history index `before` (see PROTOCOL.md "Scrollback"). Throws a TmuxError for a gone pane. */
@@ -326,8 +335,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!r || r.subscribers === 0) return;
     r.subscribers--;
     // Nobody is looking any more: hand the width back to the Mac terminals.
-    if (r.subscribers === 0 && r.phoneSized) {
-      r.phoneSized = false;
+    if (r.subscribers === 0 && r.sizedBy) {
+      r.sizedBy = null;
       this.tmux.releaseSize(id).catch((e) => this.log.debug("Could not release the phone width", { session: id, error: e }));
     }
   }
@@ -393,7 +402,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, phoneSized: false, mark: null, transcript: meta.transcript });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, mark: null, transcript: meta.transcript });
     this.persist();
     this.emit("updated", session);
     return session;

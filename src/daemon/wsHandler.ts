@@ -30,7 +30,8 @@ export interface RegistryPort {
   unsubscribe(id: string): void;
   sendText(id: string, text: string, submit: boolean): Promise<void>;
   sendKey(id: string, key: KeyName): Promise<void>;
-  resize(id: string, cols: number, rows?: number): Promise<void>;
+  resize(id: string, cols: number, rows: number | undefined, by: object): Promise<void>;
+  releaseSize(id: string, by: object): Promise<void>;
   history(id: string, before: number, count: number): Promise<HistoryFrame>;
   seen(id: string): void;
   create(input: { name: string; cwd: string; agent: Session["agent"]; group?: string | undefined }): Promise<Session>;
@@ -301,7 +302,8 @@ export class Connection {
         if (frame.key === "escape" || frame.key === "ctrl-c") this.d.interrupted?.(frame.sessionId);
         return;
       case "resize":
-        return r.resize(frame.sessionId, frame.cols, frame.rows);
+        if (frame.cols === null) return r.releaseSize(frame.sessionId, this);
+        return r.resize(frame.sessionId, frame.cols, frame.rows, this);
       case "history":
         return this.send(await r.history(frame.sessionId, frame.before, frame.count));
       case "seen":

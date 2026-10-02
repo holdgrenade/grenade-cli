@@ -33,6 +33,7 @@ class FakeRegistry extends EventEmitter {
   async sendText(id: string, text: string, submit: boolean) { this.calls.push(`input:${id}:${text}:${submit}`); }
   async sendKey(id: string, key: string) { this.calls.push(`key:${id}:${key}`); }
   async resize(id: string, cols: number, rows?: number) { this.calls.push(`resize:${id}:${cols}:${rows}`); }
+  async releaseSize(id: string) { this.calls.push(`release:${id}`); }
   seen(id: string) { this.calls.push(`seen:${id}`); }
   async history(id: string, before: number, count: number) {
     this.calls.push(`history:${id}:${before}:${count}`);
@@ -169,12 +170,14 @@ describe("Connection", () => {
     await conn.handleMessage(fixture("client.key.json"));
     await conn.handleMessage(fixture("client.seen.json"));
     await conn.handleMessage(fixture("client.resize.json"));
+    await conn.handleMessage(fixture("client.resize.release.json"));
     expect(registry.calls).toEqual([
       "subscribe:gr-a1b2c3",
       "input:gr-a1b2c3:Use tmux so I can still attach from the desktop:true",
       "key:gr-a1b2c3:ctrl-c",
       "seen:gr-a1b2c3",
       "resize:gr-a1b2c3:46:undefined",
+      "release:gr-a1b2c3",
     ]);
     expect(out.find((f) => f.type === "screen")).toMatchObject({ seq: 1 });
   });
