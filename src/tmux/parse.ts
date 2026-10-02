@@ -190,3 +190,12 @@ export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "
       return shell;
   }
 }
+
+/**
+ * The environment the daemon runs tmux in: without TMUX and TMUX_PANE. A daemon started inside a tmux pane inherits
+ * both, and tmux would then aim untargeted commands at that pane and that server.
+ */
+export function tmuxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { TMUX: _tmux, TMUX_PANE: _pane, ...rest } = env;
+  return { ...rest, TMUX: "" };
+}

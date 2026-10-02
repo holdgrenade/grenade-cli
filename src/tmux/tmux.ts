@@ -11,6 +11,7 @@ import {
   parsePaneGeometry,
   parseSessionList,
   splitGeometry,
+  tmuxEnv,
   type HistoryRows,
   type PaneGeometry,
   type Screen,
@@ -62,7 +63,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
 
   const run = (args: string[]): Promise<string> =>
     new Promise((resolve, reject) => {
-      execFile(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, TMUX: "" } }, (err, stdout, stderr) => {
+      execFile(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
         if (err) reject(new TmuxError((stderr || err.message).trim(), args));
         else resolve(stdout);
       });
@@ -103,14 +104,16 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       // history-limit only applies to panes created after it is set, so the session starts on a placeholder shell,
       // gets its options, then respawn-pane starts the agent in a pane that has the big history. `mouse on` lets the
       // wheel scroll tmux history in the iTerm mirror. A blank fill-character hides tmux's dots in the part of a Mac
-      // terminal that lies outside a phone-width window. One tmux command, so nothing runs in between.
+      // terminal that lies outside a phone-width window. One tmux command, so nothing runs in between. Every command
+      // after new-session names its target: an untargeted one falls on the pane in TMUX_PANE when the daemon was
+      // started inside tmux, and respawn-pane -k would then kill that pane's agent and leave this session a bare shell.
       const env = ["-c", cwd, "-e", `GRENADE_SESSION=${id}`];
       await run([
         "new-session", "-d", "-s", id, ...env, "-x", String(cols), "-y", String(rows), ";",
-        "set-option", "history-limit", String(historyLimit), ";",
-        "set-option", "mouse", "on", ";",
-        "set-option", "-w", "fill-character", " ", ";",
-        "respawn-pane", "-k", ...env, agentCommand(agent),
+        "set-option", "-t", pane(id), "history-limit", String(historyLimit), ";",
+        "set-option", "-t", pane(id), "mouse", "on", ";",
+        "set-option", "-w", "-t", pane(id), "fill-character", " ", ";",
+        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent),
       ]);
     },
     async capture(id) {

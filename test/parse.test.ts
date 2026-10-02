@@ -13,6 +13,7 @@ import {
   parseSessionList,
   sessionIdFor,
   slugify,
+  tmuxEnv,
   trimTrailingEmpty,
   type PaneGeometry,
 } from "../src/tmux/parse.js";
@@ -125,6 +126,14 @@ describe("helpers", () => {
     expect(agentCommand("claude")).toBe("claude");
     expect(agentCommand("codex")).toBe("codex");
     expect(agentCommand("shell", "/bin/fish")).toBe("/bin/fish");
+  });
+});
+
+describe("tmuxEnv", () => {
+  it("drops the pane of a daemon started inside tmux, so untargeted commands cannot land on it", () => {
+    const env = tmuxEnv({ PATH: "/bin", TMUX: "/tmp/tmux-501/default,1,0", TMUX_PANE: "%44" });
+    expect(env).toEqual({ PATH: "/bin", TMUX: "" });
+    expect("TMUX_PANE" in env).toBe(false);
   });
 });
 
