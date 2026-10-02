@@ -8,7 +8,7 @@ import { isAtMac, parseHidIdle, parseScreenLocked, readMacPresence } from "../sr
 import { atMacMs, loadPushConfig, pushConfigOn, pushGatewayFor, pushMode, savePushConfig } from "../src/push/pushConfig.js";
 import { clip, pushContentFor, pushText, testPushContent } from "../src/push/pushContent.js";
 import { outcomeOf, postPush } from "../src/push/pushGateway.js";
-import { AT_MAC_MS, MIN_BUSY_MS, SAME_STRETCH_MS, busyFor, decide, settled, startedWaiting, trackBusy, worthPushing, type PendingPush } from "../src/push/pushPolicy.js";
+import { AT_MAC_MS, MIN_BUSY_MS, SAME_STRETCH_MS, busyFor, decide, eventOf, settled, startedWaiting, trackBusy, worthPushing, type PendingPush } from "../src/push/pushPolicy.js";
 import { collapseId, sealPushText } from "../src/push/pushSeal.js";
 import { x25519FromRaw } from "../src/relay/e2e.js";
 
@@ -295,5 +295,13 @@ describe("grenade push status", () => {
     expect(testLine({ device: "p_1", outcome: "sent" })).toBe("sent");
     expect(testLine({ device: "p_1", outcome: "refused", error: "push_unavailable" })).toContain("no push key");
     expect(testLine({ device: "p_1", outcome: "retry", error: "timeout" })).toContain("timeout");
+  });
+});
+
+describe("a turn that stopped partway", () => {
+  it("is pushed as needing you, saying why", () => {
+    const session = { summary: "Rate limiting", lastLine: "Then the tests for…", waitingFor: "stopped" as const, stoppedBecause: "sleep" as const };
+    expect(pushText("answer", session)).toBe("Stopped partway: your Mac went to sleep during the reply.");
+    expect(eventOf({ status: "waiting", waitingFor: "stopped" } as Session)).toBe("answer");
   });
 });

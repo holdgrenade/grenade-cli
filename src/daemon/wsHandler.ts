@@ -3,7 +3,7 @@
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
 import { listFolders } from "../folders/listFolders.js";
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -458,11 +458,18 @@ export class Connection {
   }
 
   private send(frame: DaemonFrame): void {
-    this.d.out(frame);
+    this.d.out(this.client ? framedFor(this.client, frame) : frame);
   }
 
   private fail(code: ErrorCode, message: string, ref?: string, closeAfter = false, id?: string): void {
     this.send({ type: "error", code, message, ...(ref === undefined ? {} : { ref }), ...(id === undefined ? {} : { id }) });
     if (closeAfter) this.d.close(CLOSE_UNAUTHORIZED, code);
   }
+}
+
+/** A frame as this client can read it: a stopped turn reads as `done` for an app from before `stopped` (`sessionFor`). */
+function framedFor(client: ClientInfo, frame: DaemonFrame): DaemonFrame {
+  if (frame.type === "session.updated") return { ...frame, session: sessionFor(client, frame.session) };
+  if (frame.type === "sessions") return { ...frame, sessions: frame.sessions.map((s) => sessionFor(client, s)) };
+  return frame;
 }

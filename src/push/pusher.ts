@@ -4,7 +4,7 @@
  * posts it to the relay's push route. Knows no sockets: `register` / `unregister` are called by a Connection.
  */
 import { randomBytes } from "node:crypto";
-import type { DaemonInfo, PushContent, PushRegisterFrame, PushRequest, PushStateFrame, Session, WaitingFor } from "@grenade/protocol";
+import type { DaemonInfo, PushContent, PushRegisterFrame, PushRequest, PushStateFrame, Session, PushableEvent } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import type { X25519Pair } from "../relay/e2e.js";
 import { isAtMac, readMacPresence, type MacPresence } from "./macPresence.js";
@@ -256,7 +256,7 @@ export class Pusher {
 
   // ---- sending ----------------------------------------------------------------
 
-  private async send(event: WaitingFor, session: Session): Promise<void> {
+  private async send(event: PushableEvent, session: Session): Promise<void> {
     const gateway = this.d.gateway();
     if (!gateway) return;
     const phones = this.d.devices.list().filter((d) => d.events.includes(event));

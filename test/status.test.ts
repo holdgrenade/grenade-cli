@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialStatus, reduceStatus, shownWaitingFor, WAITING_TO_IDLE_MS, WORKING_SETTLE_MS, type StatusState } from "../src/sessions/status.js";
+import { initialStatus, reduceStatus, SLEEP_GAP_MS, STOPPED_QUIET_MS, shownStoppedBecause, shownWaitingFor, WAITING_TO_IDLE_MS, WORKING_SETTLE_MS, type StatusState } from "../src/sessions/status.js";
 
 const run = (start: StatusState, events: Parameters<typeof reduceStatus>[1][]) => events.reduce(reduceStatus, start);
 
@@ -114,5 +114,60 @@ describe("why a session waits", () => {
   it("a session that ended forgets what it waited for", () => {
     const s = run(initialStatus(0), [hook("working", 10), hook("idle", 20), hook("waiting", 30, "done")]);
     expect(s).toMatchObject({ status: "waiting", waitingFor: "done", since: 30 });
+  });
+});
+
+describe("a turn that stopped partway", () => {
+  const working = (at = 0): StatusState => reduceStatus(initialStatus(0), { kind: "hook", status: "working", at });
+  const look = (at: number, busy: boolean, changed = false) => ({ kind: "output" as const, changed, busy, at });
+  /** The daemon looks every second: a quiet stretch from `from` to `to`. */
+  const quiet = (from: number, to: number, busy: boolean) => Array.from({ length: Math.floor((to - from) / 1000) }, (_, i) => look(from + (i + 1) * 1000, busy));
+
+  it("StopFailure stops it, because of an error", () => {
+    const s = reduceStatus(working(), { kind: "hook", status: "waiting", waitingFor: "stopped", at: 10 });
+    expect(shownWaitingFor(s)).toBe("stopped");
+    expect(shownStoppedBecause(s)).toBe("error");
+  });
+
+  it("a quiet screen with no spinner stops it, after 30 s", () => {
+    let s = run(working(), [look(1000, false, true), ...quiet(1000, 1000 + STOPPED_QUIET_MS - 1000, false), look(1000 + STOPPED_QUIET_MS - 1, false)]);
+    expect(s.status).toBe("working");
+    s = reduceStatus(s, look(1000 + STOPPED_QUIET_MS, false));
+    expect(shownWaitingFor(s)).toBe("stopped");
+    expect(shownStoppedBecause(s)).toBe("quiet");
+  });
+
+  it("never while the spinner shows, however quiet", () => {
+    const s = run(working(), [look(1000, true, true), ...quiet(1000, 1000 + 10 * STOPPED_QUIET_MS, true)]);
+    expect(s.status).toBe("working");
+  });
+
+  it("never for an agent whose screen says nothing", () => {
+    const s = run(working(), [{ kind: "output", changed: false, at: 10 * STOPPED_QUIET_MS }]);
+    expect(s.status).toBe("working");
+  });
+
+  it("says the Mac slept when a look came that late during the turn", () => {
+    const woke = 1000 + SLEEP_GAP_MS + 5000;
+    const s = run(working(), [look(1000, true, true), look(woke, false, true), ...quiet(woke, woke + STOPPED_QUIET_MS, false)]);
+    expect(shownStoppedBecause(s)).toBe("sleep");
+  });
+
+  it("stays stopped when someone looks, and after 10 minutes", () => {
+    let s = reduceStatus(working(), { kind: "hook", status: "waiting", waitingFor: "stopped", at: 10 });
+    s = reduceStatus(s, { kind: "seen", at: 20 });
+    s = reduceStatus(s, look(10 + WAITING_TO_IDLE_MS + 1, false));
+    expect(shownWaitingFor(s)).toBe("stopped");
+  });
+
+  it("a new turn forgets why the last one stopped", () => {
+    const woke = 1000 + SLEEP_GAP_MS;
+    let s = run(working(), [look(1000, true, true), look(woke, false, true), ...quiet(woke, woke + STOPPED_QUIET_MS, false)]);
+    expect(shownStoppedBecause(s)).toBe("sleep");
+    s = reduceStatus(s, { kind: "hook", status: "working", at: 200_000 });
+    expect(s.status).toBe("working");
+    expect(s.stoppedBecause).toBeUndefined();
+    s = run(s, [look(200_500, false, true), ...quiet(200_500, 200_500 + STOPPED_QUIET_MS, false)]);
+    expect(shownStoppedBecause(s)).toBe("quiet");
   });
 });

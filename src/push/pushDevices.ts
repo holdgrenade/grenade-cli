@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { PushEnvironment, PushProvider, WaitingFor } from "@grenade/protocol";
+import type { PushEnvironment, PushProvider, PushableEvent } from "@grenade/protocol";
 
 export interface PushDevice {
   /** The paired phone's device id. */
@@ -16,7 +16,7 @@ export interface PushDevice {
   topic: string;
   /** The phone's push key: X25519 public, base64. */
   key: string;
-  events: WaitingFor[];
+  events: PushableEvent[];
   registeredAt: string;
 }
 

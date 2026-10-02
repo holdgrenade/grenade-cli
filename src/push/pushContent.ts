@@ -10,11 +10,21 @@ export function clip(text: string, max: number = PUSH_TEXT_MAX): string {
   return chars.length <= max ? line : chars.slice(0, max - 1).join("") + "…";
 }
 
+/** What a push says about a turn that stopped partway, by why it stopped. */
+export const STOPPED_PUSH_TEXT = {
+  sleep: "Stopped partway: your Mac went to sleep during the reply.",
+  error: "Stopped partway: Claude Code hit an error.",
+  quiet: "Stopped partway: nothing has happened for a while.",
+} as const;
+
+type PushedSession = Pick<Session, "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
+
 /**
  * The text of a push: for a question what was asked (the hook's message), for a finished turn the
- * session's summary; the last line of the screen when there is neither.
+ * session's summary, for a turn that stopped partway why; the last line of the screen when there is none.
  */
-export function pushText(event: PushEvent, session: Pick<Session, "summary" | "lastLine">, asked?: string): string {
+export function pushText(event: PushEvent, session: PushedSession, asked?: string): string {
+  if (session.waitingFor === "stopped") return STOPPED_PUSH_TEXT[session.stoppedBecause ?? "quiet"];
   const first = event === "answer" ? asked : session.summary;
   return clip(first?.trim() || session.lastLine);
 }
@@ -25,7 +35,7 @@ export interface PushContentInput {
   at: number;
   event: Exclude<PushEvent, "test">;
   daemon: Pick<DaemonInfo, "id" | "name">;
-  session: Pick<Session, "id" | "name" | "agent" | "summary" | "lastLine">;
+  session: Pick<Session, "id" | "name" | "agent" | "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
   /** What the agent asked, when a hook said so. */
   asked?: string | undefined;
 }

@@ -15,7 +15,8 @@ import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Scree
 import type { Tmux } from "../tmux/tmux.js";
 import { nextHistoryMark, type HistoryMark } from "./historyEpoch.js";
 import { defaultGroupFor, isJoinableGroup, membersInOrder, nextOrder, otherMembers, placeAt } from "./groups.js";
-import { initialStatus, reduceStatus, shownWaitingFor, type StatusState } from "./status.js";
+import { initialStatus, reduceStatus, shownStoppedBecause, shownWaitingFor, type StatusState } from "./status.js";
+import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { WIDTH_FLOOR, onRelease, onSweep } from "./widthFloor.js";
 
 export interface RegistryEvents {
@@ -431,7 +432,9 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       if (lastLine !== r.session.lastLine) r.session = { ...r.session, lastLine };
       if (r.subscribers > 0) this.emit("screen", this.frameFor(r));
     }
-    this.setState(r, reduceStatus(r.state, { kind: "output", changed, at: this.now() }), /* emit */ false);
+    // Claude Code's spinner says whether it is still on its turn; other agents' screens say nothing.
+    const busy = r.session.agent === "claude" ? claudeIsWorking(screen.lines) : undefined;
+    this.setState(r, reduceStatus(r.state, { kind: "output", changed, busy, at: this.now() }), /* emit */ false);
     // Only a real change to the session (status, statusSince or lastLine) is worth a `session.updated`. A screen
     // that changed without touching any of those (an agent's spinner, say) used to send one five times a second,
     // and every phone re-sorted and redrew its whole list for nothing.
@@ -494,12 +497,20 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   private setState(r: Record_, next: StatusState, emit = true): void {
     if (next === r.state) return;
     // A session that waits for something else than before (a question after a finished turn) changed too.
-    const changed = next.status !== r.state.status || shownWaitingFor(next) !== r.session.waitingFor;
+    const changed =
+      next.status !== r.state.status || shownWaitingFor(next) !== r.session.waitingFor || shownStoppedBecause(next) !== r.session.stoppedBecause;
     r.state = next;
     if (changed) {
-      const { waitingFor: _was, ...rest } = r.session;
+      const { waitingFor: _was, stoppedBecause: _because, ...rest } = r.session;
       const waitingFor = shownWaitingFor(next);
-      r.session = { ...rest, status: next.status, statusSince: new Date(next.since).toISOString(), ...(waitingFor ? { waitingFor } : {}) };
+      const stoppedBecause = shownStoppedBecause(next);
+      r.session = {
+        ...rest,
+        status: next.status,
+        statusSince: new Date(next.since).toISOString(),
+        ...(waitingFor ? { waitingFor } : {}),
+        ...(stoppedBecause ? { stoppedBecause } : {}),
+      };
       if (emit) this.emit("updated", r.session);
     }
   }

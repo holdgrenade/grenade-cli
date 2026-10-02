@@ -5,7 +5,7 @@
 import { PROMPT_HOOK_PATH, PROMPT_HOOK_TIMEOUT_S } from "@grenade/protocol";
 
 /** Events that report status: a command that posts the payload and does not wait. */
-export const HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification", "Stop", "SessionEnd"] as const;
+export const HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification", "Stop", "StopFailure", "SessionEnd"] as const;
 /** The event Claude Code holds open while a phone answers the prompt (PROTOCOL.md "Prompt hook"). */
 export const PROMPT_EVENT = "PermissionRequest";
 export const HOOK_MARKER = "/hooks/claude";
