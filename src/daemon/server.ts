@@ -442,6 +442,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     startedAt: Date.now(),
     log,
     promptTests,
+    activityTests: {
+      noteErrored: (sessionId, message) => activity.noteErrored(sessionId, message, new Date().toISOString()),
+    },
     relay: {
       status: relayStatus,
       reload() {

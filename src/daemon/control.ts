@@ -65,6 +65,10 @@ export interface ControlDeps {
     start(sessionId: string, kind: PromptKind, waitMs: number): PromptFrame;
     result(promptId: string): Promise<PromptTestResult> | undefined;
   };
+  /** Inject a test activity entry. */
+  activityTests?: {
+    noteErrored(sessionId: string, message: string): void;
+  };
 }
 
 export function createControlServer(d: ControlDeps): Server {
@@ -98,6 +102,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
   if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
+  if (method === "POST" && url.pathname === "/activity/test") return injectActivityTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);
   if (method === "GET" && tested?.[1]) {
     const result = d.promptTests?.result(tested[1]);
@@ -145,6 +150,22 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     return r ? sendJson(res, 200, { ok: true, ...r }) : sendJson(res, 404, { error: "unknown_device" });
   }
   sendJson(res, 404, { error: "not_found" });
+}
+
+/** `POST /activity/test`: injects a test errored entry on the named session, or the first running one. */
+function injectActivityTest(d: ControlDeps, body: { session?: unknown; message?: unknown }, res: ServerResponse): void {
+  const live = d.registry.list().filter((s) => s.status !== "gone");
+  const wanted = typeof body.session === "string" ? body.session : undefined;
+  const session = wanted ? live.find((s) => s.id === wanted || s.name === wanted) : live[0];
+  if (!session) {
+    const message = wanted ? `no running session ${wanted}` : "no session to inject the error into. Start one with: grenade new demo --agent shell";
+    return sendJson(res, 409, { error: "conflict", message });
+  }
+  if (!d.activityTests) return sendJson(res, 409, { error: "conflict", message: "activity tests not wired up" });
+  const message = typeof body.message === "string" && body.message.trim() ? body.message.trim() : "Test error: API error injected by grenade activity test.";
+  d.activityTests.noteErrored(session.id, message);
+  d.log.info(`Injected a test errored entry on ${session.name}`, { sessionId: session.id });
+  sendJson(res, 201, { sessionId: session.id, sessionName: session.name, message });
 }
 
 /** `POST /prompts/test`: the card goes on the named session, or on the first one that is still running. */
