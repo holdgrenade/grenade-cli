@@ -23,6 +23,11 @@ export interface UpdateStatus {
   method?: InstallMethod;
   /** The daemon installs a newer release by itself (`grenade update --auto on|off`, on unless turned off). */
   auto?: boolean;
+  /**
+   * The daemon can restart itself into a newer version on disk: it runs as the launchd agent. False for one started
+   * by hand, which keeps running the old version until someone restarts it. Absent from a status written before 1.0.7.
+   */
+  restarts?: boolean;
   /** The daemon's own install of the latest release, while it runs or when it could not. Absent otherwise. */
   install?: InstallState;
 }
@@ -130,6 +135,7 @@ export function updateNotice(running: string, u: UpdateStatus): string | null {
   if (u.install?.state === "needsAdmin") return `Grenade ${u.install.version} is out. npm needs admin rights to install it: ${u.install.command}`;
   const state = updateState(running, u);
   if (state.kind === "available") return `A new version of Grenade is out: ${running} → ${state.latest}. Update with: grenade update`;
+  if (state.kind === "installed" && u.restarts === false) return `Grenade ${state.installed} is installed, but grenaded ${running} was started by hand: stop it and start it again to run it`;
   if (state.kind === "installed") return `Grenade ${state.installed} is installed; grenaded ${running} restarts into it when no session is working (or now: grenade update)`;
   return null;
 }
@@ -145,6 +151,7 @@ export function updateLine(running: string, u: UpdateStatus, now: number = Date.
   if (install?.state === "pinned") return `${install.version} available; held back by brew pin grenade`;
   const state = updateState(running, u);
   if (state.kind === "available") return `${state.latest} available (running ${running}). Install it with: grenade update`;
+  if (state.kind === "installed" && u.restarts === false) return `${state.installed} is installed; grenaded was started by hand, so stop it and start it again to run it`;
   if (state.kind === "installed") return `${state.installed} is installed; grenaded restarts into it when no session is working (or now: grenade update)`;
   if (u.error && !u.latest) return `could not check for a new version: ${u.error}`;
   if (!u.checkedAt) return "not checked yet";

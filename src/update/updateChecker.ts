@@ -77,7 +77,8 @@ export class UpdateChecker {
 
   current(): UpdateStatus {
     const auto = this.d.auto?.() ?? false;
-    return { ...this.status, ...(this.d.installer ? { method: this.d.installer.method } : { method: "source" as const }), auto };
+    const method = this.d.installer?.method ?? ("source" as const);
+    return { ...this.status, method, auto, restarts: this.d.restart !== undefined };
   }
 
   /** Reads the tap now. `grenade update` and `grenade status --check` call it through the control API. */

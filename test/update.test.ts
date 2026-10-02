@@ -91,6 +91,7 @@ describe("versions", () => {
   it("says a new version is out, or that one is installed and waits to run", () => {
     expect(updateNotice("0.1.9", { installed: "0.1.9", latest: "0.1.10" })).toBe("A new version of Grenade is out: 0.1.9 → 0.1.10. Update with: grenade update");
     expect(updateNotice("0.1.9", { installed: "0.1.10", latest: "0.1.10" })).toMatch(/^Grenade 0.1.10 is installed; grenaded 0.1.9 restarts into it/);
+    expect(updateNotice("0.1.9", { installed: "0.1.10", restarts: false })).toBe("Grenade 0.1.10 is installed, but grenaded 0.1.9 was started by hand: stop it and start it again to run it");
     expect(updateNotice("0.1.10", { installed: "0.1.10", latest: "0.1.10" })).toBeNull();
     expect(updateNotice("0.1.10", { installed: "0.1.10", latest: "0.1.9" })).toBeNull();
     expect(updateNotice("0.1.9", {})).toBeNull();
@@ -303,10 +304,12 @@ describe("UpdateChecker", () => {
     });
   });
 
-  it("never restarts a daemon started by hand", () => {
+  it("never restarts a daemon started by hand, and says it cannot", () => {
     const { c, state } = checker({});
     state.installed = "0.1.10";
     expect(() => c.watchDisk()).not.toThrow();
     expect(c.current().installed).toBe("0.1.10");
+    expect(c.current().restarts).toBe(false);
+    expect(checker({ restart: vi.fn() }).c.current().restarts).toBe(true);
   });
 });
