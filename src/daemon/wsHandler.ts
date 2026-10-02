@@ -2,6 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
+import { listFolders } from "../folders/listFolders.js";
 import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
@@ -387,6 +388,8 @@ export class Connection {
         // Retired (grenade-cli 1.0.14): answered, changes nothing.
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+      case "folders":
+        return this.send(await listFolders(frame.path));
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);
