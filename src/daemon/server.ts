@@ -22,6 +22,9 @@ import { readTranscriptModel } from "../transcript/readModel.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
+import { ConversationIndex } from "../conversations/conversationIndex.js";
+import { ConversationMarks } from "../conversations/conversationMarks.js";
+import { conversationIdOf, heldConversations } from "../conversations/heldConversations.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
@@ -34,7 +37,7 @@ import { isLoopback } from "./loopback.js";
 import { typedCode } from "./pairCheck.js";
 import { CODE_TTL_MS, DEVICE_IDLE_MS, PairingCodes, TokenStore, type TokenRecord } from "./pairing.js";
 import { closePromptsByHook, handlePromptHook } from "./promptHook.js";
-import { Connection, type PairVerdict } from "./wsHandler.js";
+import { Connection, type ConversationsPort, type PairVerdict } from "./wsHandler.js";
 import { offerUrlFor } from "../pairing/offer.js";
 import { PairingWatch } from "../pairing/pairingWatch.js";
 import { createAttachmentStore } from "../attachments/attachmentStore.js";
@@ -63,6 +66,8 @@ export interface DaemonOptions {
   tmux?: Tmux;
   tokensPath?: string | null;
   sessionsPath?: string | null;
+  /** Claude Code's folder, where past conversations are read from (PROTOCOL.md "Conversations"). Default: paths.claudeDir. */
+  claudeDir?: string;
   /** Mirror sessions into terminal tabs. Default `auto`: iTerm2 when it is installed (checked at every event), else Terminal.app. */
   terminal?: TerminalKind;
   /** One-sentence session summaries via `claude -p` (Haiku). Defaults to on unless `GRENADE_SUMMARIES=off`. */
@@ -107,7 +112,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
   const tmux = opts.tmux ?? createTmux();
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
@@ -158,9 +163,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const transcripts = new TranscriptReader();
   /** Reads a session's transcript: new activity into the store, a moved working directory into the session. */
   const readActivity = (id: string, path: string) =>
-    transcripts.read(path).then((jsonl) => {
+    transcripts.readChunk(path).then(({ jsonl, fromStart }) => {
       const entries = activityEntriesIn(jsonl);
-      activity.append(id, entries);
+      // A resumed session's copy repeats the whole history: it takes the place of what the store holds.
+      if (fromStart && registry.get(id)?.resumedFrom !== undefined) activity.replace(id, entries);
+      else activity.append(id, entries);
       const cwd = workingDirectoryIn(jsonl);
       if (cwd) registry.setCwd(id, cwd);
       // The user interrupted the turn: no hook says so, and Claude Code is back at its prompt.
@@ -192,6 +199,32 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     readActivity(id, path).catch((e) => log.debug("Could not read the activity from a saved transcript", { session: id, path, error: e }));
   }
 
+  // Past Claude Code conversations (PROTOCOL.md "Conversations"). Read only; Grenade's marks live beside sessions.json.
+  const marksPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "conversations.json") : paths.conversations;
+  const marks = new ConversationMarks(log, marksPath);
+  const conversationIndex = new ConversationIndex({
+    claudeDir: opts.claudeDir ?? paths.claudeDir,
+    marks,
+    held: () => heldConversations(registry.transcripts(), (id) => (registry.get(id)?.status ?? "gone") !== "gone"),
+  });
+  const conversations: ConversationsPort = {
+    list: () => conversationIndex.list(),
+    preview: (id) => conversationIndex.preview(id),
+    archive: (id, archived) => marks.setArchived(id, archived),
+    async resume({ name, group, conversationId }) {
+      const found = await conversationIndex.find(conversationId);
+      if (!found) return null;
+      const session = await registry.create({ name, cwd: found.cwd, agent: "claude", group, resume: conversationId });
+      // Claude Code writes the copy only with its first prompt; until then the session shows the original's history.
+      // Read whole here, not through the reader, whose place in that file may belong to another session.
+      registry.setTranscript(session.id, found.path);
+      const history = await conversationIndex.preview(conversationId);
+      if (history) activity.replace(session.id, history);
+      log.info(`Resumed a copy of conversation ${conversationId}`, { session: session.id, cwd: found.cwd });
+      return session;
+    },
+  };
+
   /** One hook event of a session: status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) =>
     handleClaudeHook(
@@ -204,6 +237,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         activity.noteAsked(id, prompt, new Date().toISOString());
       },
       (id, path, event) => {
+        // A resumed session names its copy from the first prompt on: remember it as Grenade's copy.
+        const resumedFrom = registry.get(id)?.resumedFrom;
+        if (resumedFrom && conversationIdOf(path) !== resumedFrom) marks.noteCopy(conversationIdOf(path), resumedFrom);
         registry.setTranscript(id, path);
         readTranscriptModel(path)
           .then((model) => model && registry.setModel(id, model))
@@ -349,6 +385,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       push: push.pusher,
       prompts,
       groups: groupOrder,
+      conversations,
       unpair(token) {
         const id = tokens.get(token)?.id;
         const gone = id ? tokens.revoke(id) : undefined;

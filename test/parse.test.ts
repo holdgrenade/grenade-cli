@@ -135,6 +135,10 @@ describe("helpers", () => {
     expect(agentCommand("codex")).toBe("codex");
     expect(agentCommand("shell", "/bin/fish")).toBe("/bin/fish");
   });
+  it("agentCommand resumes a copy of a conversation, and refuses an id a shell would read", () => {
+    expect(agentCommand("claude", undefined, "9a76de47-6489-4620-8e10-4bf9c4d12b09")).toBe("claude --resume 9a76de47-6489-4620-8e10-4bf9c4d12b09 --fork-session");
+    expect(() => agentCommand("claude", undefined, "x; rm -rf ~")).toThrow();
+  });
 });
 
 describe("tmuxEnv", () => {

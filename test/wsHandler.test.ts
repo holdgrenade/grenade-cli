@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection } from "../src/daemon/wsHandler.js";
+import { Connection, type ConversationsPort } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
@@ -73,7 +73,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -95,6 +95,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     sealed: opts.sealed ?? true,
     route: "lan",
     ...(opts.acceptsPlain ? { acceptsPlain: opts.acceptsPlain } : {}),
+    ...(opts.conversations ? { conversations: opts.conversations } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
     unpair: (token) => events.push(`unpair:${token}`),
@@ -150,7 +151,13 @@ describe("Connection", () => {
   });
 
   it("accepts every client fixture without a bad_frame", async () => {
-    const { conn, out } = connect();
+    const everything: ConversationsPort = {
+      async list() { return []; },
+      async preview() { return []; },
+      archive() {},
+      async resume({ name }) { return { ...session, id: `gr-${name}`, name }; },
+    };
+    const { conn, out } = connect({ conversations: everything });
     // `unpair` ends the connection, so it goes last.
     const names = readdirSync(fixtures).filter((n) => n.startsWith("client.") && n !== "client.unpair.json");
     for (const name of [...names, "client.unpair.json"]) {
@@ -390,5 +397,85 @@ describe("Connection activity", () => {
     await conn.handleMessage(fixture("client.hello.json"));
     await conn.handleMessage(fixture("client.subscribe.json"));
     expect(out.some((f) => f.type === "activity")).toBe(false);
+  });
+});
+
+describe("Connection: conversations", () => {
+  const glass = { id: "9a76de47-6489-4620-8e10-4bf9c4d12b09", cwd: "/tmp", title: "Glass buttons", updatedAt: "2026-10-02T14:31:00.000Z" };
+  function withConversations() {
+    const calls: string[] = [];
+    const port: ConversationsPort = {
+      async list() { return calls.includes("archive:true") ? [{ ...glass, archived: true }] : [glass]; },
+      async preview(id) { return id === glass.id ? [{ kind: "asked", text: "Make it glass", at: "2026-10-02T14:14:10.000Z" }, { kind: "stopped", text: "Stopped", at: "2026-10-02T14:15:00.000Z" }] : null; },
+      archive(id, archived) { calls.push(`archive:${archived}`); },
+      async resume({ name, conversationId }) {
+        calls.push(`resume:${name}:${conversationId}`);
+        return conversationId === glass.id ? { ...session, id: `gr-${name}`, name, resumedFrom: conversationId } : null;
+      },
+    };
+    return { port, calls };
+  }
+  const hello = (platform = "ios", version = "1.0.13") =>
+    JSON.stringify({ type: "hello", protocol: 1, token: "grt_example_token", client: { name: "Phone", platform, version } });
+
+  it("lists, previews and archives", async () => {
+    const { port, calls } = withConversations();
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "conversations" }));
+    expect(out).toEqual([{ type: "conversations", conversations: [glass] }]);
+    await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
+    expect(out[1]).toMatchObject({ type: "conversation.preview", conversationId: glass.id, entries: [{ kind: "asked" }, { kind: "stopped" }] });
+    await conn.handleMessage(JSON.stringify({ type: "conversation.archive", conversationId: glass.id, archived: true }));
+    expect(calls).toEqual(["archive:true"]);
+    expect(out[2]).toEqual({ type: "conversations", conversations: [{ ...glass, archived: true }] });
+  });
+
+  it("leaves stopped out of a preview for an app from before it", async () => {
+    const { port } = withConversations();
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello("ios", "1.0.7"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
+    expect(out[0]).toMatchObject({ entries: [{ kind: "asked" }] });
+  });
+
+  it("answers an unknown conversation with bad_frame", async () => {
+    const { port } = withConversations();
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: "0000" }));
+    await conn.handleMessage(JSON.stringify({ type: "session.create", name: "x", cwd: "/tmp", agent: "claude", resume: "0000" }));
+    expect(out).toMatchObject([
+      { type: "error", code: "bad_frame", ref: "conversation.preview" },
+      { type: "error", code: "bad_frame", ref: "session.create" },
+    ]);
+  });
+
+  it("resumes through the conversations port and answers with the sessions", async () => {
+    const { port, calls } = withConversations();
+    const { conn, out, registry } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(fixture("client.session.create.resume.json"));
+    expect(calls).toEqual([`resume:glass-buttons:${glass.id}`]);
+    expect(registry.calls).toEqual([]);
+    expect(out[0]).toMatchObject({ type: "sessions" });
+  });
+
+  it("refuses resume for an agent other than claude, and every conversation frame without the port", async () => {
+    const { port } = withConversations();
+    const a = connect({ conversations: port });
+    await a.conn.handleMessage(hello());
+    a.out.length = 0;
+    await a.conn.handleMessage(JSON.stringify({ type: "session.create", name: "x", cwd: "/tmp", agent: "codex", resume: glass.id }));
+    expect(a.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.create" });
+    const b = connect();
+    await b.conn.handleMessage(hello());
+    b.out.length = 0;
+    await b.conn.handleMessage(JSON.stringify({ type: "conversations" }));
+    expect(b.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "conversations" });
   });
 });

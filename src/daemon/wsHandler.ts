@@ -2,7 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -62,6 +62,16 @@ export interface ActivityPort {
   off(event: "activity", cb: (f: ActivityFrame) => void): unknown;
 }
 
+/** Past Claude Code conversations (PROTOCOL.md "Conversations"). */
+export interface ConversationsPort {
+  list(): Promise<Conversation[]>;
+  /** Null when there is no conversation with that id. */
+  preview(id: string): Promise<ActivityEntry[] | null>;
+  archive(id: string, archived: boolean): void;
+  /** Starts a session that runs a copy of the conversation, its history already read. Null when there is no such conversation. */
+  resume(input: { name: string; group?: string | undefined; conversationId: string }): Promise<Session | null>;
+}
+
 /** The slice of GroupOrderStore a connection needs (PROTOCOL.md "Group order"). */
 export interface GroupsPort {
   frame(): GroupsFrame;
@@ -101,6 +111,8 @@ export interface ConnectionDeps {
   activity?: ActivityPort;
   /** A client pressed a key that interrupts (Esc or Ctrl-C): an interrupt fires no hook, so the transcript is read for it. */
   interrupted?(sessionId: string): void;
+  /** Past conversations to list, preview, archive and resume. Absent means this daemon has none (no `conversations: 1`). */
+  conversations?: ConversationsPort;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -309,8 +321,28 @@ export class Connection {
       case "seen":
         return r.seen(frame.sessionId);
       case "session.create":
-        await r.create({ name: frame.name, cwd: frame.cwd, agent: frame.agent, group: frame.group });
+        if (frame.resume !== undefined) {
+          if (frame.agent !== "claude") return this.fail("bad_frame", "only a claude session can resume a conversation", frame.type);
+          if (!this.d.conversations) return this.fail("bad_frame", "this daemon cannot resume conversations", frame.type);
+          const resumed = await this.d.conversations.resume({ name: frame.name, group: frame.group, conversationId: frame.resume });
+          if (!resumed) return this.fail("bad_frame", `no conversation ${frame.resume} on this Mac`, frame.type);
+        } else {
+          await r.create({ name: frame.name, cwd: frame.cwd, agent: frame.agent, group: frame.group });
+        }
         return this.send({ type: "sessions", sessions: r.list() });
+      case "conversations":
+        if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+      case "conversation.preview": {
+        if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
+        const entries = await this.d.conversations.preview(frame.conversationId);
+        if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this Mac`, frame.type);
+        return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: this.entriesFor(entries) });
+      }
+      case "conversation.archive":
+        if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
+        this.d.conversations.archive(frame.conversationId, frame.archived);
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);

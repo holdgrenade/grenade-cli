@@ -29,7 +29,8 @@ export class TmuxError extends Error {
 export interface Tmux {
   listSessions(): Promise<string[]>;
   hasSession(id: string): Promise<boolean>;
-  newSession(opts: { id: string; cwd: string; agent: AgentKind }): Promise<void>;
+  /** `resume`: a Claude Code conversation id to start a copy of (`agentCommand`). */
+  newSession(opts: { id: string; cwd: string; agent: AgentKind; resume?: string | undefined }): Promise<void>;
   capture(id: string): Promise<Screen>;
   /** Up to `count` scrollback rows before history index `before`, and the pane geometry at that moment. */
   captureHistory(id: string, before: number, count: number): Promise<{ rows: HistoryRows; geo: PaneGeometry }>;
@@ -101,7 +102,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         return false;
       }
     },
-    async newSession({ id, cwd, agent }) {
+    async newSession({ id, cwd, agent, resume }) {
       // history-limit only applies to panes created after it is set, so the session starts on a placeholder shell,
       // gets its options, then respawn-pane starts the agent in a pane that has the big history. `mouse on` lets the
       // wheel scroll tmux history in the iTerm mirror. A blank fill-character hides tmux's dots in the part of a Mac
@@ -114,7 +115,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         "set-option", "-t", pane(id), "history-limit", String(historyLimit), ";",
         "set-option", "-t", pane(id), "mouse", "on", ";",
         "set-option", "-w", "-t", pane(id), "fill-character", " ", ";",
-        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent),
+        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent, undefined, resume),
       ]);
     },
     async capture(id) {

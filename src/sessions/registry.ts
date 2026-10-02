@@ -56,6 +56,8 @@ interface PersistedSession {
   summary?: string | undefined;
   model?: string | undefined;
   transcript?: string | undefined;
+  resumedFrom?: string | undefined;
+  resumedAt?: string | undefined;
 }
 
 export class SessionExistsError extends Error {}
@@ -156,6 +158,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         summary: meta?.summary,
         model: meta?.model,
         transcript: meta?.transcript,
+        resumedFrom: meta?.resumedFrom,
+        resumedAt: meta?.resumedAt,
       });
       // Sessions started by an older daemon lack mouse mode and the blank fill; set them like `newSession` does.
       this.tmux.applySessionOptions(id).catch((e) => this.log.debug("Could not set tmux session options", { session: id, error: e }));
@@ -163,7 +167,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (live.length > 0) this.log.info(`Picked up ${live.length} running session${live.length === 1 ? "" : "s"}`, { sessions: live.join(",") });
   }
 
-  async create(input: { name: string; cwd: string; agent: AgentKind; group?: string | undefined }): Promise<Session> {
+  /** `resume` starts a copy of that Claude Code conversation (PROTOCOL.md "Conversations"); `agent` must be `claude`. */
+  async create(input: { name: string; cwd: string; agent: AgentKind; group?: string | undefined; resume?: string | undefined }): Promise<Session> {
     const id = sessionIdFor(input.name);
     const cwd = expandCwd(input.cwd, this.home);
     if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the Mac: ${input.cwd}`);
@@ -174,12 +179,14 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       throw new SessionExistsError(`session ${id} already exists`);
     }
     if (await this.tmux.hasSession(id)) throw new SessionExistsError(`tmux session ${id} already exists`);
-    await this.tmux.newSession({ id, cwd, agent: input.agent });
+    await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume });
     this.records.delete(id);
     const others = this.list().filter((s) => s.id !== id);
     const group = input.group ?? defaultGroupFor(cwd, others) ?? this.newGroupId();
     const order = nextOrder(group, others);
-    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt: new Date(this.now()).toISOString(), group, order });
+    const createdAt = new Date(this.now()).toISOString();
+    const resumed = input.resume !== undefined ? { resumedFrom: input.resume, resumedAt: createdAt } : {};
+    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, ...resumed });
     this.log.info(`Started ${input.agent} session ${id}`, { cwd, group });
     this.emit("created", session);
     return session;
@@ -401,6 +408,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       createdAt: meta.createdAt,
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
+      ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
+      ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
     this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, mark: null, transcript: meta.transcript });
     this.persist();
@@ -449,7 +458,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, model: s.model, transcript }));
+      .map(({ session: s, transcript }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, model: s.model, transcript, resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

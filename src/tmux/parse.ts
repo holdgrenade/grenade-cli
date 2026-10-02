@@ -197,10 +197,14 @@ export function inputCommand(target: string, text: string): string[] {
 const INPUT_BUFFER = "grenade-input";
 
 /** The program launched inside the tmux session for an agent kind. */
-export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh"): string {
+export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh", resume?: string): string {
   switch (agent) {
     case "claude":
-      return "claude";
+      // A copy of the conversation (PROTOCOL.md "Conversations"): the original transcript is never written to. The
+      // id is checked by the protocol (letters, digits, dashes), and again here because tmux hands this to a shell.
+      if (resume === undefined) return "claude";
+      if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
+      return `claude --resume ${resume} --fork-session`;
     case "codex":
       return "codex";
     case "shell":

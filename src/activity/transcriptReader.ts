@@ -17,6 +17,11 @@ export class TranscriptReader {
 
   /** The complete lines written since the last read, as JSONL; all of them on the first read of a file. */
   read(path: string): Promise<string> {
+    return this.readChunk(path).then((c) => c.jsonl);
+  }
+
+  /** Like `read`, and says whether the lines start at the beginning of the file (a first read, or a replaced file). */
+  readChunk(path: string): Promise<{ jsonl: string; fromStart: boolean }> {
     const cursor = this.cursors.get(path) ?? { offset: 0, busy: Promise.resolve() };
     this.cursors.set(path, cursor);
     const next = cursor.busy.then(
@@ -32,20 +37,21 @@ export class TranscriptReader {
     this.cursors.delete(path);
   }
 
-  private async readFrom(path: string, cursor: Cursor): Promise<string> {
+  private async readFrom(path: string, cursor: Cursor): Promise<{ jsonl: string; fromStart: boolean }> {
     const file = await open(path, "r");
     try {
       const { size } = await file.stat();
       // A shorter file than last time was replaced: start over.
       if (size < cursor.offset) cursor.offset = 0;
-      if (size === cursor.offset) return "";
+      const fromStart = cursor.offset === 0;
+      if (size === cursor.offset) return { jsonl: "", fromStart };
       const buffer = Buffer.alloc(size - cursor.offset);
       await file.read(buffer, 0, buffer.length, cursor.offset);
       // Only whole lines: a line still being written is read next time.
       const end = buffer.lastIndexOf(0x0a);
-      if (end < 0) return "";
+      if (end < 0) return { jsonl: "", fromStart };
       cursor.offset += end + 1;
-      return buffer.subarray(0, end).toString("utf8");
+      return { jsonl: buffer.subarray(0, end).toString("utf8"), fromStart };
     } finally {
       await file.close();
     }

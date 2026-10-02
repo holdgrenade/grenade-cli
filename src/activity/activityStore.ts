@@ -61,6 +61,21 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
   }
 
+  /**
+   * Everything a session's transcript holds, in place of what the store has: a resumed session moving from the
+   * original conversation to its copy (PROTOCOL.md "Conversations"), whose first read repeats the history. A hook's
+   * prompt the transcript does not have yet stays last. Always sent as a `full` frame.
+   */
+  replace(id: string, entries: ActivityEntry[]): void {
+    const t = this.track(id);
+    const pending = t.pending;
+    const copy = pending ? entries.findIndex((e) => e.kind === "asked" && e.text === pending.text) : -1;
+    if (pending && copy >= 0) t.pending = null;
+    t.pendingStop = null;
+    t.entries = (pending && copy < 0 ? [...entries, pending] : entries).slice(-ACTIVITY_KEEP);
+    this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
+  }
+
   /** The prompt of a `UserPromptSubmit` hook: shown at once, before the transcript has it. */
   noteAsked(id: string, prompt: string, at: string): void {
     const text = prompt.trim();
