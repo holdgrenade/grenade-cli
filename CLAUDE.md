@@ -88,7 +88,7 @@ src/daemon/http.ts         readBody / sendJson
 src/attachments/attachmentName.ts  pure: the on-disk name of an upload (UTC stamp, sanitized name, extension from the mime type)
 src/attachments/attachmentStore.ts createAttachmentStore(dir): writes <dir>/<sessionId>/<name>, never overwrites (-2, -3…)
 src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
-src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, agent command
+src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command
 src/sessions/registry.ts   SessionRegistry: Session objects, status machine driver, screen cache, persistence, events
 src/terminal/iterm.ts      ITermMirror: one iTerm2 tab per live session (AppleScript via osascript), tagged with `user.grenadeSession`
 src/sessions/status.ts     pure status reducer (see below)

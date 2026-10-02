@@ -7,6 +7,7 @@ import {
   splitGeometry,
   stripAnsi,
   expandCwd,
+  inputCommand,
   keyToTmux,
   lastNonEmptyLine,
   parsePaneGeometry,
@@ -121,6 +122,13 @@ describe("helpers", () => {
     expect(keyToTmux("enter")).toBe("Enter");
     expect(keyToTmux("ctrl-c")).toBe("C-c");
     expect(keyToTmux("backspace")).toBe("BSpace");
+  });
+  it("inputCommand types one line and pastes several", () => {
+    expect(inputCommand("=gr-a:", "fix this")).toEqual(["send-keys", "-t", "=gr-a:", "-l", "--", "fix this"]);
+    expect(inputCommand("=gr-a:", "fix\r\nthis\rnow")).toEqual([
+      "set-buffer", "-b", "grenade-input", "--", "fix\nthis\nnow", ";",
+      "paste-buffer", "-p", "-r", "-d", "-b", "grenade-input", "-t", "=gr-a:",
+    ]);
   });
   it("agentCommand", () => {
     expect(agentCommand("claude")).toBe("claude");

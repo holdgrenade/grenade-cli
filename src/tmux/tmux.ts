@@ -7,6 +7,7 @@ import {
   buildHistory,
   buildScreen,
   historyRange,
+  inputCommand,
   keyToTmux,
   parsePaneGeometry,
   parseSessionList,
@@ -148,7 +149,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       ]);
     },
     async sendText(id, text, submit) {
-      if (text.length > 0) await run(["send-keys", "-t", pane(id), "-l", "--", text]);
+      if (text.length > 0) await run(inputCommand(pane(id), text));
       if (submit) await run(["send-keys", "-t", pane(id), "Enter"]);
     },
     async sendKey(id, key) {

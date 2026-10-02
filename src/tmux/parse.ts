@@ -179,6 +179,23 @@ export function keyToTmux(key: KeyName): string {
   return KEY_MAP[key];
 }
 
+/**
+ * The tmux command that puts `text` into the pane `target`. One line is typed as it is (`send-keys -l`). Text with a
+ * line break is pasted instead, as one bracketed paste (`paste-buffer -p`, `-r` keeps each LF): typed, every newline
+ * would press Enter and send the first line on its own, while Claude Code, Codex and the shell all take a pasted newline
+ * as part of the input. CRLF and a lone CR become LF. The buffer is deleted after the paste (`-d`).
+ */
+export function inputCommand(target: string, text: string): string[] {
+  if (!/[\r\n]/.test(text)) return ["send-keys", "-t", target, "-l", "--", text];
+  const lines = text.replace(/\r\n?/g, "\n");
+  return [
+    "set-buffer", "-b", INPUT_BUFFER, "--", lines, ";",
+    "paste-buffer", "-p", "-r", "-d", "-b", INPUT_BUFFER, "-t", target,
+  ];
+}
+
+const INPUT_BUFFER = "grenade-input";
+
 /** The program launched inside the tmux session for an agent kind. */
 export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh"): string {
   switch (agent) {
