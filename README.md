@@ -1,6 +1,10 @@
 # grenade-cli
 
-The Mac side of Grenade: `grenaded` (daemon) and the `grenade` CLI. Runs your AI coding agents inside tmux, streams them to the Grenade phone app, and lets the phone type into them.
+The Mac side of [Grenade](https://www.holdgrenade.com): `grenaded` (daemon) and the `grenade` CLI. Runs your AI coding agents inside tmux, streams them to the Grenade phone app, and lets the phone type into them.
+
+Grenade lets you watch and answer the AI coding agents running in terminals on your Mac (Claude Code, Codex, or a plain shell) from your phone or from a Mac app: every session in one list with a status (needs an answer, finished, working, idle), the live terminal, Claude Code's permissions, questions and plans as cards, and a mic to talk into. On the same Wi‑Fi the phone talks to the Mac directly; from anywhere else it goes through a relay. Both ways are end-to-end encrypted, and there is no account.
+
+[Website](https://www.holdgrenade.com) · [Install](https://www.holdgrenade.com/install) · [Guide](https://www.holdgrenade.com/guide) · [Security](https://www.holdgrenade.com/security)
 
 ## Install
 
@@ -22,7 +26,9 @@ Setup touches no agent's settings. Grenade starts Claude Code and Codex with its
 
 Without Homebrew, with Node 22+ and tmux 3.2+ already there: `npm install -g @holdgrenade/cli`, then `grenade setup`.
 
-From the source:
+Then get an app and scan the QR code: [Grenade: Agent Remote](https://apps.apple.com/app/grenade-agent-remote/id6818136871) for iPhone (iOS 17 or later), or [the Mac app](https://downloads.holdgrenade.com/mac/Grenade.dmg) (macOS 26 or later).
+
+From the source, which needs the `grenade-protocol` repo checked out next to this one (it is not public, so today this works for the maintainers only):
 
 ```bash
 brew install tmux
@@ -83,13 +89,13 @@ It takes effect at once, also for sessions already running, and stays across res
 
 With `grenade terminal iterm` (or `auto` and iTerm2 installed) a group is one tab, its sessions as split panes side by side in group order, following every move. `brew install --cask iterm2` first. Closing a tab or detaching (Ctrl-b d) leaves the agent running.
 
-Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. Host your own relay with `../grenade-relay`.
+Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. You can host your own relay: [Self-host a relay](https://www.holdgrenade.com/relay).
 
 Push notifications tell the phone that an agent needs an answer or has finished, even while the app is closed. They follow remote access: with `grenade relay on` they are on and go through that relay; with remote access off they are off and the Mac talks to no relay. `grenade push on` turns them on by themselves, through the main relay. The Mac seals each one so that only your phone can read it, and the relay hands it to Apple. That relay learns the Mac's public IP address, the phone's device token and the time, never the session or the text. A push waits while you are at the Mac (keyboard or mouse used in the last two minutes; `grenade push on --at-mac 0` to never wait) and is dropped once you have answered.
 
 The daemon listens on `:7788` (WebSocket at `/ws`) and advertises itself as `_grenade._tcp` so the phone finds it on the same Wi‑Fi. State lives in `~/.grenade/`.
 
-On the Wi‑Fi the phone and the Mac speak the same end-to-end encryption as through the relay, so nobody else on the network can read a session or take a token. A phone app that predates this is refused; while you update it, `grenade daemon --allow-plain-lan` lets it in. A phone you have not used for 90 days is unpaired. What this does and does not protect against is in `../grenade-protocol/SECURITY.md`.
+On the Wi‑Fi the phone and the Mac speak the same end-to-end encryption as through the relay, so nobody else on the network can read a session or take a token. A phone app that predates this is refused; while you update it, `grenade daemon --allow-plain-lan` lets it in. A phone you have not used for 90 days is unpaired. What this does and does not protect against is on [holdgrenade.com/security](https://www.holdgrenade.com/security).
 
 ## Develop
 
@@ -101,4 +107,10 @@ node scripts/pair-smoke.mjs --control-port 7790   # a phone that scanned the QR 
 npm run release          # the tarball and the Homebrew formula, locally
 ```
 
-See `CLAUDE.md` for the architecture and `../grenade-protocol/PROTOCOL.md` for the wire format.
+See `CLAUDE.md` for the architecture. The wire format is `PROTOCOL.md` in `grenade-protocol`, which is not public.
+
+## Help
+
+Something does not work, in any part of Grenade (this CLI, an app, the relay): [open an issue](https://github.com/holdgrenade/grenade-cli/issues). A security problem: [report it privately](https://github.com/holdgrenade/grenade-cli/security/advisories/new).
+
+MIT license, see `LICENSE`.
