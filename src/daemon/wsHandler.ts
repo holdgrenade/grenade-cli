@@ -3,6 +3,7 @@
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
 import { listFolders } from "../folders/listFolders.js";
+import { agentInfo } from "../agents/agentCatalog.js";
 import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
@@ -64,15 +65,16 @@ export interface ActivityPort {
   off(event: "activity", cb: (f: ActivityFrame) => void): unknown;
 }
 
-/** Past Claude Code conversations (PROTOCOL.md "Conversations"). */
+/** Past conversations of every agent that keeps them (PROTOCOL.md "Conversations"). */
 export interface ConversationsPort {
-  list(): Promise<Conversation[]>;
+  /** `anyAgent: false` lists only what apps from before `Conversation.agent` can resume. */
+  list(anyAgent: boolean): Promise<Conversation[]>;
   /** Null when there is no conversation with that id. */
   preview(id: string): Promise<ActivityEntry[] | null>;
   /** Moves a conversation to the Trash. Resolves with why it was refused, or null when it is gone. */
   delete(id: string): Promise<string | null>;
-  /** Starts a session that runs a copy of the conversation, its history already read. Null when there is no such conversation. */
-  resume(input: { name: string; group?: string | undefined; conversationId: string }): Promise<Session | null>;
+  /** Starts a session that runs a copy of the conversation, its history already read. Resolves with why not, as text, when there is no such conversation of that agent. */
+  resume(input: { name: string; agent: string; group?: string | undefined; conversationId: string }): Promise<Session | string>;
 }
 
 /** One client's live terminal on one session (PROTOCOL.md "Live terminal"); `TermStream` in the daemon. */
@@ -155,6 +157,8 @@ export class Connection {
   /** Set when the pairing behind this connection ended; frames that still arrive are ignored. */
   private over = false;
   private readonly subscriptions = new Set<string>();
+  /** The last `conversations` frame asked for every agent's (PROTOCOL.md "Conversations" `anyAgent`). */
+  private anyAgentConversations = false;
   /** Live terminals this client has open, by session. */
   private readonly terms = new Map<string, TermHandle>();
   private stopWatchingPush: (() => void) | undefined;
@@ -319,8 +323,8 @@ export class Connection {
         }
         const cached = r.screenOf(frame.sessionId);
         if (cached) this.send(cached);
-        // Claude Code and Codex have a transcript to read; the phone hides the plain view for a shell.
-        if (this.d.activity && r.get(frame.sessionId)?.agent !== "shell") {
+        // Agents with a transcript to read say `activity` (PROTOCOL.md "Agents"); the phone hides the plain view for the rest.
+        if (this.d.activity && agentInfo(r.get(frame.sessionId)?.agent ?? "")?.activity) {
           this.send({ type: "activity", sessionId: frame.sessionId, entries: this.entriesFor(this.d.activity.entriesOf(frame.sessionId)), full: true });
         }
         return;
@@ -359,19 +363,24 @@ export class Connection {
         return this.send(await r.history(frame.sessionId, frame.before, frame.count));
       case "seen":
         return r.seen(frame.sessionId);
-      case "session.create":
+      case "session.create": {
+        const agent = agentInfo(frame.agent);
+        if (!agent) return this.fail("bad_frame", `this daemon cannot start ${frame.agent}`, frame.type);
         if (frame.resume !== undefined) {
-          if (frame.agent !== "claude") return this.fail("bad_frame", "only a claude session can resume a conversation", frame.type);
+          if (!agent.conversations) return this.fail("bad_frame", `${agent.name} has no conversations to resume`, frame.type);
           if (!this.d.conversations) return this.fail("bad_frame", "this daemon cannot resume conversations", frame.type);
-          const resumed = await this.d.conversations.resume({ name: frame.name, group: frame.group, conversationId: frame.resume });
-          if (!resumed) return this.fail("bad_frame", `no conversation ${frame.resume} on this Mac`, frame.type);
+          const resumed = await this.d.conversations.resume({ name: frame.name, agent: frame.agent, group: frame.group, conversationId: frame.resume });
+          if (typeof resumed === "string") return this.fail("bad_frame", resumed, frame.type);
         } else {
           await r.create({ name: frame.name, cwd: frame.cwd, agent: frame.agent, group: frame.group });
         }
         return this.send({ type: "sessions", sessions: r.list() });
+      }
       case "conversations":
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
-        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+        // Every reply after this one (a delete, an archive) lists the same agents.
+        this.anyAgentConversations = frame.anyAgent === true;
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list(this.anyAgentConversations) });
       case "conversation.preview": {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         const entries = await this.d.conversations.preview(frame.conversationId);
@@ -382,12 +391,12 @@ export class Connection {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         const refused = await this.d.conversations.delete(frame.conversationId);
         if (refused) return this.fail("bad_frame", `could not delete the conversation: ${refused}`, frame.type);
-        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list(this.anyAgentConversations) });
       }
       case "conversation.archive":
         // Retired (grenade-cli 1.0.14): answered, changes nothing.
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
-        return this.send({ type: "conversations", conversations: await this.d.conversations.list() });
+        return this.send({ type: "conversations", conversations: await this.d.conversations.list(this.anyAgentConversations) });
       case "folders":
         return this.send(await listFolders(frame.path));
       case "session.group": {

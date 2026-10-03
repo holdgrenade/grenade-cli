@@ -87,8 +87,8 @@ describe("ConversationIndex", () => {
     const { index, marks } = setup();
     marks.noteCopy("new", "older-original");
     expect(await index.list()).toEqual([
-      { id: "new", cwd: "/work/app", title: "Glass buttons and badges", lastPrompt: "Glass buttons", updatedAt: new Date(1_790_900_000_000).toISOString(), sessionId: "gr-glass", copyOf: "older-original" },
-      { id: "old", cwd: "/work/app", title: "First thing", lastPrompt: "First thing", updatedAt: new Date(1_790_000_000_000).toISOString(), running: true },
+      { id: "new", agent: "claude", cwd: "/work/app", title: "Glass buttons and badges", lastPrompt: "Glass buttons", updatedAt: new Date(1_790_900_000_000).toISOString(), sessionId: "gr-glass", copyOf: "older-original" },
+      { id: "old", agent: "claude", cwd: "/work/app", title: "First thing", lastPrompt: "First thing", updatedAt: new Date(1_790_000_000_000).toISOString(), running: true },
     ]);
   });
 
@@ -96,7 +96,7 @@ describe("ConversationIndex", () => {
     const { index } = setup();
     expect(await index.trashPaths("old")).toEqual({ refused: "it is open in another terminal; quit Claude Code there first" });
     expect(await index.trashPaths("new")).toEqual({ refused: "it is open in a Grenade session; end that session first" });
-    expect(await index.trashPaths("nope")).toEqual({ refused: "no conversation nope on this Mac" });
+    expect(await index.trashPaths("nope")).toBeNull();
   });
 
   it("refuses one another Claude Code process has open, and takes the folder beside a transcript", async () => {
@@ -107,7 +107,7 @@ describe("ConversationIndex", () => {
     writeFileSync(join(project, "run.jsonl"), user("Hi", "2026-10-02T14:00:00.000Z") + "\n");
     const index = new ConversationIndex({ claudeDir, marks: new ConversationMarks(silentLogger), held: () => new Map(), running: async () => new Set(["run"]) });
     const target = await index.trashPaths("abc");
-    expect("paths" in target && target.paths.map((p) => p.split("/-work-app/")[1])).toEqual(["abc.jsonl", "abc"]);
+    expect(target && "paths" in target && target.paths.map((p) => p.split("/-work-app/")[1])).toEqual(["abc.jsonl", "abc"]);
     expect(await index.trashPaths("run")).toEqual({ refused: "it is open in another terminal; quit Claude Code there first" });
   });
 

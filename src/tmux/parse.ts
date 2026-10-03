@@ -214,10 +214,17 @@ export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "
       if (resume === undefined) return claude;
       if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
       return `${claude} --resume ${resume} --fork-session`;
-    case "codex":
-      return flags.codex ? `codex ${flags.codex}` : "codex";
+    case "codex": {
+      const codex = flags.codex ? `codex ${flags.codex}` : "codex";
+      // A copy, as for Claude Code: `codex fork` starts a new thread with the history and leaves the original alone.
+      if (resume === undefined) return codex;
+      if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
+      return `${codex} fork ${resume}`;
+    }
     case "shell":
       return shell;
+    default:
+      throw new Error(`not an agent this daemon can start: ${agent}`);
   }
 }
 

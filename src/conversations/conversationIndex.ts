@@ -2,19 +2,18 @@
  * The Claude Code conversations saved on this Mac (PROTOCOL.md "Conversations"): `<claude dir>/projects/<folder>/
  * <id>.jsonl`. Lists them for the `conversations` frame, finds one to resume, and reads one for a preview. Reads only;
  * a transcript is read again only when it changed. Grenade's own mark (which conversations are its copies) comes from ConversationMarks. `trashPaths` names
- * what a delete moves to the Trash; the move itself is `trash.ts`.
+ * what a delete moves to the Trash; the move itself is `trash.ts`. Claude Code's ConversationSource; Codex's is
+ * CodexConversations.
  */
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ACTIVITY_KEEP, CONVERSATIONS_MAX, activityEntriesIn, type ActivityEntry, type Conversation } from "@grenade/protocol";
 import { conversationInfoIn, type ConversationInfo } from "./conversationInfo.js";
 import type { ConversationMarks } from "./conversationMarks.js";
+import type { ConversationSource } from "./conversationSource.js";
+import { isDirectoryOnDisk, readEnds } from "./fileEnds.js";
 import { runningConversationIds } from "./runningClaude.js";
-
-/** How much of each end of a transcript a list row is read from. */
-const SLICE = 128 * 1024;
 
 interface Found {
   id: string;
@@ -34,7 +33,8 @@ export interface ConversationIndexOptions {
   isDirectory?(path: string): boolean;
 }
 
-export class ConversationIndex {
+export class ConversationIndex implements ConversationSource {
+  readonly agent = "claude";
   private readonly cache = new Map<string, { mtimeMs: number; size: number; info: ConversationInfo | null }>();
 
   constructor(private readonly opts: ConversationIndexOptions) {}
@@ -54,6 +54,7 @@ export class ConversationIndex {
       const copyOf = this.opts.marks.copyOf(f.id);
       out.push({
         id: f.id,
+        agent: this.agent,
         cwd: info.cwd,
         title: info.title,
         ...(info.lastPrompt !== undefined ? { lastPrompt: info.lastPrompt } : {}),
@@ -78,11 +79,11 @@ export class ConversationIndex {
   /**
    * What deleting a conversation moves to the Trash: its transcript and the folder of the same name beside it
    * (subagents, tool results), or why it may not be deleted. Grenade's session would write it again, and so would
-   * another Claude Code process.
+   * another Claude Code process. Null when there is no conversation with that id.
    */
-  async trashPaths(id: string): Promise<{ paths: string[] } | { refused: string }> {
+  async trashPaths(id: string): Promise<{ paths: string[] } | { refused: string } | null> {
     const f = (await this.scan()).find((c) => c.id === id);
-    if (!f) return { refused: `no conversation ${id} on this Mac` };
+    if (!f) return null;
     if (this.opts.held().has(id)) return { refused: "it is open in a Grenade session; end that session first" };
     const running = await (this.opts.running?.() ?? runningConversationIds(join(this.opts.claudeDir, "sessions")));
     if (running.has(id)) return { refused: "it is open in another terminal; quit Claude Code there first" };
@@ -122,33 +123,5 @@ export class ConversationIndex {
     const info = conversationInfoIn(head, tail);
     this.cache.set(f.path, { mtimeMs: f.mtimeMs, size: f.size, info });
     return info;
-  }
-}
-
-/** The first and last SLICE bytes of a file; the whole file twice when it is small. */
-async function readEnds(path: string, size: number): Promise<{ head: string; tail: string }> {
-  const file = await open(path, "r");
-  try {
-    if (size <= 2 * SLICE) {
-      const all = Buffer.alloc(size);
-      await file.read(all, 0, size, 0);
-      const text = all.toString("utf8");
-      return { head: text, tail: text };
-    }
-    const head = Buffer.alloc(SLICE);
-    const tail = Buffer.alloc(SLICE);
-    await file.read(head, 0, SLICE, 0);
-    await file.read(tail, 0, SLICE, size - SLICE);
-    return { head: head.toString("utf8"), tail: tail.toString("utf8") };
-  } finally {
-    await file.close();
-  }
-}
-
-function isDirectoryOnDisk(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
   }
 }

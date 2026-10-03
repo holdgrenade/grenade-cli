@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** The `grenade` CLI. Talks to a running daemon over the loopback control API. */
 import { spawnSync } from "node:child_process";
+import { AGENTS, isKnownAgent, type KnownAgent } from "./agents/agentCatalog.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
@@ -185,7 +186,7 @@ program
   .option("--agent <agent>", "claude | codex | shell", parseAgent, "claude")
   .option("--with <session>", "join that session's group instead of the folder's")
   .option("--alone", "start in a group of its own instead of joining the folder's")
-  .action(async (name: string, o: { cwd: string; agent: "claude" | "codex" | "shell"; with?: string; alone?: boolean }) => {
+  .action(async (name: string, o: { cwd: string; agent: KnownAgent; with?: string; alone?: boolean }) => {
     if (o.with && o.alone) throw new Error("use --with or --alone, not both");
     const group = o.with ? (await findSession(o.with)).group : undefined;
     let s = await control<Session>("POST", "/sessions", { name, cwd: resolveDir(o.cwd), agent: o.agent, group });
@@ -364,9 +365,9 @@ function parsePort(v: string): number {
   return n;
 }
 
-function parseAgent(v: string): "claude" | "codex" | "shell" {
-  if (v === "claude" || v === "codex" || v === "shell") return v;
-  throw new InvalidArgumentError("agent must be claude, codex or shell");
+function parseAgent(v: string): KnownAgent {
+  if (isKnownAgent(v)) return v;
+  throw new InvalidArgumentError(`agent must be ${AGENTS.map((a) => a.kind).join(", ")}`);
 }
 
 function resolveDir(dir: string): string {

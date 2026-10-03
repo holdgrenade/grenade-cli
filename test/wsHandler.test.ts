@@ -408,22 +408,33 @@ describe("Connection: conversations", () => {
   const glass = { id: "9a76de47-6489-4620-8e10-4bf9c4d12b09", cwd: "/tmp", title: "Glass buttons", updatedAt: "2026-10-02T14:31:00.000Z" };
   function withConversations() {
     const calls: string[] = [];
+    const lists: boolean[] = [];
     const port: ConversationsPort = {
-      async list() { return calls.includes(`delete:${glass.id}`) ? [] : [glass]; },
+      async list(anyAgent) { lists.push(anyAgent); return calls.includes(`delete:${glass.id}`) ? [] : [glass]; },
       async preview(id) { return id === glass.id ? [{ kind: "asked", text: "Make it glass", at: "2026-10-02T14:14:10.000Z" }, { kind: "stopped", text: "Stopped", at: "2026-10-02T14:15:00.000Z" }] : null; },
       async delete(id) {
         calls.push(`delete:${id}`);
         return id === glass.id ? null : "it is open in a Grenade session; end that session first";
       },
-      async resume({ name, conversationId }) {
+      async resume({ name, agent, conversationId }) {
         calls.push(`resume:${name}:${conversationId}`);
-        return conversationId === glass.id ? { ...session, id: `gr-${name}`, name, resumedFrom: conversationId } : null;
+        return conversationId === glass.id && agent === "claude" ? { ...session, id: `gr-${name}`, name, resumedFrom: conversationId } : `no ${agent} conversation ${conversationId} on this Mac`;
       },
     };
-    return { port, calls };
+    return { port, calls, lists };
   }
   const hello = (platform = "ios", version = "1.0.13") =>
     JSON.stringify({ type: "hello", protocol: 1, token: "grt_example_token", client: { name: "Phone", platform, version } });
+
+  it("lists every agent's conversations only to a client that asks with anyAgent, and keeps to it for a delete", async () => {
+    const { port, lists } = withConversations();
+    const { conn } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    await conn.handleMessage(JSON.stringify({ type: "conversations" }));
+    await conn.handleMessage(JSON.stringify({ type: "conversations", anyAgent: true }));
+    await conn.handleMessage(JSON.stringify({ type: "conversation.delete", conversationId: glass.id }));
+    expect(lists).toEqual([false, true, true]);
+  });
 
   it("lists, previews and deletes", async () => {
     const { port, calls } = withConversations();
@@ -484,13 +495,21 @@ describe("Connection: conversations", () => {
     expect(out[0]).toMatchObject({ type: "sessions" });
   });
 
-  it("refuses resume for an agent other than claude, and every conversation frame without the port", async () => {
-    const { port } = withConversations();
+  it("refuses an agent it cannot start, resume for one without conversations or of the wrong agent, and every conversation frame without the port", async () => {
+    const { port, calls } = withConversations();
     const a = connect({ conversations: port });
     await a.conn.handleMessage(hello());
     a.out.length = 0;
+    await a.conn.handleMessage(JSON.stringify({ type: "session.create", name: "x", cwd: "/tmp", agent: "aider" }));
+    await a.conn.handleMessage(JSON.stringify({ type: "session.create", name: "x", cwd: "/tmp", agent: "shell", resume: glass.id }));
     await a.conn.handleMessage(JSON.stringify({ type: "session.create", name: "x", cwd: "/tmp", agent: "codex", resume: glass.id }));
-    expect(a.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.create" });
+    expect(a.out).toMatchObject([
+      { type: "error", code: "bad_frame", ref: "session.create", message: "this daemon cannot start aider" },
+      { type: "error", code: "bad_frame", ref: "session.create", message: "Shell has no conversations to resume" },
+      { type: "error", code: "bad_frame", ref: "session.create", message: `no codex conversation ${glass.id} on this Mac` },
+    ]);
+    // Only the Codex one got as far as the port, which knows which agent each conversation is.
+    expect(calls.filter((c) => c.startsWith("resume:"))).toEqual([`resume:x:${glass.id}`]);
     const b = connect();
     await b.conn.handleMessage(hello());
     b.out.length = 0;

@@ -24,7 +24,10 @@ import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
+import { AGENTS } from "../agents/agentCatalog.js";
+import { CodexConversations } from "../conversations/codexConversations.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
+import { AllConversations } from "../conversations/conversationSource.js";
 import { ConversationMarks } from "../conversations/conversationMarks.js";
 import { moveToTrash } from "../conversations/trash.js";
 import { conversationIdOf, heldConversations } from "../conversations/heldConversations.js";
@@ -75,6 +78,8 @@ export interface DaemonOptions {
   sessionsPath?: string | null;
   /** Claude Code's folder, where past conversations are read from (PROTOCOL.md "Conversations"). Default: paths.claudeDir. */
   claudeDir?: string;
+  /** Codex's folder, where its past conversations are read from. Default: paths.codexDir. */
+  codexDir?: string;
   /** Mirror sessions into terminal tabs. Default `auto`: iTerm2 when it is installed (checked at every event), else Terminal.app. */
   terminal?: TerminalKind;
   /** One-sentence session summaries via `claude -p` (Haiku). Defaults to on unless `GRENADE_SUMMARIES=off`. */
@@ -119,7 +124,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, codexActivity: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) } });
@@ -225,16 +230,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     readActivity(id, path).catch((e) => log.debug("Could not read the activity from a saved transcript", { session: id, path, error: e }));
   }
 
-  // Past Claude Code conversations (PROTOCOL.md "Conversations"). Read only; Grenade's marks live beside sessions.json.
+  // Past conversations of every agent that keeps them (PROTOCOL.md "Conversations"). Read only; Grenade's marks live beside sessions.json.
   const marksPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "conversations.json") : paths.conversations;
   const marks = new ConversationMarks(log, marksPath);
-  const conversationIndex = new ConversationIndex({
-    claudeDir: opts.claudeDir ?? paths.claudeDir,
-    marks,
-    held: () => heldConversations(registry.transcripts(), (id) => (registry.get(id)?.status ?? "gone") !== "gone"),
-  });
+  const held = () => heldConversations(registry.transcripts(), (id) => (registry.get(id)?.status ?? "gone") !== "gone");
+  const conversationIndex = new AllConversations([
+    new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }),
+    new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held }),
+  ]);
   const conversations: ConversationsPort = {
-    list: () => conversationIndex.list(),
+    list: (anyAgent) => conversationIndex.list(anyAgent),
     preview: (id) => conversationIndex.preview(id),
     async delete(id) {
       const target = await conversationIndex.trashPaths(id);
@@ -248,11 +253,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       log.info(`Moved conversation ${id} to the Trash`, { paths: target.paths.join(",") });
       return null;
     },
-    async resume({ name, group, conversationId }) {
+    async resume({ name, agent, group, conversationId }) {
       const found = await conversationIndex.find(conversationId);
-      if (!found) return null;
-      const session = await registry.create({ name, cwd: found.cwd, agent: "claude", group, resume: conversationId });
-      // Claude Code writes the copy only with its first prompt; until then the session shows the original's history.
+      if (!found || found.agent !== agent) return `no ${agent} conversation ${conversationId} on this Mac`;
+      const session = await registry.create({ name, cwd: found.cwd, agent, group, resume: conversationId });
+      // The agent writes the copy only with its first prompt; until then the session shows the original's history.
       // Read whole here, not through the reader, whose place in that file may belong to another session.
       registry.setTranscript(session.id, found.path);
       const history = await conversationIndex.preview(conversationId);
