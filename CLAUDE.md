@@ -180,7 +180,7 @@ scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks 
 scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
 scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the offer, pairs with its secret on this Mac or `--via relay`, says hello
 scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
-packaging/homebrew/        formula.mjs (the template, pure) and grenade.rb (generated; goes into the tap as Formula/grenade.rb)
+packaging/homebrew/        formula.mjs (the template, pure; its `homepage` is the website, its `url` this repo's releases) and grenade.rb (generated; goes into the tap as Formula/grenade.rb)
 scripts/formula-from-tarball.mjs  writes packaging/homebrew/grenade.rb from a tarball already on the GitHub release (its sha256), what the workflow puts in the tap
 .github/workflows/release.yml  on every push to main: the `linux` job (in an Arch Linux container, what Omarchy is: tests, then `scripts/smoke.mjs` against a real tmux; Ubuntu 24.04's tmux 3.4 keeps 2000 rows of scrollback whatever `history-limit` says before `respawn-pane`, which the smoke run does not accept), then tests on macOS; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
 test/                      vitest; wsHandler.test.ts replays every ../grenade-protocol/fixtures/client.*.json
