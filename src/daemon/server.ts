@@ -35,6 +35,7 @@ import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
 import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
+import { ScreenPrompts } from "../prompts/screenPrompts.js";
 import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
 import { readBody, sendJson } from "./http.js";
@@ -377,6 +378,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const promptTests = new PromptTests(prompts);
   prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
   prompts.on("answered", (id) => registry.applyHook(id, "working"));
+  // Codex's startup dialogs, read off the screen, are cards too (PROTOCOL.md "Codex dialogs").
+  new ScreenPrompts(registry, prompts, log);
   registry.on("removed", (id) => {
     prompts.closeSession(id);
     activity.forget(id);

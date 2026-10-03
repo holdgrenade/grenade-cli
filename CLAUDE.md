@@ -126,7 +126,9 @@ src/hooks/installCodexHooks.ts  pure: Grenade's Codex hooks, `codexHookFlags` (`
 src/hooks/shellQuote.ts    pure: one word for the shell tmux runs the agent's command line in
 src/daemon/codexHooks.ts   POST /hooks/codex?session=… → registry.applyHook (`statusForCodexHook`); the prompt goes to the Summarizer and the ActivityStore, `model` to registry.setModel, `transcript_path` (the rollout) to registry.setTranscript and the TranscriptReader
 src/daemon/promptHook.ts   POST /hooks/claude/prompt: `openPromptFromHook` (pure but for the store) and the HTTP wrapper that holds the response; `closePromptsByHook` for hooks that reach /hooks/claude
-src/prompts/promptStore.ts PromptStore: the prompts Claude Code is showing, each with the callback that answers its held request; `open`, `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered`
+src/prompts/promptStore.ts PromptStore: the prompts an agent is showing, each with the callback that answers its held request (`open`) or the keys that answer a dialog on the screen (`openScreen`, `close`); `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered` (hook prompts only)
+src/prompts/codexDialogs.ts pure: `codexDialogIn(lines)`, Codex's "Hooks need review" and "Trust this folder?" as a question prompt and the keys of each option (arrows from the `›` row, Enter)
+src/prompts/screenPrompts.ts ScreenPrompts: listens to the registry's `captured`, opens a card when a Codex screen shows a dialog (and `registry.asks`), closes it when the screen moves on, types the chosen option
 src/prompts/promptText.ts  pure: one line that says what a prompt asks, for its push
 src/prompts/promptTests.ts PromptTests: test cards (`grenade prompt test`); `testPayload(kind)` is a payload as Claude Code sends it, `start` opens it in the store with nothing behind it, `result` resolves with the reply the phone's answer became
 src/cli/promptCommand.ts   `grenade prompt test`; src/cli/promptAnswer.ts (pure) reads the answer off the hook reply, in words
@@ -205,7 +207,7 @@ A phone hands the agent a screenshot with an `attachment` frame (PROTOCOL.md "At
 
 ## How status is derived (`src/sessions/status.ts`)
 
-Pure reducer over events `{hook, output, seen, gone}`; the registry feeds it timestamps.
+Pure reducer over events `{hook, output, asks, seen, gone}`; the registry feeds it timestamps. `asks` (a Codex dialog on the screen) is `waiting` / `answer` without `hookDriven`, and leaves an `idle` session that has seen it alone.
 
 - New session starts `working`.
 - Heuristic (any agent until a hook speaks): screen changed → `working`; no change for 1.5 s while `working` → `waiting`.
@@ -235,6 +237,7 @@ Read PROTOCOL.md "Prompt hook" and "Prompts" first. A phone can answer a permiss
 - Replies never carry `updatedPermissions`: an answer from the phone counts once.
 - Open prompts are in memory only. `stop()` calls `closeAll()` first, because a held request would keep the HTTP server from closing.
 - `grenade prompt test` puts a test card on a session (the named one, else the first that is running) through `POST /prompts/test` on the control API and waits on `GET /prompts/test/:id`. It goes through the same store, frames and reply builder as a real prompt; only the held hook request is missing, so no agent is asked and nothing runs. It does not change the session's status and sends no push, and the hooks of the session's agent do not close it (`test` in the store), so it can sit on a session that is busy.
+- Codex's startup dialogs (PROTOCOL.md "Codex dialogs"): `registry.updateScreen` emits `captured` for every changed capture; `ScreenPrompts` runs `codexDialogIn` on Codex sessions, opens one card per dialog through `openScreen` (status `asks`, so a session whose hooks never get trusted stays heuristic), answers with `registry.sendKey` per key, and closes the card with `elsewhere` once the screen no longer shows that dialog. A screen card sends no `answered` (the screen says what happens next) and no hook closes it. Tested end to end on 2026-10-02: Codex 0.160 started by a test daemon (own `GRENADE_HOME`, `CODEX_HOME`, ports 17788/17789, `TMUX_BIN` wrapper on a private `-S` socket), a scripted phone answered Trust, Codex saved all seven hooks as trusted and they reported.
 - To try it without touching the running daemon or `~/.claude/settings.json`: write `mergeHooks({}, 7799).settings` to a file, put a `claude` wrapper that adds `--settings <file>` first on `PATH`, point `TMUX_BIN` at a wrapper that runs `tmux -L <name>`, and start a daemon with its own `GRENADE_HOME` on other ports.
 
 ## Summaries (`src/summary/`)

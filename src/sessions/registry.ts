@@ -30,6 +30,8 @@ export interface RegistryEvents {
   regrouped: [session: Session, from: string | undefined];
   removed: [sessionId: string];
   screen: [frame: ScreenFrame];
+  /** A capture whose content changed, subscribed or not: what reads dialogs off the screen listens to it. */
+  captured: [sessionId: string, agent: AgentKind, lines: string[]];
 }
 
 interface Record_ {
@@ -394,6 +396,12 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     return true;
   }
 
+  /** The screen shows a dialog the agent waits on: `waiting` for an answer, status still read from the screen. */
+  asks(id: string): void {
+    const r = this.records.get(id);
+    if (r) this.setState(r, reduceStatus(r.state, { kind: "asks", at: this.now() }));
+  }
+
   /** A hook has spoken for this session: its status no longer comes from watching the screen. */
   hookDriven(id: string): boolean {
     return this.records.get(id)?.state.hookDriven ?? false;
@@ -439,6 +447,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     // that changed without touching any of those (an agent's spinner, say) used to send one five times a second,
     // and every phone re-sorted and redrew its whole list for nothing.
     if (before !== r.session) this.emit("updated", r.session);
+    if (changed) this.emit("captured", id, r.session.agent, screen.lines);
     return changed;
   }
 

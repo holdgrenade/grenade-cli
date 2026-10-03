@@ -36,6 +36,11 @@ export type StatusEvent =
   | { kind: "hook"; status: SessionStatus; waitingFor?: WaitingFor | undefined; at: number }
   /** `busy`: what the screen says, for an agent whose screen shows it (Claude Code's spinner); absent otherwise. */
   | { kind: "output"; changed: boolean; busy?: boolean | undefined; at: number }
+  /**
+   * The screen shows a dialog the agent waits on (a Codex startup dialog, PROTOCOL.md "Codex dialogs"): waiting for
+   * an answer, without making the session hook-driven, since its hooks may never run.
+   */
+  | { kind: "asks"; at: number }
   | { kind: "seen"; at: number }
   | { kind: "gone"; at: number };
 
@@ -57,6 +62,10 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
       if (hooked.status === "idle" && hooked.waitingFor === reason) return hooked;
       return wait(hooked, reason, e.at);
     }
+    case "asks":
+      // Seen already: the same dialog stays up, and the user knows.
+      if (s.status === "idle" && s.waitingFor === "answer") return s;
+      return wait(s, "answer", e.at);
     case "seen":
       // A turn that stopped partway is not over because someone looked at it: it waits until the user goes on.
       return s.status === "waiting" && s.waitingFor !== "stopped" ? set(s, "idle", e.at) : s;
