@@ -170,6 +170,32 @@ describe("activity after a restart", () => {
   });
 });
 
+describe("Codex hooks", () => {
+  it("bring a Codex session's activity from its rollout, its model and its status", async () => {
+    const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
+    const dir = mkdtempSync(join(home, "codex-"));
+    const rollout = join(dir, "rollout.jsonl");
+    writeFileSync(rollout, readFileSync(join(fixtures, "codex.rollout.examples.jsonl")));
+    const sessionsPath = join(dir, "sessions.json");
+    writeFileSync(sessionsPath, JSON.stringify([{ id: "gr-cx", name: "cx", agent: "codex", cwd: dir, createdAt: "2026-10-02T14:00:00.000Z" }]));
+    const live: Tmux = { ...tmux, async listSessions() { return ["gr-cx"]; } };
+    const { d, base, pairPlain } = await daemon({ allowPlainLan: true, tmux: live, sessionsPath });
+    const { token } = (await pairPlain()).body;
+    const p = await phone(d.port, Buffer.alloc(0), false);
+    p.hello(token ?? "");
+    await until(() => p.types().includes("welcome"));
+    expect(p.frames.find((f) => f.type === "welcome")).toMatchObject({ daemon: { codexActivity: 1 } });
+    p.send({ type: "subscribe", sessionId: "gr-cx" });
+    const stop = { hook_event_name: "Stop", session_id: "s", transcript_path: rollout, model: "gpt-6-luna", last_assistant_message: "done" };
+    const res = await fetch(`${base}/hooks/codex?session=gr-cx`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(stop) });
+    expect(await res.json()).toEqual({ ok: true, applied: "waiting" });
+    const expected = JSON.parse(readFileSync(join(fixtures, "daemon.activity.codex.json"), "utf8")) as { entries: unknown[] };
+    await until(() => p.frames.some((f) => f.type === "activity" && f.entries.length > 0));
+    expect(p.frames.filter((f) => f.type === "activity").flatMap((f) => (f.type === "activity" ? f.entries : []))).toEqual(expected.entries);
+    await until(() => p.frames.some((f) => f.type === "session.updated" && f.session.model === "gpt-6-luna" && f.session.waitingFor === "done"));
+  });
+});
+
 describe("the pairing code", () => {
   it("comes with check digits for this daemon's key", async () => {
     const { control, key } = await daemon();

@@ -36,6 +36,24 @@ export function hooksNotice(settingsPath: string, added: AddedHook[]): string[] 
   return lines;
 }
 
+/** The same for Codex's hooks.json, with the one step Codex adds: trusting the hooks once. */
+export function codexHooksNotice(hooksPath: string, added: AddedHook[]): string[] {
+  const events = added.map((h) => h.event).join(", ");
+  const runs = added[0]?.runs ?? "";
+  return [
+    `Grenade can add ${added.length} hook${added.length === 1 ? "" : "s"} to ${hooksPath}`,
+    `so the phone shows what Codex was asked and said, and knows when it is working and when it waits for you.`,
+    ``,
+    `  On    ${events}`,
+    `  Runs  ${runs}`,
+    ``,
+    `Codex runs new hooks only once you trust them: the next Codex you start shows "Hooks need review".`,
+    `Pick "Trust all and continue", in the terminal or from the phone. Until then the phone guesses from the screen.`,
+    `Each hook talks to the daemon on this Mac (127.0.0.1), and only inside a Grenade session.`,
+    `Take them out again with: grenade install-hooks --remove`,
+  ];
+}
+
 function entries(settings: unknown): AddedHook[] {
   const hooks = isObject(settings) && isObject(settings["hooks"]) ? settings["hooks"] : {};
   const out: AddedHook[] = [];

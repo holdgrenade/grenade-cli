@@ -1,6 +1,6 @@
 /**
  * grenaded: wires everything together.
- *   :7788  HTTP  POST /pair, POST /hooks/claude and /hooks/claude/prompt (loopback only), GET /health   +   WebSocket at /ws (encrypted, src/daemon/lanSocket.ts)
+ *   :7788  HTTP  POST /pair, POST /hooks/claude, /hooks/claude/prompt and /hooks/codex (loopback only), GET /health   +   WebSocket at /ws (encrypted, src/daemon/lanSocket.ts)
  *   127.0.0.1:7789  control API for the CLI
  *   relay link (optional)  phones away from the LAN, end-to-end encrypted (src/relay/)
  */
@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
+import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, codexActivityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
 import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.js";
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
@@ -34,6 +34,7 @@ import { createControlServer } from "./control.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
 import { handleClaudeHook } from "./hooks.js";
+import { handleCodexHook } from "./codexHooks.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { isLoopback } from "./loopback.js";
@@ -115,7 +116,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1 };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, codexActivity: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
   const tmux = opts.tmux ?? createTmux();
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
@@ -150,6 +151,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         closePromptsByHook(prompts, session, body);
         return sendJson(res, r.status, r.body);
       }
+      if (req.method === "POST" && url.pathname === "/hooks/codex") {
+        if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
+        const r = applyCodexHook(url.searchParams.get("session"), await readBody(req));
+        return sendJson(res, r.status, r.body);
+      }
       if (req.method === "POST" && url.pathname === PROMPT_HOOK_PATH) {
         if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
         return await handlePromptHook(req, res, { prompts, applyHook: (id, body) => applyClaudeHook(id, body).status === 200, log });
@@ -164,9 +170,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
   const activity = new ActivityStore();
   const transcripts = new TranscriptReader();
-  /** Reads a session's transcript: new activity into the store, a moved working directory and a new title into the session. */
+  /**
+   * Reads a session's transcript: new activity into the store, a moved working directory and a new title into the
+   * session. A Codex session's transcript is its rollout, read by Codex's rule; only Claude Code's says more.
+   */
   const readActivity = (id: string, path: string) =>
     transcripts.readChunk(path).then(({ jsonl, fromStart }) => {
+      if (registry.get(id)?.agent === "codex") {
+        const entries = codexActivityEntriesIn(jsonl);
+        activity.append(id, entries);
+        return entries;
+      }
       const entries = activityEntriesIn(jsonl);
       // A resumed session's copy repeats the whole history: it takes the place of what the store holds.
       if (fromStart && registry.get(id)?.resumedFrom !== undefined) activity.replace(id, entries);
@@ -193,6 +207,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     registry.applyHook(id, "idle");
     return true;
   });
+  // Codex says when Esc stopped a turn (`Interrupt`), but may write `turn_aborted` to its rollout a moment later:
+  // read until it is there.
+  const codexStopCatchUp = new CatchUp(async (id, path) => (await readActivity(id, path)).some((e) => e.kind === "stopped"));
   const interrupted = (id: string) => {
     const session = registry.get(id);
     const path = registry.transcriptOf(id);
@@ -271,6 +288,27 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       (id, message) => push.pusher.noteAsked(id, message),
     );
 
+  /** One Codex hook event: status, summary input, model and activity (PROTOCOL.md "Codex hooks"). */
+  const applyCodexHook = (session: string | null, body: string) =>
+    handleCodexHook(registry, session, body, log, {
+      onModel: (id, model) => registry.setModel(id, model),
+      onPrompt: (id, prompt) => {
+        summarizer?.notePrompt(id, prompt);
+        activity.noteAsked(id, prompt, new Date().toISOString());
+      },
+      onTranscript: (id, path, event) => {
+        registry.setTranscript(id, path);
+        catchUp.cancel(id);
+        codexStopCatchUp.cancel(id);
+        readActivity(id, path)
+          .then((entries) => {
+            if (event === "Stop" && !entries.some((e) => e.kind === "said")) catchUp.start(id, path);
+            if (event === "Interrupt" && !entries.some((e) => e.kind === "stopped")) codexStopCatchUp.start(id, path);
+          })
+          .catch((e) => log.debug("Could not read the activity from a Codex rollout", { session: id, path, error: e }));
+      },
+    });
+
   function handlePair(raw: string, res: Parameters<typeof sendJson>[0]): void {
     // The code and the token would cross the Wi‑Fi in the clear.
     if (!allowPlainLan) return sendJson(res, 426, { error: "encryption_required" });
@@ -341,6 +379,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     activity.forget(id);
     catchUp.cancel(id);
     interruptCatchUp.cancel(id);
+    codexStopCatchUp.cancel(id);
   });
   registry.on("updated", (s) => {
     if (s.status === "gone") prompts.closeSession(s.id);
@@ -546,6 +585,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       summarizer?.stop();
       catchUp.stop();
       interruptCatchUp.stop();
+      codexStopCatchUp.stop();
       await discovery?.stop();
       for (const c of wss.clients) c.close(1001, "daemon stopping");
       await Promise.all([closeServer(wss), closeServer(http), closeServer(control)]);

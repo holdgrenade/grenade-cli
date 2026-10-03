@@ -319,8 +319,8 @@ export class Connection {
         }
         const cached = r.screenOf(frame.sessionId);
         if (cached) this.send(cached);
-        // Only Claude Code has a transcript to read; the phone hides the plain view for the others.
-        if (this.d.activity && r.get(frame.sessionId)?.agent === "claude") {
+        // Claude Code and Codex have a transcript to read; the phone hides the plain view for a shell.
+        if (this.d.activity && r.get(frame.sessionId)?.agent !== "shell") {
           this.send({ type: "activity", sessionId: frame.sessionId, entries: this.entriesFor(this.d.activity.entriesOf(frame.sessionId)), full: true });
         }
         return;

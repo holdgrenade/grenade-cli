@@ -18,6 +18,8 @@ import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.j
 import { startDaemon } from "./daemon/server.js";
 import { isTerminalKind, type TerminalKind } from "./terminal/mirror.js";
 import { mergeHooks, removeHooks } from "./hooks/installHooks.js";
+import { findRequirements } from "./setup/findRequirements.js";
+import { mergeCodexHooks, removeCodexHooks } from "./hooks/installCodexHooks.js";
 import { loadRelayConfig, normalizeRelayUrl, relayConfigFor, removeRelayConfig, saveRelayConfig } from "./relay/relayConfig.js";
 import type { RelayStatus } from "./relay/relayLink.js";
 import { sessionIdFor } from "./tmux/parse.js";
@@ -252,18 +254,32 @@ program
 
 program
   .command("install-hooks")
-  .description("let Claude Code report its status to grenaded (edits ~/.claude/settings.json)")
+  .description("let Claude Code and Codex report to grenaded (edits ~/.claude/settings.json and ~/.codex/hooks.json)")
   .option("--port <port>", "daemon port the hooks post to", parsePort, DEFAULT_PORT)
   .option("--print", "print the resulting settings instead of writing")
   .option("--remove", "remove Grenade hooks")
-  .action((o: { port: number; print?: boolean; remove?: boolean }) => {
-    const current = existsSync(paths.claudeSettings) ? JSON.parse(readFileSync(paths.claudeSettings, "utf8")) : {};
-    const { settings, changed } = o.remove ? removeHooks(current) : mergeHooks(current, o.port);
-    if (o.print) return console.log(JSON.stringify(settings, null, 2));
-    if (!changed) return console.log(`nothing to do: ${paths.claudeSettings} already up to date`);
-    mkdirSync(dirname(paths.claudeSettings), { recursive: true });
-    writeFileSync(paths.claudeSettings, JSON.stringify(settings, null, 2) + "\n");
-    console.log(`${o.remove ? "removed Grenade hooks from" : "installed Grenade hooks in"} ${paths.claudeSettings}`);
+  .option("--no-codex", "leave ~/.codex/hooks.json alone")
+  .action((o: { port: number; print?: boolean; remove?: boolean; codex: boolean }) => {
+    const files = [{ path: paths.claudeSettings, merge: mergeHooks, remove: removeHooks }];
+    // Codex's hooks go in only where Codex is; taking them out works either way.
+    if (o.codex && (o.remove || existsSync(paths.codexDir) || findRequirements().codex)) files.push({ path: paths.codexHooks, merge: mergeCodexHooks, remove: removeCodexHooks });
+    for (const f of files) {
+      if (o.remove && !existsSync(f.path)) continue;
+      const current = existsSync(f.path) ? JSON.parse(readFileSync(f.path, "utf8")) : {};
+      const { settings, changed } = o.remove ? f.remove(current) : f.merge(current, o.port);
+      if (o.print) {
+        console.log(`${f.path}:\n${JSON.stringify(settings, null, 2)}`);
+        continue;
+      }
+      if (!changed) {
+        console.log(`nothing to do: ${f.path} already up to date`);
+        continue;
+      }
+      mkdirSync(dirname(f.path), { recursive: true });
+      writeFileSync(f.path, JSON.stringify(settings, null, 2) + "\n");
+      console.log(`${o.remove ? "removed Grenade hooks from" : "installed Grenade hooks in"} ${f.path}`);
+      if (!o.remove && f.path === paths.codexHooks) console.log(`Codex asks to trust them the next time it starts: pick "Trust all and continue".`);
+    }
   });
 
 program.parseAsync(process.argv).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));

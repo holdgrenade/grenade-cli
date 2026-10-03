@@ -28,6 +28,9 @@ export const paths = {
   // Claude Code keeps its settings, transcripts and process files in CLAUDE_CONFIG_DIR when that is set.
   claudeDir: process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"),
   claudeSettings: join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "settings.json"),
+  // Codex keeps its config, hooks and rollouts in CODEX_HOME when that is set.
+  codexDir: process.env["CODEX_HOME"] ?? join(homedir(), ".codex"),
+  codexHooks: join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "hooks.json"),
 };
 
 export function ensureDir(): void {

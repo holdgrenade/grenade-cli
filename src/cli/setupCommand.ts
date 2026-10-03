@@ -1,5 +1,6 @@
 /**
- * `grenade setup`: the whole first run in one command. Checks what Grenade needs, offers the Claude Code hooks,
+ * `grenade setup`: the whole first run in one command. Checks what Grenade needs, offers the Claude Code hooks (and
+ * Codex's, when Codex is here),
  * starts grenaded at login, offers the relay, and ends on the QR code for the phone. Every step that is already
  * done is skipped, so it is safe to run again.
  */
@@ -10,13 +11,14 @@ import type { Command } from "commander";
 import { DEFAULT_PORT } from "@grenade/protocol";
 import { paths } from "../config.js";
 import type { Device } from "../daemon/devices.js";
+import { mergeCodexHooks } from "../hooks/installCodexHooks.js";
 import { mergeHooks } from "../hooks/installHooks.js";
 import type { RelayStatus } from "../relay/relayLink.js";
 import { serviceStatus } from "../service/launchd.js";
 import { SERVICE_LABEL } from "../service/launchdPlist.js";
 import { askYesNo } from "../setup/ask.js";
 import { findRequirements } from "../setup/findRequirements.js";
-import { addedHooks, hooksNotice } from "../setup/hooksNotice.js";
+import { addedHooks, codexHooksNotice, hooksNotice } from "../setup/hooksNotice.js";
 import { nextSteps } from "../setup/nextSteps.js";
 import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
 import { problems } from "../setup/requirements.js";
@@ -37,7 +39,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
     .command("setup")
     .description("set Grenade up on this Mac: hooks, start at login, relay, then pair your phone")
     .option("-y, --yes", "take the suggested answer to every question")
-    .option("--no-hooks", "leave ~/.claude/settings.json alone")
+    .option("--no-hooks", "leave ~/.claude/settings.json and ~/.codex/hooks.json alone")
     .option("--no-service", "do not start grenaded at login")
     .option("--no-relay", "do not turn on the relay")
     .option("--no-pair", "stop before pairing a phone")
@@ -46,9 +48,11 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       const ask = (question: string, unattended: boolean) => askYesNo(question, { defaultYes: true, assumeYes: o.yes === true, unattended });
       step(1, "What Grenade needs");
       await requirements(ask);
-      step(2, "Claude Code hooks");
-      if (o.hooks) await hooks(ask);
-      else console.log("skipped (--no-hooks). The phone guesses the status from screen changes.");
+      step(2, "Agent hooks");
+      if (o.hooks) {
+        await hooks(ask);
+        if (hasCodex()) await codexHooks(ask);
+      } else console.log("skipped (--no-hooks). The phone guesses the status from screen changes.");
       step(3, "Start at login");
       if (!(await daemon(d, o.service, o.label, ask))) return;
       step(4, "Reach this Mac from anywhere");
@@ -102,6 +106,24 @@ async function hooks(ask: Ask): Promise<void> {
   mkdirSync(dirname(paths.claudeSettings), { recursive: true });
   writeFileSync(paths.claudeSettings, JSON.stringify(settings, null, 2) + "\n");
   console.log(`added the hooks to ${paths.claudeSettings}`);
+}
+
+/** Codex is on the PATH, or has left its folder (a Codex app install, say). */
+function hasCodex(): boolean {
+  return findRequirements().codex || existsSync(paths.codexDir);
+}
+
+async function codexHooks(ask: Ask): Promise<void> {
+  const current: unknown = existsSync(paths.codexHooks) ? JSON.parse(readFileSync(paths.codexHooks, "utf8")) : {};
+  const { settings, changed } = mergeCodexHooks(current, DEFAULT_PORT);
+  if (!changed) return console.log(`ok: the Codex hooks are already in ${paths.codexHooks}`);
+  console.log("");
+  for (const line of codexHooksNotice(paths.codexHooks, addedHooks(current, settings))) console.log(line);
+  console.log("");
+  if (!(await ask("Add the Codex hooks?", false))) return console.log("left alone. Add them later with: grenade install-hooks");
+  mkdirSync(dirname(paths.codexHooks), { recursive: true });
+  writeFileSync(paths.codexHooks, JSON.stringify(settings, null, 2) + "\n");
+  console.log(`added the Codex hooks to ${paths.codexHooks}`);
 }
 
 /** Returns false when there is no daemon to go on with. */

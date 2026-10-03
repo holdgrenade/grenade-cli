@@ -12,7 +12,7 @@ grenade setup                            # hooks, start at login, relay, then a 
 `grenade setup` asks before it changes anything and skips what is already done:
 
 1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing. iTerm2 is not needed (see below).
-2. It shows the Claude Code hooks it would add to `~/.claude/settings.json` and adds them on a yes (`grenade install-hooks --remove` takes them out).
+2. It shows the Claude Code hooks it would add to `~/.claude/settings.json`, and the Codex hooks for `~/.codex/hooks.json` when Codex is installed, and adds them on a yes (`grenade install-hooks --remove` takes them out). Codex asks once to trust its hooks the next time it starts: pick "Trust all and continue".
 3. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
 4. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
 5. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
