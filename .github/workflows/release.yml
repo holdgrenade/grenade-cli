@@ -26,11 +26,15 @@ permissions:
 concurrency: release
 
 jobs:
-  # grenaded runs on Linux too: the same tests there, then the daemon against a real tmux (scripts/smoke.mjs).
-  # A release waits for it.
+  # grenaded runs on Linux too: the same tests there, then the daemon against a real tmux (scripts/smoke.mjs), in an
+  # Arch Linux container, which is what Omarchy is. A release waits for it.
   linux:
     runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
+      - name: Node, tmux and git
+        run: pacman -Syu --noconfirm --needed --disable-sandbox nodejs npm tmux git && node --version && tmux -V
+
       - name: Check out grenade-cli
         uses: actions/checkout@v4
         with:
@@ -43,13 +47,6 @@ jobs:
           token: ${{ secrets.GH_GRENADE_PROTOCOL_TOKEN }}
           path: grenade-protocol
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux && tmux -V
-
       - name: Install the protocol
         working-directory: grenade-protocol
         run: npm ci
@@ -60,6 +57,7 @@ jobs:
 
       - name: The daemon against a real tmux
         working-directory: grenade-cli
+        shell: bash
         run: |
           npm run build
           export TMUX_TMPDIR=$(mktemp -d /tmp/gr.XXXX) GRENADE_HOME=$(mktemp -d)

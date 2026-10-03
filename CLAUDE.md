@@ -68,6 +68,7 @@ src/service/systemd.ts     installs, removes and inspects that service with `sys
 src/setup/requirements.ts  pure: what is missing (macOS or Linux, Node 22+, tmux 3.2+, an agent; iTerm2 is never asked for) and the command that fixes it (`tmuxFix`: brew, or `sudo pacman` / `apt-get` / `dnf` on Linux); `findRequirements.ts` looks
 src/setup/firewall.ts      Linux: is ufw on (`/etc/ufw/ufw.conf`, readable without root) and the lines that say how to open the port; setup never runs sudo for it
 src/platform/findOnPath.ts where a command is on PATH, in place of `which` (bare Arch has none)
+src/platform/loginShell.ts the shell a `shell` session runs: `$SHELL`, else the user's login shell, else `/bin/zsh` on a Mac and `/bin/sh` on Linux (a shell that is not installed ends the session at once)
 src/platform/computer.ts   pure: what the CLI calls the machine ("Mac" on macOS, "computer" on Linux) and the system's name
 src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that the Mac app and the phone show it, and `grenade terminal iterm` (or `terminal` without iTerm2) to open sessions in a terminal too
 src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
@@ -180,7 +181,7 @@ scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the o
 scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
 packaging/homebrew/        formula.mjs (the template, pure) and grenade.rb (generated; goes into the tap as Formula/grenade.rb)
 scripts/formula-from-tarball.mjs  writes packaging/homebrew/grenade.rb from a tarball already on the GitHub release (its sha256), what the workflow puts in the tap
-.github/workflows/release.yml  on every push to main: the `linux` job (tests on Ubuntu, then `scripts/smoke.mjs` against a real tmux), then tests on macOS; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
+.github/workflows/release.yml  on every push to main: the `linux` job (in an Arch Linux container, what Omarchy is: tests, then `scripts/smoke.mjs` against a real tmux; Ubuntu 24.04's tmux 3.4 keeps 2000 rows of scrollback whatever `history-limit` says before `respawn-pane`, which the smoke run does not accept), then tests on macOS; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
 test/                      vitest; wsHandler.test.ts replays every ../grenade-protocol/fixtures/client.*.json
 ```
 

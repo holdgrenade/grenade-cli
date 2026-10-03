@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { computerWord, systemName } from "../src/platform/computer.js";
 import { findOnPath } from "../src/platform/findOnPath.js";
+import { loginShell } from "../src/platform/loginShell.js";
 
 describe("findOnPath", () => {
   it("takes the first folder of PATH that holds the command", () => {
@@ -31,6 +32,17 @@ describe("findOnPath", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("loginShell", () => {
+  it("is $SHELL, else the user's own shell, else the system's usual one", () => {
+    expect(loginShell({ SHELL: "/usr/bin/fish" }, () => "/bin/bash", "linux")).toBe("/usr/bin/fish");
+    expect(loginShell({}, () => "/bin/bash", "linux")).toBe("/bin/bash");
+    // zsh is the Mac's shell; most Linux systems do not have it.
+    expect(loginShell({}, () => null, "linux")).toBe("/bin/sh");
+    expect(loginShell({}, () => null, "darwin")).toBe("/bin/zsh");
+    expect(loginShell({ SHELL: "" }, () => "", "linux")).toBe("/bin/sh");
   });
 });
 

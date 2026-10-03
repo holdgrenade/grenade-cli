@@ -1,4 +1,5 @@
 /** Pure helpers around tmux: parsing its output and mapping protocol values to tmux arguments. No I/O. */
+import { loginShell } from "../platform/loginShell.js";
 import type { AgentKind, Cursor, KeyName } from "@grenade/protocol";
 
 export const SESSION_PREFIX = "gr-";
@@ -205,7 +206,7 @@ export interface AgentFlags {
 }
 
 /** The program launched inside the tmux session for an agent kind. */
-export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh", resume?: string, flags: AgentFlags = {}): string {
+export function agentCommand(agent: AgentKind, shell = loginShell(), resume?: string, flags: AgentFlags = {}): string {
   const claude = flags.claude ? `claude ${flags.claude}` : "claude";
   switch (agent) {
     case "claude":
