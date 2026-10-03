@@ -123,6 +123,9 @@ describe("helpers", () => {
     expect(keyToTmux("ctrl-c")).toBe("C-c");
     expect(keyToTmux("backspace")).toBe("BSpace");
   });
+  it("inputCommand pastes one line too when asked (Codex)", () => {
+    expect(inputCommand("=gr-a:", "fix this", true)).toEqual(["set-buffer", "-b", "grenade-input", "--", "fix this", ";", "paste-buffer", "-p", "-r", "-d", "-b", "grenade-input", "-t", "=gr-a:"]);
+  });
   it("inputCommand types one line and pastes several", () => {
     expect(inputCommand("=gr-a:", "fix this")).toEqual(["send-keys", "-t", "=gr-a:", "-l", "--", "fix this"]);
     expect(inputCommand("=gr-a:", "fix\r\nthis\rnow")).toEqual([

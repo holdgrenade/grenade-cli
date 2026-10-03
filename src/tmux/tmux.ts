@@ -38,7 +38,8 @@ export interface Tmux {
   captureHistory(id: string, before: number, count: number): Promise<{ rows: HistoryRows; geo: PaneGeometry }>;
   /** Options Grenade sets at creation (mouse, blank fill), for a session made by an older daemon. */
   applySessionOptions(id: string): Promise<void>;
-  sendText(id: string, text: string, submit: boolean): Promise<void>;
+  /** `paste`: one line goes in as a bracketed paste too (`inputCommand`), for Codex. */
+  sendText(id: string, text: string, submit: boolean, paste?: boolean): Promise<void>;
   sendKey(id: string, key: KeyName): Promise<void>;
   resize(id: string, cols: number, rows?: number): Promise<void>;
   /** Undo `resize`: the window follows the attached Mac terminals again. */
@@ -155,8 +156,8 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         "set-option", "-w", "-t", pane(id), "fill-character", " ",
       ]);
     },
-    async sendText(id, text, submit) {
-      if (text.length > 0) await run(inputCommand(pane(id), text));
+    async sendText(id, text, submit, paste) {
+      if (text.length > 0) await run(inputCommand(pane(id), text, paste));
       if (submit) await run(["send-keys", "-t", pane(id), "Enter"]);
     },
     async sendKey(id, key) {

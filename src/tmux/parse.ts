@@ -184,9 +184,11 @@ export function keyToTmux(key: KeyName): string {
  * line break is pasted instead, as one bracketed paste (`paste-buffer -p`, `-r` keeps each LF): typed, every newline
  * would press Enter and send the first line on its own, while Claude Code, Codex and the shell all take a pasted newline
  * as part of the input. CRLF and a lone CR become LF. The buffer is deleted after the paste (`-d`).
+ * `paste` pastes one line too: Codex takes fast typing followed by Enter for a paste (its "paste burst") and makes
+ * that Enter a newline, so a typed prompt sat unsent; a bracketed paste says what it is, and the Enter after it sends.
  */
-export function inputCommand(target: string, text: string): string[] {
-  if (!/[\r\n]/.test(text)) return ["send-keys", "-t", target, "-l", "--", text];
+export function inputCommand(target: string, text: string, paste = false): string[] {
+  if (!paste && !/[\r\n]/.test(text)) return ["send-keys", "-t", target, "-l", "--", text];
   const lines = text.replace(/\r\n?/g, "\n");
   return [
     "set-buffer", "-b", INPUT_BUFFER, "--", lines, ";",

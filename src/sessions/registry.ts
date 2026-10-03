@@ -268,8 +268,9 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   // ---- input ---------------------------------------------------------------
 
   async sendText(id: string, text: string, submit: boolean): Promise<void> {
-    this.require(id);
-    await this.tmux.sendText(id, text, submit);
+    const r = this.require(id);
+    // Codex takes typed text followed by Enter for a paste and keeps the Enter as a newline (`inputCommand`).
+    await this.tmux.sendText(id, text, submit, r.session.agent === "codex");
   }
 
   async sendKey(id: string, key: KeyName): Promise<void> {
