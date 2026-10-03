@@ -35,6 +35,8 @@ import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
 import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
+import { codexHookFlags } from "../hooks/installCodexHooks.js";
+import { claudeHookFlags } from "../hooks/installHooks.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { isLoopback } from "./loopback.js";
@@ -118,7 +120,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
   const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, codexActivity: 1 };
   const allowPlainLan = opts.allowPlainLan === true;
-  const tmux = opts.tmux ?? createTmux();
+  // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
+  const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) } });
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
   const codes = new PairingCodes();
   const pairing = new PairingWatch();

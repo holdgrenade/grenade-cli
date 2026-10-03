@@ -1,9 +1,12 @@
 /**
- * Pure merge of Grenade's Claude Code hooks into a settings object (~/.claude/settings.json).
+ * Grenade's Claude Code hooks. The daemon starts Claude Code with them (`claudeHookFlags`: `--settings`), so a session
+ * Grenade starts reports without any file being touched. `grenade install-hooks` also merges them into
+ * ~/.claude/settings.json, for a `claude` typed by hand in a Grenade shell; Claude Code runs a hook that is in both once.
  * Idempotent: an existing Grenade hook is replaced, everything else is left untouched.
  * `mergeEntries` / `removeEntries` do the same for Codex's hooks.json (`installCodexHooks.ts`).
  */
 import { PROMPT_HOOK_PATH, PROMPT_HOOK_TIMEOUT_S } from "@grenade/protocol";
+import { shellQuote } from "./shellQuote.js";
 
 /** Events that report status: a command that posts the payload and does not wait. */
 export const HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification", "Stop", "StopFailure", "SessionEnd"] as const;
@@ -45,6 +48,11 @@ const isGrenadeHook = (h: HookEntry) =>
 export function mergeHooks(input: unknown, port: number): { settings: Settings; changed: boolean } {
   const command: HookEntry = { type: "command", command: hookCommand(port) };
   return mergeEntries(input, [...HOOK_EVENTS.map((e) => [e, command] as const), [PROMPT_EVENT, promptHook(port)] as const], isGrenadeHook);
+}
+
+/** `--settings '<the hooks as JSON>'`, quoted for the shell tmux runs the agent in. */
+export function claudeHookFlags(port: number): string {
+  return `--settings ${shellQuote(JSON.stringify(mergeHooks({}, port).settings))}`;
 }
 
 export function removeHooks(input: unknown): { settings: Settings; changed: boolean } {

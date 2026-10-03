@@ -196,17 +196,24 @@ export function inputCommand(target: string, text: string): string[] {
 
 const INPUT_BUFFER = "grenade-input";
 
+/** What an agent starts with: Grenade's hooks (`claudeHookFlags`, `codexHookFlags`), already quoted for the shell. */
+export interface AgentFlags {
+  claude?: string | undefined;
+  codex?: string | undefined;
+}
+
 /** The program launched inside the tmux session for an agent kind. */
-export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh", resume?: string): string {
+export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "/bin/zsh", resume?: string, flags: AgentFlags = {}): string {
+  const claude = flags.claude ? `claude ${flags.claude}` : "claude";
   switch (agent) {
     case "claude":
       // A copy of the conversation (PROTOCOL.md "Conversations"): the original transcript is never written to. The
       // id is checked by the protocol (letters, digits, dashes), and again here because tmux hands this to a shell.
-      if (resume === undefined) return "claude";
+      if (resume === undefined) return claude;
       if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
-      return `claude --resume ${resume} --fork-session`;
+      return `${claude} --resume ${resume} --fork-session`;
     case "codex":
-      return "codex";
+      return flags.codex ? `codex ${flags.codex}` : "codex";
     case "shell":
       return shell;
   }

@@ -86,6 +86,8 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     if (!text || text.startsWith("/") || text.startsWith("<")) return;
     const entry: ActivityEntry = { kind: "asked", text: activityText(text), at };
     const t = this.track(id);
+    // The same hook from two places (the launch flags and an older copy in settings.json) is one prompt.
+    if (t.pending && t.pending.text === entry.text && t.entries.at(-1) === t.pending) return;
     t.pending = entry;
     t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });

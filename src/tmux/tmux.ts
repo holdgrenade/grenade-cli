@@ -4,6 +4,7 @@ import type { AgentKind, KeyName } from "@grenade/protocol";
 import {
   GEOMETRY_FORMAT,
   agentCommand,
+  type AgentFlags,
   buildHistory,
   buildScreen,
   historyRange,
@@ -56,6 +57,8 @@ export interface TmuxOptions {
   historyLimit?: number;
   /** After kill-session, how long leftover processes get between SIGTERM and SIGKILL. */
   killGraceMs?: number;
+  /** What each agent starts with: Grenade's hooks (`agentCommand`). */
+  agentFlags?: AgentFlags;
 }
 
 export function createTmux(opts: TmuxOptions = {}): Tmux {
@@ -118,7 +121,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         "set-option", "-t", pane(id), "history-limit", String(historyLimit), ";",
         "set-option", "-t", pane(id), "mouse", "on", ";",
         "set-option", "-w", "-t", pane(id), "fill-character", " ", ";",
-        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent, undefined, resume),
+        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent, undefined, resume, opts.agentFlags),
       ]);
     },
     async capture(id) {

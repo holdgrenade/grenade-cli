@@ -6,16 +6,17 @@ The Mac side of Grenade: `grenaded` (daemon) and the `grenade` CLI. Runs your AI
 
 ```bash
 brew install holdgrenade/tap/grenade   # brings Node and tmux
-grenade setup                            # hooks, start at login, relay, then a QR code for the phone
+grenade setup                            # start at login, relay, then a QR code for the phone
 ```
 
 `grenade setup` asks before it changes anything and skips what is already done:
 
 1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing. iTerm2 is not needed (see below).
-2. It shows the Claude Code hooks it would add to `~/.claude/settings.json`, and the Codex hooks for `~/.codex/hooks.json` when Codex is installed, and adds them on a yes (`grenade install-hooks --remove` takes them out). Codex asks once to trust its hooks the next time it starts: pick "Trust all and continue".
-3. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
-4. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
-5. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
+2. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
+3. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
+4. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
+
+Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. The first Codex session asks once to trust them: pick "Trust all and continue".
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
 

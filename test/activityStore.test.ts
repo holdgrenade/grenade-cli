@@ -108,3 +108,16 @@ describe("ActivityStore", () => {
     expect(s.entriesOf("gr-a")).toEqual([]);
   });
 });
+
+describe("a prompt hook that arrives twice", () => {
+  it("is one asked entry, and a prompt typed again later is another", () => {
+    const { s, frames } = store();
+    s.noteAsked("gr-a", "fix it", at);
+    s.noteAsked("gr-a", "fix it", at);
+    expect(s.entriesOf("gr-a")).toEqual([asked("fix it")]);
+    expect(frames).toHaveLength(1);
+    s.append("gr-a", [asked("fix it"), said("done")]);
+    s.noteAsked("gr-a", "fix it", at);
+    expect(s.entriesOf("gr-a").map((e) => e.kind)).toEqual(["asked", "said", "asked"]);
+  });
+});

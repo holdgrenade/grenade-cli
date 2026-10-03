@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeHooks } from "../src/hooks/installHooks.js";
 import { readYesNo } from "../src/setup/answer.js";
-import { addedHooks, hooksNotice } from "../src/setup/hooksNotice.js";
 import { pushNotice } from "../src/setup/pushNotice.js";
 import { nextSteps } from "../src/setup/nextSteps.js";
 import { problems, tmuxVersion, type Found } from "../src/setup/requirements.js";
@@ -69,37 +67,6 @@ describe("readYesNo", () => {
     expect(readYesNo("yes", false)).toBe(true);
     expect(readYesNo(" No ", true)).toBe(false);
     expect(readYesNo("maybe", true)).toBeNull();
-  });
-});
-
-describe("the hooks notice", () => {
-  const mine = { hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: "say done" }] }] }, model: "opus" };
-
-  it("lists every hook the merge would add, and none that are there already", () => {
-    const { settings } = mergeHooks(mine, 7788);
-    const added = addedHooks(mine, settings);
-    expect(added.length).toBeGreaterThanOrEqual(6);
-    expect(added.map((h) => h.event)).toContain("Stop");
-    expect(added.map((h) => h.runs)).not.toContain("say done");
-    for (const h of added) expect(h.runs).toContain("127.0.0.1:7788");
-    expect(addedHooks(settings, mergeHooks(settings, 7788).settings)).toEqual([]);
-  });
-
-  it("names the file, the events and what runs, and how to undo it", () => {
-    const { settings } = mergeHooks({}, 7788);
-    const added = addedHooks({}, settings);
-    const text = hooksNotice("/Users/adam/.claude/settings.json", added).join("\n");
-    expect(text).toContain(`${added.length} hooks to /Users/adam/.claude/settings.json`);
-    for (const h of added) {
-      expect(text).toContain(h.event);
-      expect(text).toContain(h.runs);
-    }
-    expect(text).toContain("grenade install-hooks --remove");
-  });
-
-  it("lists an http hook by its URL", () => {
-    const after = { hooks: { PermissionRequest: [{ hooks: [{ type: "http", url: "http://127.0.0.1:7788/hooks/claude/prompt" }] }] } };
-    expect(addedHooks({}, after)).toEqual([{ event: "PermissionRequest", runs: "http://127.0.0.1:7788/hooks/claude/prompt" }]);
   });
 });
 

@@ -1,8 +1,7 @@
 /**
- * `grenade setup`: the whole first run in one command. Checks what Grenade needs, offers the Claude Code hooks (and
- * Codex's, when Codex is here),
- * starts grenaded at login, offers the relay, and ends on the QR code for the phone. Every step that is already
- * done is skipped, so it is safe to run again.
+ * `grenade setup`: the whole first run in one command. Checks what Grenade needs, starts grenaded at login, offers the
+ * relay, and ends on the QR code for the phone. Every step that is already done is skipped, so it is safe to run again.
+ * No hooks: the daemon starts Claude Code and Codex with Grenade's hooks (`claudeHookFlags`, `codexHookFlags`).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -11,14 +10,13 @@ import type { Command } from "commander";
 import { DEFAULT_PORT } from "@grenade/protocol";
 import { paths } from "../config.js";
 import type { Device } from "../daemon/devices.js";
-import { mergeCodexHooks } from "../hooks/installCodexHooks.js";
-import { mergeHooks } from "../hooks/installHooks.js";
+import { removeCodexHooks } from "../hooks/installCodexHooks.js";
+import { HOOK_MARKER, mergeHooks } from "../hooks/installHooks.js";
 import type { RelayStatus } from "../relay/relayLink.js";
 import { serviceStatus } from "../service/launchd.js";
 import { SERVICE_LABEL } from "../service/launchdPlist.js";
 import { askYesNo } from "../setup/ask.js";
 import { findRequirements } from "../setup/findRequirements.js";
-import { addedHooks, codexHooksNotice, hooksNotice } from "../setup/hooksNotice.js";
 import { nextSteps } from "../setup/nextSteps.js";
 import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
 import { problems } from "../setup/requirements.js";
@@ -28,7 +26,6 @@ import { startService, type ServiceCommandDeps } from "./serviceCommand.js";
 interface SetupOptions {
   yes?: boolean;
   label: string;
-  hooks: boolean;
   service: boolean;
   relay: boolean;
   pair: boolean;
@@ -37,9 +34,10 @@ interface SetupOptions {
 export function registerSetupCommand(program: Command, d: ServiceCommandDeps): void {
   program
     .command("setup")
-    .description("set Grenade up on this Mac: hooks, start at login, relay, then pair your phone")
+    .description("set Grenade up on this Mac: start at login, relay, then pair your phone")
     .option("-y, --yes", "take the suggested answer to every question")
-    .option("--no-hooks", "leave ~/.claude/settings.json and ~/.codex/hooks.json alone")
+    // Kept so scripts that pass it still run: setup no longer touches any agent's settings.
+    .option("--no-hooks", "nothing; hooks come with each session now")
     .option("--no-service", "do not start grenaded at login")
     .option("--no-relay", "do not turn on the relay")
     .option("--no-pair", "stop before pairing a phone")
@@ -48,18 +46,15 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       const ask = (question: string, unattended: boolean) => askYesNo(question, { defaultYes: true, assumeYes: o.yes === true, unattended });
       step(1, "What Grenade needs");
       await requirements(ask);
-      step(2, "Agent hooks");
-      if (o.hooks) {
-        await hooks(ask);
-        if (hasCodex()) await codexHooks(ask);
-      } else console.log("skipped (--no-hooks). The phone guesses the status from screen changes.");
-      step(3, "Start at login");
+      refreshClaudeHooks();
+      oldCodexHooks();
+      step(2, "Start at login");
       if (!(await daemon(d, o.service, o.label, ask))) return;
-      step(4, "Reach this Mac from anywhere");
+      step(3, "Reach this Mac from anywhere");
       if (o.relay) await relay(d, ask);
       else console.log("skipped (--no-relay). The phone reaches this Mac on the same Wi‑Fi only.");
       await push(d);
-      step(5, "Pair your phone");
+      step(4, "Pair your phone");
       if (!o.pair) return console.log("skipped (--no-pair). Pair later with: grenade pair");
       if (await pair(d, o.yes === true)) for (const line of nextSteps(findRequirements().iterm)) console.log(line);
       else process.exitCode = 1;
@@ -69,7 +64,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
 type Ask = (question: string, unattended: boolean) => Promise<boolean>;
 
 function step(n: number, title: string): void {
-  console.log(`\n${n}/5  ${title}`);
+  console.log(`\n${n}/4  ${title}`);
 }
 
 async function requirements(ask: Ask): Promise<void> {
@@ -95,35 +90,30 @@ async function requirements(ask: Ask): Promise<void> {
   console.log(found.iterm ? "ok: macOS, Node, tmux and iTerm2 are in place" : "ok: macOS, Node and tmux are in place");
 }
 
-async function hooks(ask: Ask): Promise<void> {
-  const current: unknown = existsSync(paths.claudeSettings) ? JSON.parse(readFileSync(paths.claudeSettings, "utf8")) : {};
+/**
+ * Claude Code runs a hook that is both in settings.json and in the launch flags once, but only when the two are the
+ * same: Grenade hooks a user added with an older CLI are brought up to date. None are added.
+ */
+function refreshClaudeHooks(): void {
+  if (!existsSync(paths.claudeSettings)) return;
+  const current: unknown = JSON.parse(readFileSync(paths.claudeSettings, "utf8"));
+  if (!JSON.stringify(current).includes(HOOK_MARKER)) return;
   const { settings, changed } = mergeHooks(current, DEFAULT_PORT);
-  if (!changed) return console.log(`ok: the hooks are already in ${paths.claudeSettings}`);
-  for (const line of hooksNotice(paths.claudeSettings, addedHooks(current, settings))) console.log(line);
-  console.log("");
-  // Nobody to ask means nobody agreed: a settings file is only changed with a yes or --yes.
-  if (!(await ask("Add the hooks?", false))) return console.log("left alone. Add them later with: grenade install-hooks");
-  mkdirSync(dirname(paths.claudeSettings), { recursive: true });
+  if (!changed) return;
   writeFileSync(paths.claudeSettings, JSON.stringify(settings, null, 2) + "\n");
-  console.log(`added the hooks to ${paths.claudeSettings}`);
+  console.log(`brought Grenade's hooks in ${paths.claudeSettings} up to date`);
 }
 
-/** Codex is on the PATH, or has left its folder (a Codex app install, say). */
-function hasCodex(): boolean {
-  return findRequirements().codex || existsSync(paths.codexDir);
-}
-
-async function codexHooks(ask: Ask): Promise<void> {
-  const current: unknown = existsSync(paths.codexHooks) ? JSON.parse(readFileSync(paths.codexHooks, "utf8")) : {};
-  const { settings, changed } = mergeCodexHooks(current, DEFAULT_PORT);
-  if (!changed) return console.log(`ok: the Codex hooks are already in ${paths.codexHooks}`);
-  console.log("");
-  for (const line of codexHooksNotice(paths.codexHooks, addedHooks(current, settings))) console.log(line);
-  console.log("");
-  if (!(await ask("Add the Codex hooks?", false))) return console.log("left alone. Add them later with: grenade install-hooks");
-  mkdirSync(dirname(paths.codexHooks), { recursive: true });
+/**
+ * Grenade starts each agent with its hooks, so setup writes none. CLI 1.0.23 put Codex hooks in ~/.codex/hooks.json;
+ * with the hooks also passed at launch they would report twice, so they come out.
+ */
+function oldCodexHooks(): void {
+  if (!existsSync(paths.codexHooks)) return;
+  const { settings, changed } = removeCodexHooks(JSON.parse(readFileSync(paths.codexHooks, "utf8")));
+  if (!changed) return;
   writeFileSync(paths.codexHooks, JSON.stringify(settings, null, 2) + "\n");
-  console.log(`added the Codex hooks to ${paths.codexHooks}`);
+  console.log(`took Grenade's old hooks out of ${paths.codexHooks}: Grenade now starts Codex with them`);
 }
 
 /** Returns false when there is no daemon to go on with. */
