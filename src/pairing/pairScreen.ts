@@ -15,6 +15,8 @@ export interface PairScreenInput {
   /** Width of the terminal, when known. */
   columns: number | undefined;
   color: boolean;
+  /** What this machine is called (`computerWord`): "Mac" when absent. */
+  computer?: string;
 }
 
 const INDENT = "  ";
@@ -27,16 +29,17 @@ export function pairScreen(i: PairScreenInput): string[] {
   const bold = (text: string) => (i.color ? `${BOLD}${text}${RESET}` : text);
   const needed = qrWidth(i.offer) + INDENT.length;
   const fits = i.columns === undefined || i.columns >= needed;
+  const computer = i.computer ?? "Mac";
   const lines: string[] = [""];
 
-  lines.push(`${INDENT}${bold("Pair your phone with this Mac")}`);
+  lines.push(`${INDENT}${bold(`Pair your phone with this ${computer}`)}`);
   lines.push(`${INDENT}Pick one of the two. Each works once and runs out in 2 minutes.`);
   lines.push("");
 
   lines.push(`${INDENT}${bold("OPTION 1 · SCAN THE QR CODE")}`);
   if (fits) {
     lines.push(`${INDENT}In the Grenade app, tap "Scan QR code".`);
-    lines.push(`${INDENT}${i.relayOnline ? "Works from any network: the relay is on." : "Works on this Mac's Wi‑Fi. For any network, turn the relay on first: grenade relay on"}`);
+    lines.push(`${INDENT}${i.relayOnline ? "Works from any network: the relay is on." : `Works on this ${computer}'s Wi‑Fi. For any network, turn the relay on first: grenade relay on`}`);
     lines.push("");
     lines.push(...qrRows(i.offer, i.color).map((row) => INDENT + row));
   } else {
@@ -46,7 +49,7 @@ export function pairScreen(i: PairScreenInput): string[] {
   lines.push("");
 
   lines.push(`${INDENT}${bold("OPTION 2 · TYPE THE CODE")}`);
-  lines.push(`${INDENT}In the Grenade app, pick this Mac and type the code. Same Wi‑Fi only.`);
+  lines.push(`${INDENT}In the Grenade app, pick this ${computer} and type the code. Same Wi‑Fi only.`);
   lines.push("");
   lines.push(`${CODE_INDENT}${bold(spacedCode(i.typed))}`);
   lines.push("");

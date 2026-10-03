@@ -17,12 +17,15 @@
  * installed, so either change takes over for new sessions; tabs already open stay and close through their terminal.
  * Each terminal is caught up once, the first time it is used: the tabs it already has are listed and every live
  * session without one gets one. All scripts run one call at a time through a queue.
+ *
+ * Both terminals are driven with AppleScript, so on Linux there is none to mirror into, whatever kind is asked for:
+ * sessions are watched on the phone, and any terminal attaches with `grenade open <name>`.
  */
 import type { Session } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { byGroupOrder, otherMembers } from "../sessions/groups.js";
 import type { SessionRegistry } from "../sessions/registry.js";
-import { resolveTmuxBin, type ScriptRunner, type TerminalAdapter } from "./adapter.js";
+import { canRunAppleScript, resolveTmuxBin, type ScriptRunner, type TerminalAdapter } from "./adapter.js";
 import { AppleTerminalAdapter, isAppleTerminalInstalled, type ClientLister } from "./appleTerminal.js";
 import { ITermAdapter, isITermInstalled } from "./iterm.js";
 
@@ -95,6 +98,8 @@ export class TerminalMirror {
   private readonly kind: () => TerminalKind;
   private readonly installed: () => boolean;
   private readonly hasAppleTerminal: () => boolean;
+  /** Scripts can run: a runner was handed in (tests), or this system has AppleScript. */
+  private readonly scriptable: boolean;
   private readonly iterm: TerminalAdapter;
   private readonly apple: TerminalAdapter;
   private queue: Promise<unknown> = Promise.resolve();
@@ -116,6 +121,7 @@ export class TerminalMirror {
     this.kind = typeof t === "function" ? t : () => t;
     this.installed = o.installed ?? isITermInstalled;
     this.hasAppleTerminal = o.appleTerminal ?? isAppleTerminalInstalled;
+    this.scriptable = o.run !== undefined || canRunAppleScript();
     const tmuxBin = o.tmuxBin ?? resolveTmuxBin();
     this.iterm = new ITermAdapter(tmuxBin, o.run);
     this.apple = new AppleTerminalAdapter(tmuxBin, o.run, o.clients);
@@ -123,6 +129,7 @@ export class TerminalMirror {
 
   /** The terminal tabs go to right now, or null when none is wanted. Asked every time, so iTerm2 installed later counts. */
   private current(): TerminalAdapter | null {
+    if (!this.scriptable) return null;
     switch (this.kind()) {
       case "none":
         return null;

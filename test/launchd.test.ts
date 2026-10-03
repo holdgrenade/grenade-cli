@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { serviceLines } from "../src/cli/serviceCommand.js";
 import { parseLaunchctlPrint } from "../src/service/launchctlOutput.js";
-import { SERVICE_LABEL, domainTarget, plistPath, renderPlist, servicePath, serviceTarget, stableProgram } from "../src/service/launchdPlist.js";
+import { SERVICE_LABEL, domainTarget, plistPath, renderPlist, serviceTarget, stableProgram } from "../src/service/launchdPlist.js";
+import { servicePath } from "../src/service/servicePath.js";
 
 const spec = {
   label: SERVICE_LABEL,
@@ -125,7 +126,7 @@ describe("parseLaunchctlPrint", () => {
 });
 
 describe("serviceLines", () => {
-  const base = { plist: "/Users/adam/Library/LaunchAgents/x.plist", label: "x" };
+  const base = { file: "/Users/adam/Library/LaunchAgents/x.plist", label: "x", manager: "launchd" as const };
 
   it("says how to install it, and whether a daemon runs anyway", () => {
     const lines = serviceLines({ ...base, installed: false, loaded: false, running: false }, true);

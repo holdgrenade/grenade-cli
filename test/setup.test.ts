@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { readYesNo } from "../src/setup/answer.js";
 import { pushNotice } from "../src/setup/pushNotice.js";
 import { nextSteps } from "../src/setup/nextSteps.js";
-import { problems, tmuxVersion, type Found } from "../src/setup/requirements.js";
+import { firewallNotice, ufwEnabledIn, ufwIsOn } from "../src/setup/firewall.js";
+import { problems, tmuxFix, tmuxVersion, type Found } from "../src/setup/requirements.js";
 
-const fine: Found = { platform: "darwin", node: "22.4.0", tmux: "tmux 3.5a\n", brew: true, claude: true, codex: false, iterm: true };
+const fine: Found = { platform: "darwin", node: "22.4.0", tmux: "tmux 3.5a\n", packages: "brew", claude: true, codex: false, iterm: true };
 
 describe("problems", () => {
   it("finds none on a Mac that has everything", () => {
@@ -19,14 +20,24 @@ describe("problems", () => {
   });
 
   it("has no fix to offer without Homebrew", () => {
-    const [p] = problems({ ...fine, tmux: null, brew: false });
+    const [p] = problems({ ...fine, tmux: null, packages: null });
     expect(p?.fix).toBeUndefined();
     expect(p?.blocks).toBe(true);
   });
 
-  it("stops on an old Node and on another system", () => {
+  it("stops on an old Node and on a system it does not run on", () => {
     expect(problems({ ...fine, node: "20.11.1" })).toMatchObject([{ what: "node", blocks: true }]);
-    expect(problems({ ...fine, platform: "linux" })).toMatchObject([{ what: "platform", blocks: true }]);
+    expect(problems({ ...fine, platform: "win32" })).toMatchObject([{ what: "platform", blocks: true }]);
+  });
+
+  it("runs on Linux, and installs tmux there with the distribution's own tool", () => {
+    const linux: Found = { ...fine, platform: "linux", packages: "pacman", iterm: false };
+    expect(problems(linux)).toEqual([]);
+    expect(problems({ ...linux, tmux: null })).toMatchObject([{ what: "tmux", blocks: true, fix: "sudo pacman -S --needed tmux" }]);
+    expect(tmuxFix("apt-get", false)).toBe("sudo apt-get install tmux");
+    expect(tmuxFix("dnf", true)).toBe("sudo dnf install tmux");
+    // No Homebrew on Linux to bring Node up to date with: the message stands alone.
+    expect(problems({ ...linux, node: "20.11.1" })[0]?.fix).toBeUndefined();
   });
 
   it("never asks for iTerm2", () => {
@@ -45,6 +56,33 @@ describe("nextSteps", () => {
     expect(nextSteps(true).join("\n")).toContain("Grenade Mac app");
     expect(nextSteps(true).join("\n")).toContain("grenade terminal iterm");
     expect(nextSteps(false).join("\n")).toContain("grenade terminal terminal");
+  });
+
+  it("names no Mac app and no Mac terminal on Linux", () => {
+    const lines = nextSteps(false, "linux").join("\n");
+    expect(lines).toContain("grenade new myproject");
+    expect(lines).toContain("grenade open myproject");
+    expect(lines).not.toContain("Mac");
+    expect(lines).not.toContain("grenade terminal");
+  });
+});
+
+describe("firewall", () => {
+  it("reads whether ufw starts with the system", () => {
+    expect(ufwEnabledIn("# /etc/ufw/ufw.conf\nENABLED=yes\nLOGLEVEL=low\n")).toBe(true);
+    expect(ufwEnabledIn("ENABLED=no\n")).toBe(false);
+    expect(ufwEnabledIn("#ENABLED=yes\n")).toBe(false);
+  });
+
+  it("is never on where there is no ufw: a Mac, or a Linux without its file", () => {
+    expect(ufwIsOn("darwin")).toBe(false);
+    expect(ufwIsOn("linux", "/nonexistent/ufw.conf")).toBe(false);
+  });
+
+  it("says what opens the port, and that a relay needs nothing", () => {
+    const lines = firewallNotice(7788).join("\n");
+    expect(lines).toContain("sudo ufw allow 7788/tcp");
+    expect(lines).toContain("relay");
   });
 });
 

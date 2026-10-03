@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dnsSdArgs, instanceName } from "../src/daemon/discovery.js";
+import { avahiArgs, defaultBackend, dnsSdArgs, instanceName } from "../src/daemon/discovery.js";
 
 describe("discovery", () => {
   it("names the instance after the Mac and the daemon id", () => {
@@ -10,5 +10,17 @@ describe("discovery", () => {
     expect(dnsSdArgs({ name: "MacBook Pro", id: "d_abc", port: 7788, key: "a2V5" })).toEqual([
       "-R", "MacBook Pro (d_abc)", "_grenade._tcp", ".", "7788", "v=1", "id=d_abc", "name=MacBook Pro", "e2e=1", "key=a2V5",
     ]);
+  });
+
+  it("builds the same registration for avahi, which takes no domain", () => {
+    expect(avahiArgs({ name: "omarchy", id: "d_abc", port: 7788, key: "a2V5" })).toEqual([
+      "-s", "omarchy (d_abc)", "_grenade._tcp", "7788", "v=1", "id=d_abc", "name=omarchy", "e2e=1", "key=a2V5",
+    ]);
+  });
+
+  it("registers with the system's own responder where there is one", () => {
+    expect(defaultBackend("darwin", false)).toBe("dns-sd");
+    expect(defaultBackend("linux", true)).toBe("avahi");
+    expect(defaultBackend("linux", false)).toBe("bonjour-service");
   });
 });

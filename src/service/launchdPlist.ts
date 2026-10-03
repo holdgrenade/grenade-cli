@@ -83,16 +83,6 @@ export function renderPlist(s: ServiceSpec): string {
 }
 
 /**
- * The PATH the agent runs with: the login shell's, then the usual homes of node, tmux and claude in case the
- * shell profile did not run (a failed capture), without duplicates and without empty entries.
- */
-export function servicePath(loginPath: string | undefined, home: string, nodeDir: string): string {
-  const fallback = [nodeDir, "/opt/homebrew/bin", "/usr/local/bin", join(home, ".local", "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-  const seen = new Set<string>();
-  return [...(loginPath ?? "").split(":"), ...fallback].filter((p) => p.startsWith("/") && !seen.has(p) && seen.add(p)).join(":");
-}
-
-/**
  * The command launchd runs. A Homebrew install resolves to `<prefix>/Cellar/grenade/<version>/…`, which is gone after
  * the next upgrade, so the unversioned `<prefix>/bin/grenade` is used in its place. Anything else runs as it is.
  */

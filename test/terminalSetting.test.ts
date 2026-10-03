@@ -35,6 +35,13 @@ describe("terminalLines", () => {
     expect(terminalLines("iterm", { terminal: "none", using: null, pinned: true }).join("\n")).toContain("grenaded ignores this");
   });
 
+  it("says on Linux that no window opens, and how to clear a setting left over", () => {
+    const off = terminalLines("none", null, "linux").join("\n");
+    expect(off).toContain("grenade open <name>");
+    expect(off).not.toContain("grenade terminal iterm");
+    expect(terminalLines("iterm", { terminal: "iterm", using: null, pinned: false }, "linux").join("\n")).toContain("grenade terminal none");
+  });
+
   it("says when the daemon is not there to ask", () => {
     expect(terminalLines("iterm", null).join("\n")).toContain("takes effect when it starts");
   });

@@ -1,4 +1,5 @@
 /** `grenade pair`: shows the QR code and the typed code, then waits for the phone. */
+import { computerWord } from "../platform/computer.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
 import { spacedCode } from "../daemon/pairCheck.js";
 import { pairScreen } from "../pairing/pairScreen.js";
@@ -30,6 +31,7 @@ export async function showPairing(control: Control, o: { wait: boolean }): Promi
     relayOnline: status.relayLink.state === "online",
     columns: process.stdout.isTTY ? process.stdout.columns : undefined,
     color: process.stdout.isTTY === true && !process.env["NO_COLOR"],
+    computer: computerWord(),
   });
   console.log(lines.join("\n"));
   if (!o.wait) return true;

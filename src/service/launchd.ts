@@ -7,31 +7,14 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { parseLaunchctlPrint, type ServiceState } from "./launchctlOutput.js";
-import { SERVICE_LABEL, domainTarget, plistPath, renderPlist, servicePath, serviceTarget, stableProgram } from "./launchdPlist.js";
+import { parseLaunchctlPrint } from "./launchctlOutput.js";
+import { SERVICE_LABEL, domainTarget, plistPath, renderPlist, serviceTarget, stableProgram } from "./launchdPlist.js";
+import { servicePath } from "./servicePath.js";
+import type { ServiceOptions, ServiceStatus } from "./serviceTypes.js";
 
 const run = promisify(execFile);
 const LAUNCHCTL = "/bin/launchctl";
 const TIMEOUT_MS = 10_000;
-
-export interface ServiceOptions {
-  label?: string;
-  /** Arguments for `grenade`, `daemon` first. */
-  args: string[];
-  /** Extra environment for the daemon (GRENADE_HOME when it is not the default). */
-  env: Record<string, string>;
-  /** Folder for `launchd.log`. */
-  logDir: string;
-  /** The `grenade` command as it was started (`process.argv[1]`). */
-  program: string;
-}
-
-export interface ServiceStatus extends ServiceState {
-  /** The plist is in ~/Library/LaunchAgents. */
-  installed: boolean;
-  plist: string;
-  label: string;
-}
 
 /** Writes the plist and starts the agent. An agent that is already loaded is replaced. */
 export async function installService(o: ServiceOptions): Promise<ServiceStatus> {
@@ -67,7 +50,7 @@ export async function removeService(label: string = SERVICE_LABEL): Promise<bool
 export async function serviceStatus(label: string = SERVICE_LABEL): Promise<ServiceStatus> {
   const plist = plistPath(homedir(), label);
   const printed = await launchctl(["print", serviceTarget(uid(), label)]).catch(() => null);
-  return { ...parseLaunchctlPrint(printed), installed: existsSync(plist), plist, label };
+  return { ...parseLaunchctlPrint(printed), installed: existsSync(plist), file: plist, label, manager: "launchd" };
 }
 
 /** Stops the running agent and starts it again at once (`kickstart -k`): the way to run a newly installed version. */

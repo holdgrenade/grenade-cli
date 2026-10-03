@@ -1,22 +1,31 @@
-/** Looks at this Mac for what `requirements.ts` judges. */
+/** Looks at this computer for what `requirements.ts` judges. */
 import { execFileSync } from "node:child_process";
+import { findOnPath } from "../platform/findOnPath.js";
 import { isITermInstalled } from "../terminal/iterm.js";
-import type { Found } from "./requirements.js";
+import type { Found, PackageTool } from "./requirements.js";
+
+/** In the order they are asked: a Linux with Homebrew on it still installs tmux with its own tool. */
+const LINUX_TOOLS: readonly PackageTool[] = ["pacman", "apt-get", "dnf", "brew"];
 
 export function findRequirements(): Found {
   return {
     platform: process.platform,
     node: process.versions.node,
     tmux: output(process.env["TMUX_BIN"] ?? "tmux", ["-V"]),
-    brew: onPath("brew"),
+    packages: packageTool(process.platform),
     claude: Boolean(process.env["CLAUDE_BIN"]) || onPath("claude"),
     codex: onPath("codex"),
     iterm: isITermInstalled(),
   };
 }
 
+function packageTool(platform: string): PackageTool | null {
+  const candidates: readonly PackageTool[] = platform === "darwin" ? ["brew"] : LINUX_TOOLS;
+  return candidates.find(onPath) ?? null;
+}
+
 function onPath(command: string): boolean {
-  return output("/usr/bin/which", [command]) !== null;
+  return findOnPath(command) !== null;
 }
 
 function output(command: string, args: string[]): string | null {

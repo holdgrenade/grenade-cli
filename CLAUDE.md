@@ -1,10 +1,10 @@
 # grenade-cli
 
-`grenaded` is the daemon that runs on the Mac. It owns tmux sessions that run AI coding agents, streams their screens to phones over WebSocket, accepts input, and turns Claude Code and Codex hook events into a status and an activity the phone can show. `grenade` is the CLI that talks to it. Phones on the same Wi‑Fi connect directly; anywhere else they reach it through a relay (`../grenade-relay`), end-to-end encrypted. Read `../grenade-protocol/PROTOCOL.md` first: every frame this daemon sends or accepts is defined there.
+`grenaded` is the daemon that runs on the Mac, and since 1.0.35 on Linux (see "Linux" below; the words "the Mac" in this file mean the computer it runs on). It owns tmux sessions that run AI coding agents, streams their screens to phones over WebSocket, accepts input, and turns Claude Code and Codex hook events into a status and an activity the phone can show. `grenade` is the CLI that talks to it. Phones on the same Wi‑Fi connect directly; anywhere else they reach it through a relay (`../grenade-relay`), end-to-end encrypted. Read `../grenade-protocol/PROTOCOL.md` first: every frame this daemon sends or accepts is defined there.
 
 ## Stack
 
-Node 22+ (uses `fetch`, `import.meta.dirname`; `@types/node` stays on 22 so the types match the oldest Node we support), TypeScript strict ESM, `ws`, `bonjour-service`, `commander`, Zod schemas from `@grenade/protocol` (`file:../grenade-protocol`, so build that package first). Tests: vitest. tmux ≥ 3.2 must be on PATH (`brew install tmux`).
+Node 22+ (uses `fetch`, `import.meta.dirname`; `@types/node` stays on 22 so the types match the oldest Node we support), TypeScript strict ESM, `ws`, `bonjour-service`, `commander`, Zod schemas from `@grenade/protocol` (`file:../grenade-protocol`, so build that package first). Tests: vitest. tmux ≥ 3.2 must be on PATH (`brew install tmux`; on Linux the distribution's package).
 
 ## Commands
 
@@ -19,7 +19,7 @@ grenade daemon [--port 7788] [--name X] [--no-advertise] [--no-summaries] [--no-
 grenade status | ls
 grenade setup [--yes] [--no-service] [--no-relay] [--no-pair]   # the whole first run: requirements, start at login, relay, QR code (--no-hooks is accepted and does nothing)
 grenade pair [--no-wait]         # QR code (pairing offer) + typed code, then waits and names the phone that paired
-grenade service install [-- <daemon options>] | remove | status   # grenaded as a launchd agent: starts at login, restarts when it dies
+grenade service install [-- <daemon options>] | remove | status   # grenaded as a launchd agent (a systemd user service on Linux): starts at login, restarts when it dies
 npm run release                  # release/holdgrenade-cli-<version>.tgz + packaging/homebrew/grenade.rb (nothing is published)
 grenade devices                  # paired phones: id, name, platform, paired, last seen, connected now (Wi‑Fi / relay), "not encrypted"
 grenade unpair <id or name>      # end one phone's pairing at once, on Wi‑Fi and relay; an ambiguous name lists the candidates
@@ -57,10 +57,18 @@ src/pairing/offer.ts       pure: the pairing offer for this daemon (`offerFor`, 
 src/pairing/qrText.ts      pure: a URL as a QR code of half-block characters (`uqr`), forced white on black when it may use color
 src/pairing/pairScreen.ts  pure: what `grenade pair` prints, "Option 1" (the QR code) and "Option 2" (the typed code), the names the phone's pairing screen uses; leaves the QR code out of a window it does not fit
 src/pairing/pairingWatch.ts pure: what became of the last pair code (none, waiting, paired with which phone over which route, expired)
-src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `servicePath` (the PATH the agent runs with), `stableProgram` (no versioned Cellar path)
+src/service/service.ts     `grenade service` on whichever system this is: launchd on a Mac, systemd on Linux; `defaultLabel`, `serviceManager`. `serviceTypes.ts` holds `ServiceOptions` and `ServiceStatus` (`file`, `manager`)
+src/service/servicePath.ts pure: the PATH the service runs with (the login shell's, then the usual homes of node, tmux and claude)
+src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `stableProgram` (no versioned Cellar path)
 src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, pid, last exit)
 src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`
-src/setup/requirements.ts  pure: what is missing (macOS, Node 22+, tmux 3.2+, an agent; iTerm2 is never asked for) and the command that fixes it; `findRequirements.ts` looks
+src/service/systemdUnit.ts pure: the Linux service, `grenade.service` in `~/.config/systemd/user`: `renderUnit` (Restart=on-failure after 10 s, KillMode=process, its marker `GRENADE_SERVICE`), `unitPath`
+src/service/systemctlOutput.ts pure: reads `systemctl --user show` (loaded, running, pid, last exit)
+src/service/systemd.ts     installs, removes and inspects that service with `systemctl --user` (no admin rights); a failed install leaves no unit behind
+src/setup/requirements.ts  pure: what is missing (macOS or Linux, Node 22+, tmux 3.2+, an agent; iTerm2 is never asked for) and the command that fixes it (`tmuxFix`: brew, or `sudo pacman` / `apt-get` / `dnf` on Linux); `findRequirements.ts` looks
+src/setup/firewall.ts      Linux: is ufw on (`/etc/ufw/ufw.conf`, readable without root) and the lines that say how to open the port; setup never runs sudo for it
+src/platform/findOnPath.ts where a command is on PATH, in place of `which` (bare Arch has none)
+src/platform/computer.ts   pure: what the CLI calls the machine ("Mac" on macOS, "computer" on Linux) and the system's name
 src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that the Mac app and the phone show it, and `grenade terminal iterm` (or `terminal` without iTerm2) to open sessions in a terminal too
 src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
 src/setup/answer.ts, ask.ts pure `readYesNo`; `askYesNo` on the terminal
@@ -86,17 +94,18 @@ src/relay/sealedPipe.ts    SealedPipe: one encrypted connection from a phone, wh
 src/relay/phonePipe.ts     PhonePipe: one relay conn; a SealedPipe whose text travels in the relay's `data` frames
 src/relay/relayLink.ts     RelayLink: WebSocket to <relay>/v1/daemon; register, update, ping/pong, backoff, routes conns to pipes
 src/daemon/hooks.ts        POST /hooks/claude?session=… → registry.applyHook, or `holdForBackground` for a `Stop` that lists background tasks; a tool hook with `agent_id` is applied as an aside; a UserPromptSubmit prompt goes to the Summarizer and the ActivityStore; transcript_path → registry.setTranscript (saved), registry.setModel and the TranscriptReader (activity and `setCwd`)
-src/daemon/discovery.ts    Bonjour _grenade._tcp with TXT v/id/name; `dns-sd -R` (system mDNSResponder) on macOS so the address follows Wi‑Fi changes, bonjour-service elsewhere
+src/daemon/discovery.ts    Bonjour _grenade._tcp with TXT v/id/name; the system's own responder so the address follows Wi‑Fi changes: `dns-sd -R` (mDNSResponder) on macOS, `avahi-publish -s` (avahi-daemon) on Linux; bonjour-service on a Linux without avahi, also when avahi-daemon is not running
 src/daemon/http.ts         readBody / sendJson
 src/attachments/attachmentName.ts  pure: the on-disk name of an upload (UTC stamp, sanitized name, extension from the mime type)
 src/attachments/attachmentStore.ts createAttachmentStore(dir): writes <dir>/<sessionId>/<name>, never overwrites (-2, -3…)
 src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
+src/tmux/serverScope.ts    pure: under systemd, `new-session` goes through `systemd-run --user --scope`, so a tmux server it starts is not part of grenaded's service (see "Linux")
 src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command
 src/tmux/controlParser.ts  pure: ControlParser reads a tmux control-mode client's stdout as bytes (`%output` unescaped, command replies, `%exit`)
 src/tmux/termPaint.ts      pure: the live terminal's first paint (`firstPaint`: scrollback, screen, modes, cursor from `PANE_STATE_FORMAT`), `sendBytesCommands` (`send-keys -H`), `isInterrupt`
 src/sessions/termStream.ts TermStream: one client's live terminal on one session: `tmux -C attach-session`, first paint, output coalesced 8 ms, typed bytes in; sizes the window through the registry
 src/sessions/registry.ts   SessionRegistry: Session objects, status machine driver, screen cache, persistence, events
-src/terminal/mirror.ts     TerminalMirror: one tab or window per live session in the chosen terminal (`none | iterm | terminal | auto`, asked at every event), `status`, `refresh`; `relayoutSteps` pure
+src/terminal/mirror.ts     TerminalMirror: one tab or window per live session in the chosen terminal (`none | iterm | terminal | auto`, asked at every event), `status`, `refresh`; `relayoutSteps` pure. Mirrors into nothing where there is no AppleScript (Linux)
 src/terminal/terminalSetting.ts ~/.grenade/terminal.json `{ "terminal": "iterm" }`: which terminal; missing or unknown is `none`
 src/cli/terminalCommand.ts `grenade terminal [kind]`: writes the setting, `POST /terminal/reload`; `terminalLines` is pure
 src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`
@@ -126,7 +135,8 @@ src/conversations/codexConversationInfo.ts  pure: `codexConversationInfoIn` (fol
 src/conversations/conversationIndex.ts ConversationIndex: Claude Code's ConversationSource, the transcripts in `<claude dir>/projects/*/*.jsonl` as `Conversation`s (`list`, newest first, at most 500, a row re-read only when its file changed), `find` (transcript and folder of an id), `preview` (its last 200 activity entries), `trashPaths` (what a delete moves to the Trash, or why not)
 src/conversations/conversationInfo.ts  pure: `conversationInfoIn(head, tail)`: first `cwd`, newest `ai-title` (else the first prompt), last prompt; null without a typed prompt
 src/conversations/conversationMarks.ts ConversationMarks: Grenade's own mark in ~/.grenade/conversations.json: copy id → the conversation it was resumed from
-src/conversations/trash.ts             moveToTrash: `/usr/bin/trash` (a deleted conversation goes to the macOS Trash)
+src/conversations/trash.ts             moveToTrash: `/usr/bin/trash` on macOS (a deleted conversation goes to the Trash), `linuxTrash.ts` on Linux
+src/conversations/linuxTrash.ts        the freedesktop.org home trash (`~/.local/share/Trash/files` + `info/<name>.trashinfo`), so the file manager shows it and puts it back; `trashInfo`, `trashName` pure
 src/conversations/runningClaude.ts     the conversations live Claude Code processes have open (`<claude dir>/sessions/<pid>.json`, pid alive), and what each process says it is doing (`runningClaudeProcesses`: `status` `busy`, `idle`, `shell`); `parseClaudeProcess` is pure
 src/conversations/heldConversations.ts pure: conversation id → the live Grenade session whose transcript it is; `conversationIdOf` reads Claude Code's `<id>.jsonl` and Codex's rollout names
 src/hooks/installHooks.ts  pure: Grenade's Claude Code hooks, eight command hooks that report status and the `PermissionRequest` HTTP hook (`promptHook`) that Claude Code holds open; `claudeHookFlags` (`--settings '<JSON>'`, what the daemon starts Claude Code with) and merge/remove into a settings object (`install-hooks`); `mergeEntries`/`removeEntries` are the shape-generic halves
@@ -162,7 +172,7 @@ src/update/versions.ts     pure: compare versions, the latest from the tap's for
 src/update/updateChecker.ts UpdateChecker: asks for the latest every 6 h, installs it itself (auto) or on `installNow`, retries a failure after 1 h, restarts into a newer version on disk once nothing is busy
 src/update/installer.ts    runInstall: runs brew or npm asynchronously with a time limit; `pinned`, `needsAdmin`; installError (pure) puts a failure in a few words
 src/update/autoSetting.ts  ~/.grenade/update.json `{ "auto": false }` turns automatic installs off; read at every check
-src/update/installedVersion.ts, underLaunchd.ts  the version on disk behind the command; whether this is the launchd agent
+src/update/installedVersion.ts, underService.ts  the version on disk behind the command; whether this is the launchd agent (`XPC_SERVICE_NAME`) or the systemd service (its marker and `SYSTEMD_EXEC_PID` equal to this pid), which is what lets the daemon restart itself
 scripts/smoke.mjs          end-to-end check against a running daemon (needs tmux)
 scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run against a daemon that pushes through the main relay
 scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
@@ -170,7 +180,7 @@ scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the o
 scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
 packaging/homebrew/        formula.mjs (the template, pure) and grenade.rb (generated; goes into the tap as Formula/grenade.rb)
 scripts/formula-from-tarball.mjs  writes packaging/homebrew/grenade.rb from a tarball already on the GitHub release (its sha256), what the workflow puts in the tap
-.github/workflows/release.yml  on every push to main: tests; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
+.github/workflows/release.yml  on every push to main: the `linux` job (tests on Ubuntu, then `scripts/smoke.mjs` against a real tmux), then tests on macOS; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
 test/                      vitest; wsHandler.test.ts replays every ../grenade-protocol/fixtures/client.*.json
 ```
 
@@ -195,6 +205,20 @@ Sessions that belong together share an opaque `group` id (`g-` + 6 hex). A group
 - Groups and order are saved in `sessions.json`. On `adopt()`, sessions saved before groups existed are grouped by folder, oldest first.
 - Control API: `PUT /sessions/:id/group {group, index?}`. The CLI's `--with`/`group` look up the other session's group first.
 - The order the groups themselves are listed in (PROTOCOL.md "Group order") is the daemon's too, so a group moved on the phone moves in the Mac app and on every other phone. `GroupOrderStore` keeps it: a group that appears goes to the top, a session moved out lands right under the group it left (it remembers each session's last group to tell), a group with no session left is dropped, and without a saved order the groups are listed newest first. Saved in `groups.json` beside `sessions.json` (none when sessions are in memory only). `Connection` sends `groups` after `sessions` on `hello` and forwards every `changed`; `group.move` answers with `groups` to everyone, or to the sender alone when nothing moved.
+
+## Linux
+
+grenaded runs on Linux since 1.0.35 (2026-10-03), started for Omarchy (Arch, x86_64). The tarball is the same one: one bundled JS file, no native code, `os: ["darwin", "linux"]`. The protocol and the phone apps did not change; no frame says what the daemon runs on. What differs from the Mac:
+
+- **Service:** a systemd user unit, `~/.config/systemd/user/grenade.service` (`systemdUnit.ts`), handled with `systemctl --user`, so no admin rights. `Restart=on-failure` with `RestartSec=10` is launchd's KeepAlive; the daemon's exit 75 brings the new version up the same way. It runs while the user is logged in; `loginctl enable-linger` is the user's call, Grenade never sets it. The `--label` of `service`, `setup` and `update` is the unit's name without `.service` (default `grenade`).
+- **The tmux server lives outside the service.** A tmux built with systemd support (Arch's, Fedora's) puts every pane in a scope that is `PartOf` the unit its server was started in. With the server inside `grenade.service`, `systemctl --user stop` or `restart` (which `grenade update` runs) ended every agent, whatever `KillMode` said (seen 2026-10-03, tmux 3.7c, systemd 259). So a daemon that is the service runs `new-session` through `systemd-run --user --scope` (`serverScope.ts`): the server it starts is in `grenade-tmux-….scope`, which nothing stops before logout. Never start a tmux server from the daemon any other way.
+- **Discovery:** `avahi-publish -s`, the way macOS uses `dns-sd -R`. When avahi-daemon does not take the registration (the first run ends without "Established under name"), bonjour-service takes over.
+- **Firewall:** Omarchy and Ubuntu ship ufw, which refuses port 7788 from the Wi‑Fi. `grenade setup` says `sudo ufw allow 7788/tcp` when `/etc/ufw/ufw.conf` has `ENABLED=yes`; it cannot read the rules (root only) and never runs sudo for this. The relay needs no rule.
+- **Trash:** the freedesktop home trash (`linuxTrash.ts`); a file on another disk than the Trash is refused, not copied.
+- **No terminal mirror:** iTerm2 and Terminal.app are AppleScript. `grenade terminal` says so; sessions are watched on the phone or attached with `grenade open`.
+- **The user's tmux.conf applies,** as on a Mac: Grenade uses the default tmux server. Omarchy's (`base-index 1`, `aggressive-resize on`, prefix `C-Space`) passed the smoke run; Grenade targets sessions by name, never by index.
+- **Not done yet:** "is someone at the computer" (`macPresence.ts` answers null off macOS, so a push is never held); updates (an npm copy asks npm's registry, which is stuck at 0.1.0, so a Linux copy is never offered a newer release: the install route, AUR or an installer, is not decided); most log lines and messages to the phone still say "Mac" (setup, pairing, `status`, `relay` and `devices` say "computer").
+- **Tested** on 2026-10-03 in containers, not yet on an Omarchy machine: `npm test` and `scripts/smoke.mjs` on Arch x86_64 (Node 26, tmux 3.7c, also with Omarchy's `tmux.conf`), avahi with and without its daemon, and the systemd service on Fedora 44 (systemd 259): setup, status, exit 75, `kill -9`, `systemctl restart` and `stop`, `service remove`, each with sessions surviving. systemd does not start under x86 emulation, so the service ran on arm64. Install for such a test: `npm install -g <release tarball URL>`.
 
 ## Terminal mirror (`src/terminal/mirror.ts`)
 
@@ -357,7 +381,7 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 
 - **What ships** is `npm run release`: esbuild bundles `src/cli.ts` with `@grenade/protocol` and every library into `release/holdgrenade-cli-<version>/dist/cli.js`, beside a `package.json` without dependencies. That is how the `file:../grenade-protocol` dependency leaves the workspace: inside the bundle. The Homebrew formula (`depends_on "node"`, `"tmux"`) and `npm install -g @holdgrenade/cli` both install that tarball. Development still runs from `dist/` built by `tsc`.
 - **Setup** runs four steps and skips each one that is done: requirements (offers `brew install tmux`; iTerm2 is optional and never offered), launchd agent, relay, pairing. It asks about no hooks: the daemon starts every agent with them (since 1.0.24). It only refreshes Grenade hooks a user already has in `~/.claude/settings.json` (Claude Code runs a hook in both places once only when the two are identical) and takes the Codex hooks CLI 1.0.23 wrote out of `~/.codex/hooks.json`. After pairing it prints `nextSteps`: how to start an agent, that the Mac app and the phone show it, and the `grenade terminal` command that opens sessions in iTerm2 (or Terminal) too. It turns the relay on only after a yes on the terminal or with `--yes`; without a terminal and without `--yes` it is left alone. It never stops a daemon that runs in a terminal: it says how to move it to launchd and goes on.
-- **The agent** is `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist`, loaded into `gui/<uid>` (the login session, which has the Keychain that `claude -p` needs). `RunAtLoad`, `KeepAlive` on a failed exit only, `ThrottleInterval` 10 s, and `AbandonProcessGroup` so tmux outlives the daemon. Its `PATH` is the one of the terminal that installed it: launchd's own is bare, and agents started in tmux inherit the daemon's. `GRENADE_*`, `TMUX_BIN`, `TMUX_TMPDIR`, `CLAUDE_BIN` and `CLAUDE_CONFIG_DIR` that are set at install time go into the plist too. What the daemon prints before its logger is up lands in `~/.grenade/launchd.log`.
+- **The agent** (on a Mac; Linux has a systemd user service, see "Linux") is `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist`, loaded into `gui/<uid>` (the login session, which has the Keychain that `claude -p` needs). `RunAtLoad`, `KeepAlive` on a failed exit only, `ThrottleInterval` 10 s, and `AbandonProcessGroup` so tmux outlives the daemon. Its `PATH` is the one of the terminal that installed it: launchd's own is bare, and agents started in tmux inherit the daemon's. `GRENADE_*`, `TMUX_BIN`, `TMUX_TMPDIR`, `CLAUDE_BIN` and `CLAUDE_CONFIG_DIR` that are set at install time go into the plist too. What the daemon prints before its logger is up lands in `~/.grenade/launchd.log`.
 - **Pairing** (PROTOCOL.md "Pairing offer (QR code)" and "Pairing inside the encrypted channel"): `POST /pair-code` mints code and secret and answers with `typed` and `offer`. `Connection.handlePair` takes a sealed `pair` with either, on the LAN socket or a relay pipe, through `ConnectionDeps.pair` → `pairPhone` in `server.ts`, which issues the token with `sealed: true`. While the secret is live its access hash is in the list the relay link uploads (`accessHashes` in `server.ts`); `PairingCodes.onChange` and a timer at the end of the two minutes send the list again. `pair` outside the encrypted channel is answered `unsupported_protocol` and is not counted as a try.
 
 ## Updates (`src/update/`)
@@ -378,7 +402,7 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
 - A device token, a board's push token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
 - Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
-- Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` on `service install`.
+- Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` (on Linux `~/.config/systemd/user/grenade.service`) on `service install`. On Linux a deleted conversation moves into `~/.local/share/Trash`.
 
 ## Adding a frame
 

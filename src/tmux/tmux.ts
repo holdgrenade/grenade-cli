@@ -19,6 +19,7 @@ import {
   type Screen,
 } from "./parse.js";
 import { parsePidList, parsePsTable, processTree } from "./processes.js";
+import { scopeUnavailable, scopeUnit, scopedCommand } from "./serverScope.js";
 import { parseWindowWidths, type WindowWidth } from "../sessions/widthFloor.js";
 
 export class TmuxError extends Error {
@@ -60,6 +61,8 @@ export interface TmuxOptions {
   killGraceMs?: number;
   /** What each agent starts with: Grenade's hooks (`agentCommand`). */
   agentFlags?: AgentFlags;
+  /** The daemon is the systemd service: a tmux server it starts goes into a scope of its own (`serverScope.ts`). */
+  serverScope?: boolean;
 }
 
 export function createTmux(opts: TmuxOptions = {}): Tmux {
@@ -77,6 +80,19 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         else resolve(stdout);
       });
     });
+
+  /** `run` for the one command that may start the tmux server: under systemd it goes through `systemd-run --scope`. */
+  const runMayStartServer = (args: string[]): Promise<string> => {
+    if (!opts.serverScope) return run(args);
+    const scoped = scopedCommand(bin, args, scopeUnit(Date.now(), Math.random()));
+    return new Promise((resolve, reject) => {
+      execFile(scoped.file, scoped.args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
+        if (!err) return resolve(stdout);
+        if (scopeUnavailable(err, stderr)) return run(args).then(resolve, reject);
+        reject(new TmuxError((stderr || err.message).trim(), args));
+      });
+    });
+  };
 
   /** Exact-match targets: `=id` for session commands, `=id:` for pane commands (capture, send-keys, display). */
   const session = (id: string) => `=${id}`;
@@ -117,7 +133,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       // after new-session names its target: an untargeted one falls on the pane in TMUX_PANE when the daemon was
       // started inside tmux, and respawn-pane -k would then kill that pane's agent and leave this session a bare shell.
       const env = ["-c", cwd, "-e", `GRENADE_SESSION=${id}`];
-      await run([
+      await runMayStartServer([
         "new-session", "-d", "-s", id, ...env, "-x", String(cols), "-y", String(rows), ";",
         "set-option", "-t", pane(id), "history-limit", String(historyLimit), ";",
         "set-option", "-t", pane(id), "mouse", "on", ";",

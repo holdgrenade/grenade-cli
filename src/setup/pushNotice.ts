@@ -10,19 +10,19 @@ export interface PushSetting {
   gateway?: string;
 }
 
-export function pushNotice(push: PushSetting): string[] {
+export function pushNotice(push: PushSetting, computer: string = "Mac"): string[] {
   if (!push.enabled && push.mode === "auto") {
     return [
-      `Push notifications are off, because remote access is off: this Mac talks to no relay.`,
+      `Push notifications are off, because remote access is off: this ${computer} talks to no relay.`,
       `The phone notifies by itself while the app runs. To be told while it is closed: grenade relay on turns on`,
       `remote access and push; grenade push on turns on push alone, through the main relay, which then learns this`,
-      `Mac's public IP address, the phone's device token and the time, never the session or the text.`,
+      `${computer}'s public IP address, the phone's device token and the time, never the session or the text.`,
     ];
   }
   if (!push.enabled) return ["Push notifications are off. Turn them on with: grenade push on"];
   return [
-    `Push notifications are on: when an agent needs you or has finished, this Mac posts a sealed notification to`,
-    `${push.gateway ?? "a relay"}, which hands it to Apple. That relay learns this Mac's public IP address,`,
+    `Push notifications are on: when an agent needs you or has finished, this ${computer} posts a sealed notification to`,
+    `${push.gateway ?? "a relay"}, which hands it to Apple. That relay learns this ${computer}'s public IP address,`,
     `the phone's device token and the time, never the session or the text.`,
     push.mode === "auto" ? `They go off with remote access (grenade relay off). Turn only them off with: grenade push off` : `Turn them off with: grenade push off`,
   ];

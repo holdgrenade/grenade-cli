@@ -23,12 +23,13 @@ export function registerTerminalCommand(program: Command, d: TerminalCommandDeps
       }
       const method = kind === undefined ? "GET" : "POST";
       const s = await d.control<TerminalStatus>(method, kind === undefined ? "/terminal" : "/terminal/reload").catch(() => null);
-      for (const line of terminalLines(readTerminalSetting(), s)) console.log(line);
+      for (const line of terminalLines(readTerminalSetting(), s, process.platform)) console.log(line);
     });
 }
 
 /** What `grenade terminal` prints: the setting, what the daemon does with it, and how to change it. Pure. */
-export function terminalLines(setting: TerminalKind, s: TerminalStatus | null): string[] {
+export function terminalLines(setting: TerminalKind, s: TerminalStatus | null, platform: string = "darwin"): string[] {
+  if (platform !== "darwin") return linuxLines(setting);
   const lines = [`terminal  ${setting}  (${describe(setting)})`];
   if (!s) lines.push("grenaded is not running, or is older than this command; it takes effect when it starts.");
   else if (s.pinned && s.terminal !== setting) {
@@ -38,6 +39,13 @@ export function terminalLines(setting: TerminalKind, s: TerminalStatus | null): 
   else if (s.using) lines.push(`Sessions open in ${s.using}. The first time, allow grenaded (node) to control it when macOS asks.`);
   if (setting === "none") lines.push("Open each session in a terminal too with: grenade terminal iterm (or terminal for Terminal.app)");
   else lines.push("Turn it off with: grenade terminal none");
+  return lines;
+}
+
+/** iTerm2 and Terminal.app are Mac terminals: on Linux no window opens, whatever is set. */
+function linuxLines(setting: TerminalKind): string[] {
+  const lines = ["Sessions open in no terminal window on Linux: iTerm2 and Terminal.app are Mac terminals.", "Watch them on your phone, or attach from any terminal with: grenade open <name>"];
+  if (setting !== "none") lines.push(`The setting (${setting}) does nothing here. Clear it with: grenade terminal none`);
   return lines;
 }
 

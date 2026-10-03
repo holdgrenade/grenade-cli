@@ -2,8 +2,9 @@
  * What a Mac terminal has to do for the mirror (`mirror.ts`): open a tab that attaches to a session, find
  * it again, close it, and, when it can, split it for a group. One adapter per terminal: `iterm.ts`, `appleTerminal.ts`.
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { findOnPath } from "../platform/findOnPath.js";
 
 export interface TabOf {
   id: string;
@@ -28,12 +29,8 @@ export interface TerminalAdapter {
 export function resolveTmuxBin(): string {
   const fromEnv = process.env["TMUX_BIN"];
   if (fromEnv) return fromEnv;
-  try {
-    const found = execFileSync("/usr/bin/which", ["tmux"], { encoding: "utf8" }).trim();
-    if (found) return found;
-  } catch {
-    // fall through
-  }
+  const found = findOnPath("tmux");
+  if (found) return found;
   for (const candidate of ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"]) if (existsSync(candidate)) return candidate;
   return "tmux";
 }
@@ -60,9 +57,16 @@ export function parseLines(out: string): string[] {
 
 export type ScriptRunner = (script: string) => Promise<string>;
 
+const OSASCRIPT = "/usr/bin/osascript";
+
+/** AppleScript exists on a Mac only: without it no terminal can be driven, whatever `grenade terminal` says. */
+export function canRunAppleScript(): boolean {
+  return existsSync(OSASCRIPT);
+}
+
 export const runAppleScript: ScriptRunner = (script) =>
   new Promise((resolve, reject) => {
-    const child = execFile("/usr/bin/osascript", ["-"], { timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile(OSASCRIPT, ["-"], { timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) reject(new Error(stderr.trim() || err.message));
       else resolve(stdout.trimEnd());
     });

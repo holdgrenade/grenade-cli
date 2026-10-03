@@ -2,14 +2,7 @@
  * Reads what `launchctl print gui/<uid>/<label>` says about the agent. Pure.
  * Only the job's own lines count (one tab deep); its sockets and endpoints have a `state` of their own further in.
  */
-export interface ServiceState {
-  /** launchd knows the job (its plist is loaded). */
-  loaded: boolean;
-  running: boolean;
-  pid?: number;
-  /** Exit code of the last run, when launchd reports one. */
-  lastExit?: number;
-}
+import type { ServiceState } from "./serviceTypes.js";
 
 export function parseLaunchctlPrint(output: string | null): ServiceState {
   if (output === null) return { loaded: false, running: false };

@@ -1,23 +1,27 @@
 /** Runs one summary through `claude -p` with Haiku, using the Claude Code login already on this Mac. */
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { findOnPath } from "../platform/findOnPath.js";
 import { SUMMARY_SYSTEM_PROMPT } from "./summaryPrompt.js";
 
 const TIMEOUT_MS = 60_000;
 
-/** Absolute claude path: a daemon started by launchd or iTerm may not have the user's PATH. `CLAUDE_BIN` overrides. */
+/** Absolute claude path: a daemon started by launchd, systemd or iTerm may not have the user's PATH. `CLAUDE_BIN` overrides. */
 export function resolveClaudeBin(): string | undefined {
   const fromEnv = process.env["CLAUDE_BIN"];
   if (fromEnv) return fromEnv;
-  try {
-    const found = execFileSync("/usr/bin/which", ["claude"], { encoding: "utf8" }).trim();
-    if (found) return found;
-  } catch {
-    // fall through
-  }
-  const candidates = [join(homedir(), ".local", "bin", "claude"), join(homedir(), ".claude", "local", "claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
+  const found = findOnPath("claude");
+  if (found) return found;
+  const candidates = [
+    join(homedir(), ".local", "bin", "claude"),
+    join(homedir(), ".claude", "local", "claude"),
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    // mise keeps a launcher for every tool it installed here (Omarchy installs Claude Code with it).
+    join(homedir(), ".local", "share", "mise", "shims", "claude"),
+  ];
   return candidates.find((c) => existsSync(c));
 }
 

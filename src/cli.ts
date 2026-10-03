@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { CONTROL_PORT, DEFAULT_PORT, OFFICIAL_RELAY_URL, type Session } from "@grenade/protocol";
 import { VERSION, paths } from "./config.js";
+import { computerWord } from "./platform/computer.js";
 import { ago, matchDevice, type Device } from "./daemon/devices.js";
 import { showPairing } from "./cli/pairCommand.js";
 import { registerPromptCommand } from "./cli/promptCommand.js";
@@ -15,7 +16,7 @@ import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
 import { registerUpdateCommand } from "./cli/updateCommand.js";
 import { registerTerminalCommand } from "./cli/terminalCommand.js";
-import { RESTART_EXIT_CODE, underLaunchd } from "./update/underLaunchd.js";
+import { RESTART_EXIT_CODE, underService } from "./update/underService.js";
 import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
 import { startDaemon } from "./daemon/server.js";
 import { isTerminalKind, type TerminalKind } from "./terminal/mirror.js";
@@ -25,9 +26,12 @@ import { loadRelayConfig, normalizeRelayUrl, relayConfigFor, removeRelayConfig, 
 import type { RelayStatus } from "./relay/relayLink.js";
 import { sessionIdFor } from "./tmux/parse.js";
 
+/** "Mac" on macOS, "computer" on Linux: what the commands call the machine grenaded runs on. */
+const COMPUTER = computerWord();
+
 const program = new Command()
   .name("grenade")
-  .description("Control AI coding agents in your Mac terminals from your phone.")
+  .description("Control AI coding agents in your terminals from your phone.")
   .version(VERSION)
   .option("--control-port <port>", "daemon control port", parsePort, CONTROL_PORT);
 
@@ -44,8 +48,8 @@ program
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
   .action(async (o: { port: number; name?: string; advertise: boolean; terminal?: TerminalKind; summaries: boolean; relay: boolean; allowPlainLan?: boolean }) => {
-    // Under launchd an exit with a failure code brings the daemon back at once (KeepAlive), now running what is on disk.
-    const restart = underLaunchd() ? (installed: string) => void d.stop().then(() => process.exit(RESTART_EXIT_CODE)) : undefined;
+    // As the service, an exit with a failure code brings the daemon back (launchd's KeepAlive, systemd's Restart=), now running what is on disk.
+    const restart = underService() ? (installed: string) => void d.stop().then(() => process.exit(RESTART_EXIT_CODE)) : undefined;
     const d = await startDaemon({
       port: o.port,
       updates: { ...(process.argv[1] ? { program: process.argv[1] } : {}), ...(restart ? { restart } : {}) },
@@ -100,7 +104,7 @@ program.hook("postAction", async (_program, action) => {
 
 program
   .command("devices")
-  .description("list the phones paired with this Mac")
+  .description(`list the phones paired with this ${COMPUTER}`)
   .action(async () => {
     const list = await control<Device[]>("GET", "/devices");
     if (list.length === 0) return console.log("no phones paired. Pair one with: grenade pair");
@@ -132,40 +136,40 @@ program
     }
     const r = await control<{ closed: number }>("DELETE", `/devices/${encodeURIComponent(match.found.id)}`);
     console.log(`unpaired ${match.found.name} (${match.found.id}), closed ${r.closed} connection(s)`);
-    console.log("That phone can no longer reach this Mac. It forgets this Mac the next time it tries.");
+    console.log(`That phone can no longer reach this ${COMPUTER}. It forgets this ${COMPUTER} the next time it tries.`);
   });
 
-const relay = program.command("relay").description("reach this Mac from anywhere through a relay (end-to-end encrypted)");
+const relay = program.command("relay").description(`reach this ${COMPUTER} from anywhere through a relay (end-to-end encrypted)`);
 
 relay
   .command("on [url]")
-  .description(`connect this Mac to a relay (default ${OFFICIAL_RELAY_URL})`)
+  .description(`connect this ${COMPUTER} to a relay (default ${OFFICIAL_RELAY_URL})`)
   .option("--key <key>", "registration key, for relays that require one")
   .action(async (rawUrl: string | undefined, o: { key?: string }) => {
     const url = normalizeRelayUrl(rawUrl ?? OFFICIAL_RELAY_URL);
     const config = relayConfigFor(url, o.key, loadRelayConfig(paths.relay));
     saveRelayConfig(paths.relay, config);
-    console.log(`relay set to ${url} (this Mac is ${config.id} there)`);
+    console.log(`relay set to ${url} (this ${COMPUTER} is ${config.id} there)`);
     const reloaded = await control<RelayStatus>("POST", "/relay/reload").catch(() => null);
     if (!reloaded) return console.log("grenaded is not running; it connects on the next start: grenade daemon");
     if (reloaded.disabled) return console.log("grenaded runs with --no-relay; restart it without that flag to connect");
     const s = await waitForRelay();
     console.log(`relay: ${relayLine(s)}`);
-    if (s.state === "online") console.log("Phones paired with this Mac now reach it from any network, and a new phone can pair from anywhere: grenade pair");
+    if (s.state === "online") console.log(`Phones paired with this ${COMPUTER} now reach it from any network, and a new phone can pair from anywhere: grenade pair`);
   });
 
 relay
   .command("off")
-  .description("disconnect from the relay and forget this Mac's relay id")
+  .description(`disconnect from the relay and forget this ${COMPUTER}'s relay id`)
   .action(async () => {
     removeRelayConfig(paths.relay);
     const reloaded = await control<RelayStatus>("POST", "/relay/reload").catch(() => null);
-    console.log(reloaded ? "relay off: phones reach this Mac only on the same Wi‑Fi" : "relay off (grenaded is not running)");
+    console.log(reloaded ? `relay off: phones reach this ${COMPUTER} only on the same Wi‑Fi` : "relay off (grenaded is not running)");
   });
 
 relay
   .command("status")
-  .description("is this Mac reachable through the relay?")
+  .description(`is this ${COMPUTER} reachable through the relay?`)
   .action(async () => {
     const s = await control<DaemonStatus>("GET", "/status").catch(() => null);
     if (!s) {
@@ -174,7 +178,7 @@ relay
     }
     const r = s.relayLink;
     if (r.state === "off") return console.log(`relay: ${relayLine(r)}`);
-    console.log(`relay    ${r.url} (this Mac is ${r.id})`);
+    console.log(`relay    ${r.url} (this ${COMPUTER} is ${r.id})`);
     console.log(`state    ${r.state}${r.since ? ` since ${new Date(r.since).toLocaleTimeString()}` : ""}${r.lastError && r.state !== "online" ? ` · ${r.lastError}` : ""}`);
     console.log(`public   ${r.publicIp ?? "-"}`);
     console.log(`local    ${r.localIps?.join(", ") || "-"}`);
@@ -313,7 +317,7 @@ function deviceIdleFromEnv(): { deviceIdleMs?: number } {
 
 function relayLine(r: RelayStatus): string {
   if (r.disabled) return "off (daemon started with --no-relay)";
-  if (r.state === "off") return "off · phones reach this Mac on the same Wi‑Fi only (grenade relay on)";
+  if (r.state === "off") return `off · phones reach this ${COMPUTER} on the same Wi‑Fi only (grenade relay on)`;
   if (r.state === "online") return `online · ${r.url} · public IP ${r.publicIp ?? "unknown"} · ${r.phones} phone(s) through it`;
   return `${r.state} · ${r.url}${r.lastError ? ` · ${r.lastError}` : ""}`;
 }

@@ -37,6 +37,7 @@ import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
+import { underSystemd } from "../update/underService.js";
 import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
 import { ScreenPrompts } from "../prompts/screenPrompts.js";
@@ -133,7 +134,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
-  const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) } });
+  const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) }, serverScope: underSystemd() });
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
   const codes = new PairingCodes();
   const pairing = new PairingWatch();

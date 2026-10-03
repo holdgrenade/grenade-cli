@@ -13,9 +13,10 @@ import type { Device } from "../daemon/devices.js";
 import { removeCodexHooks } from "../hooks/installCodexHooks.js";
 import { HOOK_MARKER, mergeHooks } from "../hooks/installHooks.js";
 import type { RelayStatus } from "../relay/relayLink.js";
-import { serviceStatus } from "../service/launchd.js";
-import { SERVICE_LABEL } from "../service/launchdPlist.js";
+import { computerWord, systemName } from "../platform/computer.js";
+import { defaultLabel, serviceStatus } from "../service/service.js";
 import { askYesNo } from "../setup/ask.js";
+import { firewallNotice, ufwIsOn } from "../setup/firewall.js";
 import { findRequirements } from "../setup/findRequirements.js";
 import { nextSteps } from "../setup/nextSteps.js";
 import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
@@ -34,14 +35,14 @@ interface SetupOptions {
 export function registerSetupCommand(program: Command, d: ServiceCommandDeps): void {
   program
     .command("setup")
-    .description("set Grenade up on this Mac: start at login, relay, then pair your phone")
+    .description(`set Grenade up on this ${computerWord()}: start at login, relay, then pair your phone`)
     .option("-y, --yes", "take the suggested answer to every question")
     // Kept so scripts that pass it still run: setup no longer touches any agent's settings.
     .option("--no-hooks", "nothing; hooks come with each session now")
     .option("--no-service", "do not start grenaded at login")
     .option("--no-relay", "do not turn on the relay")
     .option("--no-pair", "stop before pairing a phone")
-    .option("--label <label>", "launchd label", SERVICE_LABEL)
+    .option("--label <label>", "the service's name: a launchd label on a Mac, a systemd unit on Linux", defaultLabel())
     .action(async (o: SetupOptions) => {
       const ask = (question: string, unattended: boolean) => askYesNo(question, { defaultYes: true, assumeYes: o.yes === true, unattended });
       step(1, "What Grenade needs");
@@ -50,13 +51,14 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       oldCodexHooks();
       step(2, "Start at login");
       if (!(await daemon(d, o.service, o.label, ask))) return;
-      step(3, "Reach this Mac from anywhere");
+      firewall();
+      step(3, `Reach this ${computerWord()} from anywhere`);
       if (o.relay) await relay(d, ask);
-      else console.log("skipped (--no-relay). The phone reaches this Mac on the same Wi‑Fi only.");
+      else console.log(`skipped (--no-relay). The phone reaches this ${computerWord()} on the same Wi‑Fi only.`);
       await push(d);
       step(4, "Pair your phone");
       if (!o.pair) return console.log("skipped (--no-pair). Pair later with: grenade pair");
-      if (await pair(d, o.yes === true)) for (const line of nextSteps(findRequirements().iterm)) console.log(line);
+      if (await pair(d, o.yes === true)) for (const line of nextSteps(findRequirements().iterm, process.platform)) console.log(line);
       else process.exitCode = 1;
     });
 }
@@ -87,7 +89,7 @@ async function requirements(ask: Ask): Promise<void> {
   const found = findRequirements();
   const left = problems(found).filter((p) => p.blocks);
   if (left.length > 0) throw new Error(left.map((p) => p.message).join(" "));
-  console.log(found.iterm ? "ok: macOS, Node, tmux and iTerm2 are in place" : "ok: macOS, Node and tmux are in place");
+  console.log(`ok: ${systemName(found.platform)}, Node${found.iterm ? ", tmux and iTerm2" : " and tmux"} are in place`);
 }
 
 /**
@@ -131,7 +133,7 @@ async function daemon(d: ServiceCommandDeps, wanted: boolean, label: string, ask
   }
   if (wanted && (await ask("Start grenaded at login and keep it running?", true))) {
     const s = await startService(d, { label });
-    console.log(`ok: grenaded is running and starts at login (${s.plist})`);
+    console.log(`ok: grenaded is running and starts at login (${s.file})`);
     console.log("Take it out again with: grenade service remove");
     return true;
   }
@@ -141,13 +143,21 @@ async function daemon(d: ServiceCommandDeps, wanted: boolean, label: string, ask
   return false;
 }
 
+/** Linux only: a firewall that is on refuses the phone on the Wi‑Fi until Grenade's port is allowed. Says how; changes nothing. */
+function firewall(): void {
+  if (!ufwIsOn()) return;
+  console.log("");
+  for (const line of firewallNotice(DEFAULT_PORT)) console.log(line);
+}
+
 async function relay(d: ServiceCommandDeps, ask: Ask): Promise<void> {
+  const computer = computerWord();
   const link = (await d.control<{ relayLink: RelayStatus }>("GET", "/status")).relayLink;
-  if (link.disabled) return console.log("grenaded runs with --no-relay. The phone reaches this Mac on the same Wi‑Fi only.");
+  if (link.disabled) return console.log(`grenaded runs with --no-relay. The phone reaches this ${computer} on the same Wi‑Fi only.`);
   if (link.state !== "off") return console.log(`ok: the relay is ${link.state} (${link.url ?? ""})`);
-  console.log("Through a relay the phone reaches this Mac from any network, and can pair from anywhere.");
-  console.log("The relay learns this Mac's name and IP addresses and when it is online. It never sees a screen,");
-  console.log("a prompt or a session name: everything between phone and Mac is end-to-end encrypted.");
+  console.log(`Through a relay the phone reaches this ${computer} from any network, and can pair from anywhere.`);
+  console.log(`The relay learns this ${computer}'s name and IP addresses and when it is online. It never sees a screen,`);
+  console.log(`a prompt or a session name: everything between phone and ${computer} is end-to-end encrypted.`);
   console.log("");
   // The relay is someone else's server: only a person's yes, or --yes, turns it on.
   if (!(await ask("Turn on the Grenade relay?", false))) return console.log("left off. Turn it on later with: grenade relay on");
@@ -163,7 +173,7 @@ async function push(d: ServiceCommandDeps): Promise<void> {
   const setting = await d.control<PushSetting>("GET", "/push").catch(() => null);
   if (!setting) return;
   console.log("");
-  for (const line of pushNotice(setting)) console.log(line);
+  for (const line of pushNotice(setting, computerWord())) console.log(line);
 }
 
 async function pair(d: ServiceCommandDeps, assumeYes: boolean): Promise<boolean> {

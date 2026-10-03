@@ -7,7 +7,7 @@ import { formula } from "../packaging/homebrew/formula.mjs";
 import { parseAuto } from "../src/update/autoSetting.js";
 import { installedVersion } from "../src/update/installedVersion.js";
 import { installError } from "../src/update/installer.js";
-import { underLaunchd } from "../src/update/underLaunchd.js";
+import { underLaunchd, underService, underSystemd } from "../src/update/underService.js";
 import { UpdateChecker } from "../src/update/updateChecker.js";
 import {
   compareVersions,
@@ -130,6 +130,17 @@ describe("versions", () => {
     expect(underLaunchd({ XPC_SERVICE_NAME: "com.adamchew.grenade.daemon.test" })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "0" })).toBe(false);
     expect(underLaunchd({})).toBe(false);
+  });
+
+  it("knows the systemd service by its marker and its own pid", () => {
+    const unit = { GRENADE_SERVICE: "grenade", SYSTEMD_EXEC_PID: "4321" };
+    expect(underSystemd(unit, 4321)).toBe(true);
+    expect(underService(unit, 4321)).toBe(true);
+    // A `grenade daemon` typed in a Grenade session inherits both, with another pid.
+    expect(underSystemd(unit, 5000)).toBe(false);
+    // Some other unit someone wrote: nothing says systemd starts it again.
+    expect(underSystemd({ SYSTEMD_EXEC_PID: "4321" }, 4321)).toBe(false);
+    expect(underService({}, 4321)).toBe(false);
   });
 });
 

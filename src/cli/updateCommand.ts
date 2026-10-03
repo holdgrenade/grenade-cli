@@ -7,8 +7,7 @@ import { existsSync } from "node:fs";
 import type { Command } from "commander";
 import type { Session } from "@grenade/protocol";
 import { VERSION } from "../config.js";
-import { restartService, serviceStatus } from "../service/launchd.js";
-import { SERVICE_LABEL } from "../service/launchdPlist.js";
+import { defaultLabel, restartService, serviceStatus } from "../service/service.js";
 import { readAuto, writeAuto } from "../update/autoSetting.js";
 import { writable } from "../update/installer.js";
 import { installedVersion, installMethod, resolveProgram } from "../update/installedVersion.js";
@@ -28,7 +27,7 @@ export function registerUpdateCommand(program: Command, d: UpdateCommandDeps): v
     .description("install the latest version of Grenade and restart grenaded into it")
     .option("--check", "only say whether a new version is out")
     .option("--now", "restart grenaded even while an agent is working")
-    .option("--label <label>", "launchd label of the agent to restart", SERVICE_LABEL)
+    .option("--label <label>", "name of the service to restart (a launchd label, or a systemd unit)", defaultLabel())
     .option("--auto <on|off>", "whether grenaded installs new versions by itself (on unless turned off)")
     .action(async (o: { check?: boolean; now?: boolean; label: string; auto?: string }) => {
       if (o.auto !== undefined) return setAuto(o.auto);
@@ -73,7 +72,7 @@ export function registerUpdateCommand(program: Command, d: UpdateCommandDeps): v
     });
 }
 
-/** Makes the running daemon the installed version: restarts the launchd agent, or says what to do. */
+/** Makes the running daemon the installed version: restarts the service, or says what to do. */
 async function runInstalled(d: UpdateCommandDeps, label: string, installed: string, now: boolean): Promise<void> {
   const status = await d.control<{ version: string }>("GET", "/status").catch(() => null);
   if (!status) return console.log("grenaded is not running; it runs the new version when it starts.");
