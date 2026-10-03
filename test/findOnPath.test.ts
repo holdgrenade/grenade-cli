@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { computerWord, systemName } from "../src/platform/computer.js";
+import { computerWord, daemonOs, systemName } from "../src/platform/computer.js";
 import { findOnPath } from "../src/platform/findOnPath.js";
 import { loginShell } from "../src/platform/loginShell.js";
 
@@ -50,6 +50,10 @@ describe("what the machine is called", () => {
   it("is a Mac on macOS and a computer elsewhere", () => {
     expect(computerWord("darwin")).toBe("Mac");
     expect(computerWord("linux")).toBe("computer");
+    // What the apps choose their word from (PROTOCOL.md `os`).
+    expect(daemonOs("darwin")).toBe("macos");
+    expect(daemonOs("linux")).toBe("linux");
+    expect(daemonOs("freebsd")).toBe("freebsd");
     expect(systemName("darwin")).toBe("macOS");
     expect(systemName("linux")).toBe("Linux");
   });
