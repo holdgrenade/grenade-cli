@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { OFFICIAL_RELAY_URL, PushContent, type Session } from "@grenade/protocol";
-import { statusLines, testLine } from "../src/cli/pushCommand.js";
+import { statusLines, testLine, mainRelayNote } from "../src/cli/pushCommand.js";
 import { isAtMac, parseHidIdle, parseScreenLocked, readMacPresence } from "../src/push/macPresence.js";
 import { atMacMs, loadPushConfig, pushConfigOn, pushGatewayFor, pushMode, savePushConfig } from "../src/push/pushConfig.js";
 import { clip, pushContentFor, pushText, testPushContent } from "../src/push/pushContent.js";
@@ -299,6 +299,14 @@ describe("grenade push status", () => {
     expect(auto[0]).toBe("push     on, through https://relay.example.com (as long as remote access is on)");
   });
 
+  it("on Linux names the computer, and says no push is held there", () => {
+    const on = statusLines({ enabled: true, mode: "on", gateway: "https://relay.example.com", atMacSeconds: 120, pending: 0, devices: [] }, "computer").join("\n");
+    expect(on).toContain("held     never");
+    expect(on).not.toContain("Mac");
+    expect(statusLines({ enabled: false, mode: "auto", atMacSeconds: 120, pending: 0, devices: [] }, "computer")[0]).toContain("this computer talks to no relay");
+    expect(mainRelayNote("computer")).toContain("This computer posts each notification");
+  });
+
   it("explains a test that did not arrive", () => {
     expect(testLine({ device: "p_1", outcome: "sent" })).toBe("sent");
     expect(testLine({ device: "p_1", outcome: "refused", error: "push_unavailable" })).toContain("no push key");
@@ -310,6 +318,7 @@ describe("a turn that stopped partway", () => {
   it("is pushed as needing you, saying why", () => {
     const session = { summary: "Rate limiting", lastLine: "Then the tests for…", waitingFor: "stopped" as const, stoppedBecause: "sleep" as const };
     expect(pushText("answer", session)).toBe("Stopped partway: your Mac went to sleep during the reply.");
+    expect(pushText("answer", session, undefined, "computer")).toBe("Stopped partway: your computer went to sleep during the reply.");
     expect(eventOf({ status: "waiting", waitingFor: "stopped" } as Session)).toBe("answer");
   });
 });

@@ -1,6 +1,6 @@
 /**
- * The daemon's side of updates. Every 6 hours it asks for the latest release (the tap's formula for a Homebrew copy,
- * npm's registry for an npm one), and unless turned off (`grenade update --auto off`) installs it itself with the
+ * The daemon's side of updates. Every 6 hours it asks for the latest release (the tap's formula for a Homebrew copy
+ * and for one unpacked from the tarball, npm's registry for an npm one), and unless turned off (`grenade update --auto off`) installs it itself with the
  * same installer (`installer.ts`); a failed install is tried again an hour later. Every minute it reads the version
  * on disk. When a newer one has been installed (by itself, `grenade update`, `brew upgrade`) and no session is busy,
  * it calls `restart`: under launchd the daemon exits and launchd starts the new version. The Mac app shows all of it
@@ -9,6 +9,7 @@
 import type { Logger } from "../log.js";
 import { runInstall, type InstallOutcome } from "./installer.js";
 import {
+  installerName,
   isNewer,
   latestFromFormula,
   latestFromNpm,
@@ -129,7 +130,7 @@ export class UpdateChecker {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.status = { ...this.status, install: { state: "installing", version: latest } };
-    this.d.log.info(`Installing Grenade ${latest} with ${i.method === "brew" ? "Homebrew" : "npm"}`);
+    this.d.log.info(`Installing Grenade ${latest} with ${installerName(i.method)}`);
     const outcome = await (this.d.install ?? runInstall)(i).catch((e: unknown) => ({ kind: "failed" as const, error: e instanceof Error ? e.message : String(e) }));
     const onDisk = this.readDisk();
     const { install: _, ...rest } = this.status;

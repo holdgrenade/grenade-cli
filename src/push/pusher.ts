@@ -3,6 +3,7 @@
  * Listens to the registry, applies the rules in `pushPolicy.ts`, seals one push per registered phone and
  * posts it to the relay's push route. Knows no sockets: `register` / `unregister` are called by a Connection.
  */
+import { computerWord } from "../platform/computer.js";
 import { randomBytes } from "node:crypto";
 import type { DaemonInfo, PushContent, PushRegisterFrame, PushRequest, PushStateFrame, Session, PushableEvent } from "@grenade/protocol";
 import type { Logger } from "../log.js";
@@ -266,7 +267,7 @@ export class Pusher {
     if (!gateway) return;
     const phones = this.d.devices.list().filter((d) => d.events.includes(event));
     if (phones.length === 0) return;
-    const content = pushContentFor({ id: this.newId(), at: this.now(), event, daemon: this.d.daemon, session, asked: this.asked.get(session.id) });
+    const content = pushContentFor({ id: this.newId(), at: this.now(), event, daemon: this.d.daemon, session, asked: this.asked.get(session.id), computer: computerWord() });
     const stillWaiting = () => {
       const s = this.d.registry.get(session.id);
       return s?.status === "waiting" && s.statusSince === session.statusSince;

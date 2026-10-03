@@ -3,6 +3,7 @@
  * a ConversationSource (ConversationIndex for Claude Code, CodexConversations for Codex); this merges them and sends
  * each request to the source that has the id. Nothing here knows an agent's files.
  */
+import { computerWord } from "../platform/computer.js";
 import { CONVERSATIONS_MAX, type ActivityEntry, type AgentKind, type Conversation } from "@grenade/protocol";
 
 /** One agent's conversations on this Mac. */
@@ -52,6 +53,6 @@ export class AllConversations {
       const target = await s.trashPaths(id);
       if (target) return target;
     }
-    return { refused: `no conversation ${id} on this Mac` };
+    return { refused: `no conversation ${id} on this ${computerWord()}` };
   }
 }

@@ -2,6 +2,7 @@
  * One instance per WebSocket connection. Transport-agnostic: the server feeds it
  * raw messages and gives it an `out` callback, which keeps it unit-testable.
  */
+import { computerWord } from "../platform/computer.js";
 import { listFolders } from "../folders/listFolders.js";
 import { agentInfo } from "../agents/agentCatalog.js";
 import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
@@ -19,7 +20,7 @@ const NO_PUSH: PushStateFrame = { type: "push.state", registered: false, deliver
 /** What a daemon that keeps no Mac board answers to `board.register`. */
 const NO_BOARD: BoardStateFrame = { type: "board.state", registered: false, delivery: "off" };
 /** What a phone that predates the encrypted local network is told (PROTOCOL.md "Older clients and daemons"). */
-export const PLAIN_REFUSED = "This Mac only accepts encrypted connections. Update Grenade on your phone.";
+export const PLAIN_REFUSED = `This ${computerWord()} only accepts encrypted connections. Update Grenade on your phone.`;
 /** What a `pair` outside the encrypted channel is told (PROTOCOL.md "Pairing inside the encrypted channel"). */
 export const PAIR_NEEDS_ENCRYPTION = "Pairing needs the encrypted connection. Update Grenade on your phone.";
 
@@ -391,7 +392,7 @@ export class Connection {
       case "conversation.preview": {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         const entries = await this.d.conversations.preview(frame.conversationId);
-        if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this Mac`, frame.type);
+        if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this ${computerWord()}`, frame.type);
         return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: this.entriesFor(entries) });
       }
       case "conversation.delete": {

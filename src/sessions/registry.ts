@@ -3,6 +3,7 @@
  * drives the status machine, caches the last screen, and persists session metadata
  * so a restarted daemon re-adopts its `gr-*` tmux sessions.
  */
+import { computerWord } from "../platform/computer.js";
 import { EventEmitter } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -195,7 +196,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   async create(input: { name: string; cwd: string; agent: AgentKind; group?: string | undefined; resume?: string | undefined }): Promise<Session> {
     const id = sessionIdFor(input.name);
     const cwd = expandCwd(input.cwd, this.home);
-    if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the Mac: ${input.cwd}`);
+    if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the ${computerWord()}: ${input.cwd}`);
     if (input.group !== undefined && !isJoinableGroup(input.group, this.list(), id)) {
       throw new UnknownGroupError(`no live session in group ${input.group}`);
     }

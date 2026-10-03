@@ -1,30 +1,39 @@
 # grenade-cli
 
-The Mac side of [Grenade](https://www.holdgrenade.com): `grenaded` (daemon) and the `grenade` CLI. Runs your AI coding agents inside tmux, streams them to the Grenade phone app, and lets the phone type into them.
+The computer's side of [Grenade](https://www.holdgrenade.com): `grenaded` (daemon) and the `grenade` CLI, for macOS and Linux. Runs your AI coding agents inside tmux, streams them to the Grenade phone app, and lets the phone type into them.
 
-Grenade lets you watch and answer the AI coding agents running in terminals on your Mac (Claude Code, Codex, or a plain shell) from your phone or from a Mac app: every session in one list with a status (needs an answer, finished, working, idle), the live terminal, Claude Code's permissions, questions and plans as cards, and a mic to talk into. On the same Wi‑Fi the phone talks to the Mac directly; from anywhere else it goes through a relay. Both ways are end-to-end encrypted, and there is no account.
+Grenade lets you watch and answer the AI coding agents running in terminals on your Mac or your Linux computer (Claude Code, Codex, or a plain shell) from your phone or from a Mac app: every session in one list with a status (needs an answer, finished, working, idle), the live terminal, Claude Code's permissions, questions and plans as cards, and a mic to talk into. On the same Wi‑Fi the phone talks to the computer directly; from anywhere else it goes through a relay. Both ways are end-to-end encrypted, and there is no account.
 
 [Website](https://www.holdgrenade.com) · [Install](https://www.holdgrenade.com/install) · [Guide](https://www.holdgrenade.com/guide) · [Security](https://www.holdgrenade.com/security)
 
 ## Install
+
+On a Mac:
 
 ```bash
 brew install holdgrenade/tap/grenade   # brings Node and tmux
 grenade setup                            # start at login, relay, then a QR code for the phone
 ```
 
+On Linux (see [Linux](#linux) below):
+
+```bash
+curl -fsSL https://www.holdgrenade.com/install.sh | sh   # needs Node 22+; no sudo
+grenade setup
+```
+
 `grenade setup` asks before it changes anything and skips what is already done:
 
-1. It checks for macOS, Node 22+, tmux 3.2+ and an agent, and offers `brew install tmux` when tmux is missing. iTerm2 is not needed (see below).
-2. It installs a launchd agent, so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
-3. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
+1. It checks for macOS or Linux, Node 22+, tmux 3.2+ and an agent, and offers to install tmux when it is missing (`brew install tmux`; on Linux with pacman, apt-get or dnf). iTerm2 is not needed (see below).
+2. It installs a launchd agent (on Linux a systemd user service), so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
+3. It offers the relay, for reaching the computer from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
 4. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
 
 Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. The first Codex session asks once to trust them; the phone shows it as a card, so tap Trust there or pick "Trust all and continue" in the terminal.
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
 
-Without Homebrew, with Node 22+ and tmux 3.2+ already there: `npm install -g @holdgrenade/cli`, then `grenade setup`.
+On a Mac without Homebrew, with Node 22+ and tmux 3.2+ already there: `npm install -g @holdgrenade/cli`, then `grenade setup`.
 
 Then get an app and scan the QR code: [Grenade: Agent Remote](https://apps.apple.com/app/grenade-agent-remote/id6818136871) for iPhone (iOS 17 or later), or [the Mac app](https://downloads.holdgrenade.com/mac/Grenade.dmg) (macOS 26 or later).
 
@@ -67,7 +76,17 @@ grenade update           # install the latest version now (grenaded also does it
 grenade update --auto off  # stop grenaded installing new versions by itself (grenade update --auto on: back)
 ```
 
-Grenade keeps itself up to date: grenaded checks for a new version every few hours, installs it with Homebrew or npm (whichever installed it), and switches over once no session is working; your sessions keep running. With Homebrew this also upgrades its `node` and `tmux` when they are outdated. `brew pin grenade` or `grenade update --auto off` stops it.
+Grenade keeps itself up to date: grenaded checks for a new version every few hours, installs it with Homebrew or npm (whichever installed it; on Linux it downloads the release and checks its sha256), and switches over once no session is working; your sessions keep running. With Homebrew this also upgrades its `node` and `tmux` when they are outdated. `brew pin grenade` or `grenade update --auto off` stops it.
+
+### Linux
+
+`grenaded` runs on Linux with systemd, Node 22+ and tmux 3.2+. It is tested on Arch Linux (which Omarchy is), x86_64.
+
+- **Install.** `install.sh` reads the release Homebrew installs (the tap's formula), downloads that tarball from this repo's releases, checks its sha256, unpacks it into `~/.local/share/grenade` and links `~/.local/bin/grenade`. No sudo, no npm. Running it again updates; `grenade update` and grenaded itself do the same steps. Remove it with `grenade service remove; rm -rf ~/.local/share/grenade ~/.local/bin/grenade`.
+- **Start at login.** A systemd user service, `~/.config/systemd/user/grenade.service`, handled with `systemctl --user` (`grenade service status`). It runs while you are logged in; `loginctl enable-linger $USER` keeps it running after you log out, on a machine nobody sits at.
+- **Firewall.** A firewall that refuses incoming connections (ufw on Omarchy and Ubuntu) keeps a phone on the same Wi‑Fi out until you allow the port: `sudo ufw allow 7788/tcp`. `grenade setup` says so when ufw is on. Through the relay the phone gets in without it.
+- **Watching sessions.** On the phone, or in any terminal with `grenade open <name>`. `grenade terminal` (iTerm2, Terminal.app) and the Mac app are for a Mac.
+- **Not there yet.** A push notification is never held back while you are at the computer: on a Mac it waits while the keyboard or mouse was used in the last two minutes.
 
 ### On the Mac
 
@@ -108,6 +127,8 @@ npm run release          # the tarball and the Homebrew formula, locally
 ```
 
 See `CLAUDE.md` for the architecture. The wire format is `PROTOCOL.md` in `grenade-protocol`, which is not public.
+
+The workflow runs the tests and `scripts/smoke.mjs` in an Arch Linux container, then the tests on macOS, before a release.
 
 ## Help
 

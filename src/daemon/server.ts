@@ -4,6 +4,7 @@
  *   127.0.0.1:7789  control API for the CLI
  *   relay link (optional)  phones away from the LAN, end-to-end encrypted (src/relay/)
  */
+import { computerWord } from "../platform/computer.js";
 import { dirname, join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -258,14 +259,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         await moveToTrash(target.paths);
       } catch (e) {
         log.warn("Could not move a conversation to the Trash", { conversation: id, error: e });
-        return "the Mac could not move it to the Trash";
+        return `the ${computerWord()} could not move it to the Trash`;
       }
       log.info(`Moved conversation ${id} to the Trash`, { paths: target.paths.join(",") });
       return null;
     },
     async resume({ name, agent, group, conversationId }) {
       const found = await conversationIndex.find(conversationId);
-      if (!found || found.agent !== agent) return `no ${agent} conversation ${conversationId} on this Mac`;
+      if (!found || found.agent !== agent) return `no ${agent} conversation ${conversationId} on this ${computerWord()}`;
       const session = await registry.create({ name, cwd: found.cwd, agent, group, resume: conversationId });
       // The agent writes the copy only with its first prompt; until then the session shows the original's history.
       // Read whole here, not through the reader, whose place in that file may belong to another session.
@@ -429,11 +430,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     list: (): Device[] => tokens.list().map((r) => deviceOf(r, live.routesOf(r.token))),
     unpair(id: string): { closed: number } | null {
       const gone = tokens.revoke(id);
-      return gone ? { closed: closeConnectionsOf([gone], "unpaired on the Mac") } : null;
+      return gone ? { closed: closeConnectionsOf([gone], `unpaired on the ${computerWord()}`) } : null;
     },
     unpairAll(): { removed: number; closed: number } {
       const gone = tokens.revokeAll();
-      return { removed: gone.length, closed: closeConnectionsOf(gone, "unpaired on the Mac") };
+      return { removed: gone.length, closed: closeConnectionsOf(gone, `unpaired on the ${computerWord()}`) };
     },
   };
 

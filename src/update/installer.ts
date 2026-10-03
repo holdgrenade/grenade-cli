@@ -1,6 +1,7 @@
 /**
  * Runs the install of the latest release for the daemon (`UpdateChecker`), with the installer of this copy
- * (`installerFor`): `brew update` + `brew upgrade grenade`, or `npm install -g @holdgrenade/cli@latest`. Asynchronous,
+ * (`installerFor`): `brew update` + `brew upgrade grenade`, `npm install -g @holdgrenade/cli@latest`, or the script of
+ * `tarballInstall.ts` for a copy unpacked from the release's tarball. Asynchronous,
  * so the daemon keeps serving phones meanwhile, with a time limit. It does not install when the user has pinned the
  * formula (`brew pin grenade`) or when npm's global folder is not writable (it would need sudo).
  */
@@ -24,6 +25,7 @@ export async function runInstall(i: Installer): Promise<InstallOutcome> {
     if (!npm) return { kind: "failed", error: "could not find npm" };
     if (!i.writes.every(writable)) return { kind: "needsAdmin" };
   }
+  if (i.method === "tarball" && !writable(i.root)) return { kind: "failed", error: `cannot write ${i.root}` };
   for (const command of installCommands(i, npm ?? "")) {
     const r = await run(command);
     if (!r.ok) return { kind: "failed", error: installError(command, r.stderr) };
@@ -33,9 +35,9 @@ export async function runInstall(i: Installer): Promise<InstallOutcome> {
 
 /** A short reason for the sidebar and `grenade status`, from what the installer printed. Pure. */
 export function installError(command: string[], stderr: string): string {
-  const tool = command[0]?.endsWith("/brew") ? "Homebrew" : "npm";
+  const tool = command[0]?.endsWith("/brew") ? "Homebrew" : command[0]?.endsWith("/sh") ? "The download" : "npm";
   if (/already locked|another active homebrew|process has already locked/i.test(stderr)) return "Homebrew was busy";
-  if (/ENOTFOUND|EAI_AGAIN|Could not resolve host|Failed to connect|network/i.test(stderr)) return `${tool} could not reach the internet`;
+  if (/ENOTFOUND|EAI_AGAIN|Could not resolve host|Failed to connect|Couldn't connect|network/i.test(stderr)) return `${tool} could not reach the internet`;
   if (/timed out|ETIMEDOUT|SIGTERM/i.test(stderr)) return `${tool} took too long`;
   if (/EACCES|Permission denied/i.test(stderr)) return `${tool} was not allowed to write its folder`;
   const last = stderr.trim().split("\n").filter((l) => l.trim()).pop()?.trim();

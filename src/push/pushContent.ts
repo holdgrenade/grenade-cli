@@ -11,11 +11,16 @@ export function clip(text: string, max: number = PUSH_TEXT_MAX): string {
 }
 
 /** What a push says about a turn that stopped partway, by why it stopped. */
-export const STOPPED_PUSH_TEXT = {
-  sleep: "Stopped partway: your Mac went to sleep during the reply.",
-  error: "Stopped partway: Claude Code hit an error.",
-  quiet: "Stopped partway: nothing has happened for a while.",
-} as const;
+export function stoppedPushText(because: "sleep" | "error" | "quiet", computer: string = "Mac"): string {
+  switch (because) {
+    case "sleep":
+      return `Stopped partway: your ${computer} went to sleep during the reply.`;
+    case "error":
+      return "Stopped partway: Claude Code hit an error.";
+    case "quiet":
+      return "Stopped partway: nothing has happened for a while.";
+  }
+}
 
 type PushedSession = Pick<Session, "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
 
@@ -23,8 +28,8 @@ type PushedSession = Pick<Session, "summary" | "lastLine" | "waitingFor" | "stop
  * The text of a push: for a question what was asked (the hook's message), for a finished turn the
  * session's summary, for a turn that stopped partway why; the last line of the screen when there is none.
  */
-export function pushText(event: PushEvent, session: PushedSession, asked?: string): string {
-  if (session.waitingFor === "stopped") return STOPPED_PUSH_TEXT[session.stoppedBecause ?? "quiet"];
+export function pushText(event: PushEvent, session: PushedSession, asked?: string, computer: string = "Mac"): string {
+  if (session.waitingFor === "stopped") return stoppedPushText(session.stoppedBecause ?? "quiet", computer);
   const first = event === "answer" ? asked : session.summary;
   return clip(first?.trim() || session.lastLine);
 }
@@ -38,6 +43,8 @@ export interface PushContentInput {
   session: Pick<Session, "id" | "name" | "title" | "agent" | "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
   /** What the agent asked, when a hook said so. */
   asked?: string | undefined;
+  /** What the daemon's machine is called (`computerWord`): "Mac" when absent. */
+  computer?: string;
 }
 
 export function pushContentFor(input: PushContentInput): PushContent {
@@ -54,7 +61,7 @@ export function pushContentFor(input: PushContentInput): PushContent {
     // What the phone heads the notification with; a session without a title yet is headed with its name.
     ...(title ? { sessionTitle: title } : {}),
     agent: input.session.agent,
-    text: pushText(input.event, input.session, input.asked),
+    text: pushText(input.event, input.session, input.asked, input.computer),
   };
 }
 

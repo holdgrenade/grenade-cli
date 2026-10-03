@@ -1,5 +1,6 @@
 /**
- * `grenade update`: install the latest release with the package manager that installed this copy (Homebrew or npm),
+ * `grenade update`: install the latest release with whatever installed this copy (Homebrew, npm, or the release's
+ * tarball on Linux),
  * then run it. The daemon also does this by itself (`UpdateChecker`); `--auto off` stops that, `--auto on` brings it back.
  */
 import { spawnSync } from "node:child_process";
@@ -12,10 +13,12 @@ import { readAuto, writeAuto } from "../update/autoSetting.js";
 import { writable } from "../update/installer.js";
 import { installedVersion, installMethod, resolveProgram } from "../update/installedVersion.js";
 import { fetchFormula, fetchNpm } from "../update/updateChecker.js";
-import { installCommands, installerFor, isBusy, isNewer, latestFromFormula, latestFromNpm, NPM_ADMIN_COMMAND } from "../update/versions.js";
+import { installCommands, installerFor, installerName, isBusy, isNewer, latestFromFormula, latestFromNpm, NPM_ADMIN_COMMAND } from "../update/versions.js";
 import type { Control } from "./controlClient.js";
 
 const RESTART_WAIT_MS = 30_000;
+/** What installs Grenade on Linux in the first place (the website's `install.sh`); running it again is also an update. */
+const INSTALL_SCRIPT_COMMAND = "curl -fsSL https://www.holdgrenade.com/install.sh | sh";
 
 export interface UpdateCommandDeps {
   control: Control;
@@ -51,22 +54,24 @@ export function registerUpdateCommand(program: Command, d: UpdateCommandDeps): v
 
       const installer = installerFor(resolveProgram(command) ?? command, process.execPath);
       if (!installer) {
-        return fail(`Grenade ${latest} is out, but this copy (${before}) was built from source. Pull and rebuild it, or install it with: brew install holdgrenade/tap/grenade`);
+        return fail(`Grenade ${latest} is out, but this copy (${before}) was built from source. Pull and rebuild it, or install it with: ${process.platform === "darwin" ? "brew install holdgrenade/tap/grenade" : INSTALL_SCRIPT_COMMAND}`);
       }
       const npm = installer.method === "npm" ? installer.npm.find((p) => existsSync(p)) ?? "npm" : "";
       if (installer.method === "npm" && !installer.writes.every(writable)) {
         return fail(`Grenade ${latest} is out. npm's global folder belongs to another user, so install it with: ${NPM_ADMIN_COMMAND}`);
       }
       const commands = installCommands(installer, npm);
-      console.log(`Updating Grenade ${before} → ${latest} with ${method === "brew" ? "Homebrew" : "npm"}…`);
+      console.log(`Updating Grenade ${before} → ${latest} with ${installerName(installer.method)}…`);
       for (const [bin, ...args] of commands) {
-        console.log(`$ ${[bin, ...args].join(" ")}`);
+        // The tarball's script is thirty lines of shell: its name says enough.
+        if (installer.method !== "tarball") console.log(`$ ${[bin, ...args].join(" ")}`);
         const r = spawnSync(bin!, args, { stdio: "inherit", env: { ...process.env, HOMEBREW_NO_ENV_HINTS: "1", HOMEBREW_NO_AUTO_UPDATE: "1" } });
         if (r.error) return fail(`could not run ${bin}: ${r.error.message}`);
         if (r.status !== 0) return fail(`${bin} failed (exit ${r.status ?? "?"}); Grenade is still ${before}`);
       }
       const after = installedVersion(command);
-      if (!after || !isNewer(after, before)) return fail(`the update ran, but Grenade on disk is still ${after ?? "unreadable"}. Try: ${commands.map((c) => c.join(" ")).join(" && ")}`);
+      const again = installer.method === "tarball" ? INSTALL_SCRIPT_COMMAND : commands.map((c) => c.join(" ")).join(" && ");
+      if (!after || !isNewer(after, before)) return fail(`the update ran, but Grenade on disk is still ${after ?? "unreadable"}. Try: ${again}`);
       console.log(`Grenade ${after} is installed.`);
       await runInstalled(d, o.label, after, o.now === true);
     });

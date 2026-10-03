@@ -1,3 +1,4 @@
+import { computerWord } from "../src/platform/computer.js";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,7 +112,7 @@ describe("AllConversations", () => {
   it("sends each id to the agent that has it", async () => {
     expect(await all.find("x1")).toEqual({ agent: "codex", path: "/codex/x1", cwd: "/w" });
     expect(await all.trashPaths("c1")).toEqual({ paths: ["/claude/c1"] });
-    expect(await all.trashPaths("nope")).toEqual({ refused: "no conversation nope on this Mac" });
+    expect(await all.trashPaths("nope")).toEqual({ refused: `no conversation nope on this ${computerWord()}` });
     expect(await all.find("nope")).toBeNull();
   });
 });

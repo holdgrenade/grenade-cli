@@ -11,7 +11,7 @@ const PROMPTS_KEPT = 3;
 const PROMPT_CHARS = 600;
 
 export const SUMMARY_SYSTEM_PROMPT = [
-  "You describe what a terminal session on a developer's Mac is working on, for its row in a list on their phone.",
+  "You describe what a terminal session on a developer's computer is working on, for its row in a list on their phone.",
   "Reply with exactly two lines. Line 1: a title of two to five words naming the task, like a chat title (\"Login redirect fix\", \"Release notes draft\"), no period.",
   "Line 2: one plain sentence under 120 characters, present tense, about the task rather than the tool.",
   "No labels, no preamble, no quotes, no markdown, no trailing commentary. If there is nothing to go on, describe the folder and program.",

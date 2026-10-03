@@ -3,6 +3,7 @@
  * each phone `conn` to its own `PhonePipe`. Pings every 15 s, drops a link that has not ponged in 30 s,
  * and reconnects with backoff. Knows nothing about sessions: `openPipe` builds whatever serves a phone.
  */
+import { computerWord } from "../platform/computer.js";
 import {
   RELAY_DAEMON_PATH,
   RELAY_PROTOCOL_VERSION,
@@ -225,7 +226,7 @@ export class RelayLink {
         this.warnedRefused = null;
         this.lastError = undefined;
         this.publicIp = f.publicIp;
-        this.d.log.info("Relay is online: phones can reach this Mac from anywhere", { url: this.d.config.url, publicIp: f.publicIp });
+        this.d.log.info(`Relay is online: phones can reach this ${computerWord()} from anywhere`, { url: this.d.config.url, publicIp: f.publicIp });
         return;
       case "error":
         this.lastError = f.message;
@@ -260,8 +261,8 @@ export class RelayLink {
     const fix =
       code === "unauthorized"
         ? "Set the relay's registration key: grenade relay on <url> --key <key>"
-        : "Another Mac holds this relay id. Get a new one: grenade relay off && grenade relay on <url>";
-    this.d.log.warn(`The relay refused this Mac (${message}). ${fix}`, { url: this.d.config.url, code });
+        : "Another computer holds this relay id. Get a new one: grenade relay off && grenade relay on <url>";
+    this.d.log.warn(`The relay refused this ${computerWord()} (${message}). ${fix}`, { url: this.d.config.url, code });
   }
 
   private send(frame: RelayDaemonFrame): void {

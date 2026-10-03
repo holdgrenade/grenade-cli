@@ -2,13 +2,19 @@
  * Pure logic of updates: which version is newer, what the tap's formula says is the latest release, how this copy
  * of grenade was installed and what command brings it up to date, and the lines the CLI prints about all that.
  */
+import { tarballInstallCommand, tarballRoot } from "./tarballInstall.js";
 
 /** The Homebrew formula in the tap: what `brew upgrade grenade` installs, so "latest" and the upgrade can never disagree. */
 export const TAP_FORMULA_URL = "https://raw.githubusercontent.com/holdgrenade/homebrew-tap/main/Formula/grenade.rb";
 /** npm's `latest` of the package: what `npm install -g @holdgrenade/cli@latest` installs. An npm copy asks this, not the tap. */
 export const NPM_LATEST_URL = "https://registry.npmjs.org/@holdgrenade/cli/latest";
 
-export type InstallMethod = "brew" | "npm" | "source";
+export type InstallMethod = "brew" | "npm" | "tarball" | "source";
+
+/** What the installer of a copy is called in a sentence. */
+export function installerName(method: InstallMethod): string {
+  return method === "brew" ? "Homebrew" : method === "npm" ? "npm" : method === "tarball" ? "the release's tarball" : "source";
+}
 
 export interface UpdateStatus {
   /** The version on disk under the command the daemon was started with, when it could be read. */
@@ -76,6 +82,7 @@ function parseVersion(v: string): { parts: number[]; pre: string | null } {
 export function installMethodOf(resolvedProgram: string): InstallMethod {
   if (/\/Cellar\/grenade\//.test(resolvedProgram)) return "brew";
   if (/\/node_modules\/@holdgrenade\/cli\//.test(resolvedProgram)) return "npm";
+  if (tarballRoot(resolvedProgram)) return "tarball";
   return "source";
 }
 
@@ -94,11 +101,13 @@ export function latestFromNpm(body: string): string | null {
  * daemon runs under launchd, whose PATH has neither brew nor npm. Homebrew: `<prefix>/Cellar/grenade/…` → its
  * `<prefix>/bin/brew`. npm: `<prefix>/lib/node_modules/@holdgrenade/cli/…` → `<prefix>/bin/npm` (nvm, Homebrew's
  * node and the nodejs.org installer all keep npm there), else the npm beside the node running this; npm must be able
- * to write `writes`. Null for a copy built from source.
+ * to write `writes`. The release's tarball unpacked by `install.sh` (Linux): `<root>/package/dist/cli.js` → its
+ * `root` (`tarballInstall.ts`). Null for a copy built from source.
  */
 export type Installer =
   | { method: "brew"; brew: string }
-  | { method: "npm"; npm: string[]; writes: string[] };
+  | { method: "npm"; npm: string[]; writes: string[] }
+  | { method: "tarball"; root: string };
 
 export function installerFor(resolvedProgram: string, nodePath: string): Installer | null {
   const brew = resolvedProgram.match(/^(.*)\/Cellar\/grenade\//);
@@ -108,12 +117,15 @@ export function installerFor(resolvedProgram: string, nodePath: string): Install
     const nodeBin = nodePath.slice(0, nodePath.lastIndexOf("/"));
     return { method: "npm", npm: [`${npm[2]}/bin/npm`, `${nodeBin}/npm`], writes: [npm[1]!, `${npm[2]}/bin`] };
   }
+  const root = tarballRoot(resolvedProgram);
+  if (root) return { method: "tarball", root };
   return null;
 }
 
 /** The commands that install the latest release with that installer, in order (`brew update` first, or brew may not know it yet). */
 export function installCommands(i: Installer, npm: string): string[][] {
   if (i.method === "brew") return [[i.brew, "update", "--quiet"], [i.brew, "upgrade", "grenade"]];
+  if (i.method === "tarball") return [tarballInstallCommand(i.root, TAP_FORMULA_URL)];
   return [[npm, "install", "-g", "@holdgrenade/cli@latest"]];
 }
 

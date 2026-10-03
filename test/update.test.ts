@@ -7,6 +7,7 @@ import { formula } from "../packaging/homebrew/formula.mjs";
 import { parseAuto } from "../src/update/autoSetting.js";
 import { installedVersion } from "../src/update/installedVersion.js";
 import { installError } from "../src/update/installer.js";
+import { tarballRoot, TARBALL_INSTALL_SCRIPT } from "../src/update/tarballInstall.js";
 import { underLaunchd, underService, underSystemd } from "../src/update/underService.js";
 import { UpdateChecker } from "../src/update/updateChecker.js";
 import {
@@ -63,6 +64,28 @@ describe("versions", () => {
     });
     expect(installCommands(nvm!, "/x/npm")).toEqual([["/x/npm", "install", "-g", "@holdgrenade/cli@latest"]]);
     expect(installerFor("/Users/adam/workspace/grenade/grenade-cli/dist/cli.js", "/opt/homebrew/bin/node")).toBeNull();
+  });
+
+  it("knows a copy unpacked from the release's tarball, and brings it up to date with one script", () => {
+    const program = "/home/adam/.local/share/grenade/package/dist/cli.js";
+    expect(installMethodOf(program)).toBe("tarball");
+    expect(tarballRoot(program)).toBe("/home/adam/.local/share/grenade");
+    expect(tarballRoot("/home/adam/code/grenade-cli/dist/cli.js")).toBeNull();
+    expect(tarballRoot("/usr/lib/node_modules/@holdgrenade/cli/dist/cli.js")).toBeNull();
+    const installer = installerFor(program, "/usr/bin/node");
+    expect(installer).toEqual({ method: "tarball", root: "/home/adam/.local/share/grenade" });
+    const [command] = installCommands(installer!, "");
+    expect(command).toEqual(["/bin/sh", "-c", TARBALL_INSTALL_SCRIPT, "grenade-update", "/home/adam/.local/share/grenade", "https://raw.githubusercontent.com/holdgrenade/homebrew-tap/main/Formula/grenade.rb"]);
+    expect(installError(command!, "curl: (6) Could not resolve host: raw.githubusercontent.com")).toBe("The download could not reach the internet");
+    expect(installError(command!, "its checksum does not match\n")).toBe("The download: its checksum does not match");
+  });
+
+  it("the script takes only a release of this repo, checks it, and swaps the copy last", () => {
+    expect(TARBALL_INSTALL_SCRIPT).toContain("https:\\/\\/github\\.com\\/holdgrenade\\/grenade-cli\\/releases\\/download\\/");
+    expect(TARBALL_INSTALL_SCRIPT).toContain('if [ "$got" != "$sha" ]');
+    const lines = TARBALL_INSTALL_SCRIPT.trim().split("\n");
+    expect(lines.at(-2)).toBe('mv "$tmp/package" "$root/package"');
+    expect(lines.findIndex((l) => l.includes('!= "$sha"'))).toBeLessThan(lines.findIndex((l) => l.startsWith("tar ")));
   });
 
   it("reads npm's latest", () => {
