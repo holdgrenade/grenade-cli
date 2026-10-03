@@ -122,6 +122,37 @@ describe("TerminalMirror (iTerm2)", () => {
     expect(scripts).toEqual([]);
   });
 
+  it("opens nothing without a terminal asked for: none is the default", async () => {
+    const registry = fakeRegistry([session("gr-one")]);
+    const { run, scripts } = fakeRunner();
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, installed: () => true, appleTerminal: () => true, tmuxBin: "/bin/tmux" });
+    await mirror.start();
+    registry.emit("created", session("gr-two"));
+    await flush();
+    expect(scripts).toEqual([]);
+    expect(mirror.status()).toEqual({ terminal: "none", using: null });
+  });
+
+  it("follows a setting changed while it runs: refresh opens tabs for every live session at once", async () => {
+    const registry = fakeRegistry([session("gr-old")]);
+    const { run, scripts } = fakeRunner();
+    let setting: "none" | "iterm" = "none";
+    const mirror = new TerminalMirror({ registry, log: silentLogger, run, terminal: () => setting, tmuxBin: "/bin/tmux" });
+    await mirror.start();
+    mirror.refresh();
+    await flush();
+    expect(scripts).toEqual([]);
+    setting = "iterm"; // grenade terminal iterm
+    mirror.refresh();
+    await flush();
+    expect(scripts.filter((s) => s.includes("attach-session")).map((s) => s.match(/-t =(gr-\w+)/)?.[1])).toEqual(["gr-old"]);
+    expect(mirror.status()).toEqual({ terminal: "iterm", using: "iTerm2" });
+    setting = "none"; // grenade terminal none: no new tabs
+    registry.emit("created", session("gr-new"));
+    await flush();
+    expect(scripts.filter((s) => s.includes("attach-session"))).toHaveLength(1);
+  });
+
   it("auto: waits for iTerm2 to be installed, then opens tabs for every live session", async () => {
     const registry = fakeRegistry([session("gr-old")]);
     const { run, scripts } = fakeRunner();

@@ -17,7 +17,8 @@ import { GroupOrderStore } from "../sessions/groupOrderStore.js";
 import { TermStream } from "../sessions/termStream.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
 import { Summarizer } from "../summary/summarizer.js";
-import { TerminalMirror, defaultTerminal, type TerminalKind } from "../terminal/mirror.js";
+import { TerminalMirror, terminalFromEnv, type TerminalKind, type TerminalStatus } from "../terminal/mirror.js";
+import { readTerminalSetting } from "../terminal/terminalSetting.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
 import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
@@ -80,7 +81,7 @@ export interface DaemonOptions {
   claudeDir?: string;
   /** Codex's folder, where its past conversations are read from. Default: paths.codexDir. */
   codexDir?: string;
-  /** Mirror sessions into terminal tabs. Default `auto`: iTerm2 when it is installed (checked at every event), else Terminal.app. */
+  /** Mirror sessions into terminal tabs. Pins it; without it `GRENADE_TERMINAL`, else `~/.grenade/terminal.json` read at every event (`none` when missing). */
   terminal?: TerminalKind;
   /** One-sentence session summaries via `claude -p` (Haiku). Defaults to on unless `GRENADE_SUMMARIES=off`. */
   summaries?: boolean;
@@ -144,7 +145,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const groupsPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "groups.json") : paths.groups;
   const groupOrder = new GroupOrderStore(registry, log, groupsPath);
   const poller: Poller = startPoller({ tmux, registry, log });
-  const mirror = new TerminalMirror({ registry, log, terminal: opts.terminal ?? defaultTerminal() });
+  const pinnedTerminal = opts.terminal ?? terminalFromEnv();
+  const mirror = new TerminalMirror({ registry, log, terminal: pinnedTerminal ?? (() => readTerminalSetting()) });
+  const terminalStatus = (): TerminalStatus => ({ ...mirror.status(), pinned: pinnedTerminal !== undefined });
   mirror.start().catch((e) => log.warn("Could not mirror sessions into a terminal", { error: e }));
 
   const http = createServer(async (req, res) => {
@@ -572,6 +575,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
     },
     push,
+    terminal: {
+      status: terminalStatus,
+      reload() {
+        mirror.refresh();
+        return terminalStatus();
+      },
+    },
     updates,
   });
 

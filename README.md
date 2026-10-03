@@ -38,7 +38,7 @@ grenade setup
 
 ```bash
 grenade service status   # is grenaded installed as a login agent, and running?
-grenade daemon           # or run it in the foreground yourself (--terminal none: no iTerm tabs)
+grenade daemon           # or run it in the foreground yourself
 
 grenade new grenade --cwd ~/projects/grenade --agent claude
 grenade open grenade     # attach your terminal to it (Ctrl-b d to detach)
@@ -65,18 +65,23 @@ Grenade keeps itself up to date: grenaded checks for a new version every few hou
 
 ### On the Mac
 
-Every session is a tmux session (`gr-<name>`), so it survives any window closing; only `grenade kill` ends it. The daemon opens a window per session in Terminal.app, so all your agents are on screen at once. `grenade open <name>` attaches any other terminal, and `--terminal none` opens nothing.
+Every session is a tmux session (`gr-<name>`), so it survives any window closing; only `grenade kill` ends it. Watch them in the Grenade Mac app or on the phone; no terminal window opens by itself. `grenade open <name>` attaches any terminal, and `grenade terminal` opens every session in one for you:
+
+```bash
+grenade terminal iterm      # every session in iTerm2: a tab per group, its sessions side by side
+grenade terminal terminal   # every session in a Terminal.app window of its own
+grenade terminal auto       # iTerm2 when it is installed, else Terminal.app
+grenade terminal none       # the default: no windows
+grenade terminal            # what is set
+```
+
+It takes effect at once, also for sessions already running, and stays across restarts and updates (`~/.grenade/terminal.json`). The first time, macOS may ask whether grenaded (it says `node`) may control iTerm2 or Terminal: allow it, or no window appears. If you clicked Don't Allow: System Settings › Privacy & Security › Automation.
 
 `grenade new` in a folder that already has a live session joins that session's **group**: `--alone` starts a group of its own, `--with <session>` joins a specific one. `grenade group` and `grenade ungroup` move sessions later; the phone does the same by drag and drop.
 
-#### iTerm2 (optional)
+#### iTerm2
 
-iTerm2 is not needed, but with it installed the daemon uses it instead of Terminal.app: a tab per group, its sessions as split panes side by side in group order, following every move.
-
-- `brew install --cask iterm2`. Installing it after setup is enough: the next session opens in a tab, and every live session gets one then. No restart.
-- The first time, macOS may ask whether grenaded (it says `node`) may control iTerm2. Allow it, or no tab appears. If you clicked Don't Allow: System Settings › Privacy & Security › Automation.
-- Closing a tab or detaching (Ctrl-b d) leaves the agent running.
-- `--terminal terminal` keeps Terminal.app even with iTerm2 installed.
+With `grenade terminal iterm` (or `auto` and iTerm2 installed) a group is one tab, its sessions as split panes side by side in group order, following every move. `brew install --cask iterm2` first. Closing a tab or detaching (Ctrl-b d) leaves the agent running.
 
 Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. Host your own relay with `../grenade-relay`.
 

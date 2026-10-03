@@ -11,11 +11,12 @@
  *   session gone     → (agent exited on its own) the tab is closed
  *   daemon start     → tabs for live sessions that have none yet
  *
- * Which terminal (`TerminalKind`): `iterm` (iTerm2), `terminal` (Apple's Terminal.app), `none`, or `auto`, the
- * default: iTerm2 when it is installed, else Terminal.app. `auto` is asked again at every event, so iTerm2
- * installed while the daemon runs takes over for new sessions; the windows Terminal already has stay and close
- * through Terminal. Each terminal is caught up once, the first time it is used: the tabs it already has are
- * listed and every live session without one gets one. All scripts run one call at a time through a queue.
+ * Which terminal (`TerminalKind`): `none`, the default (the Mac app and the phone show every session), `iterm`
+ * (iTerm2), `terminal` (Apple's Terminal.app), or `auto`: iTerm2 when it is installed, else Terminal.app. The kind
+ * is asked again at every event (`grenade terminal` changes it while the daemon runs), and so is whether iTerm2 is
+ * installed, so either change takes over for new sessions; tabs already open stay and close through their terminal.
+ * Each terminal is caught up once, the first time it is used: the tabs it already has are listed and every live
+ * session without one gets one. All scripts run one call at a time through a queue.
  */
 import type { Session } from "@grenade/protocol";
 import type { Logger } from "../log.js";
@@ -29,14 +30,22 @@ export type TerminalKind = "auto" | "iterm" | "terminal" | "none";
 
 export const TERMINAL_KINDS: readonly TerminalKind[] = ["auto", "iterm", "terminal", "none"];
 
+/** What `GET /terminal` answers: the kind asked for, the terminal that means now (null: none), and whether
+ * `--terminal` or `GRENADE_TERMINAL` pins it, so `~/.grenade/terminal.json` is not read. */
+export interface TerminalStatus {
+  terminal: TerminalKind;
+  using: string | null;
+  pinned: boolean;
+}
+
 export function isTerminalKind(v: string): v is TerminalKind {
   return (TERMINAL_KINDS as readonly string[]).includes(v);
 }
 
-/** `GRENADE_TERMINAL` when it is set, else `auto`. */
-export function defaultTerminal(): TerminalKind {
+/** `GRENADE_TERMINAL` when it is set: it pins the kind, over `~/.grenade/terminal.json`. */
+export function terminalFromEnv(): TerminalKind | undefined {
   const env = process.env["GRENADE_TERMINAL"];
-  return env !== undefined && isTerminalKind(env) ? env : "auto";
+  return env !== undefined && isTerminalKind(env) ? env : undefined;
 }
 
 // ---- layout (pure, tested) ---------------------------------------------------
@@ -70,8 +79,8 @@ export interface MirrorOptions {
   tmuxBin?: string;
   /** Runs AppleScript; tests fake it. */
   run?: ScriptRunner;
-  /** Default `auto`. */
-  terminal?: TerminalKind;
+  /** Which terminal, or how to ask for it at every event (`readTerminalSetting`). Default `none`. */
+  terminal?: TerminalKind | (() => TerminalKind);
   /** Is iTerm2 installed? Asked at every event in `auto`. Tests fake it. */
   installed?: () => boolean;
   /** Is Terminal.app there (every Mac)? Tests fake it. */
@@ -83,7 +92,7 @@ export interface MirrorOptions {
 export class TerminalMirror {
   private readonly registry: SessionRegistry;
   private readonly log: Logger;
-  private readonly kind: TerminalKind;
+  private readonly kind: () => TerminalKind;
   private readonly installed: () => boolean;
   private readonly hasAppleTerminal: () => boolean;
   private readonly iterm: TerminalAdapter;
@@ -103,7 +112,8 @@ export class TerminalMirror {
   constructor(o: MirrorOptions) {
     this.registry = o.registry;
     this.log = o.log;
-    this.kind = o.terminal ?? "auto";
+    const t = o.terminal ?? "none";
+    this.kind = typeof t === "function" ? t : () => t;
     this.installed = o.installed ?? isITermInstalled;
     this.hasAppleTerminal = o.appleTerminal ?? isAppleTerminalInstalled;
     const tmuxBin = o.tmuxBin ?? resolveTmuxBin();
@@ -113,7 +123,7 @@ export class TerminalMirror {
 
   /** The terminal tabs go to right now, or null when none is wanted. Asked every time, so iTerm2 installed later counts. */
   private current(): TerminalAdapter | null {
-    switch (this.kind) {
+    switch (this.kind()) {
       case "none":
         return null;
       case "iterm":
@@ -125,16 +135,26 @@ export class TerminalMirror {
     }
   }
 
-  /** Subscribes to the registry and, when a terminal is there, opens tabs for live sessions that have none. */
+  /** Subscribes to the registry and, when a terminal is wanted, opens tabs for live sessions that have none. */
   async start(): Promise<void> {
-    if (this.kind === "none") return;
     this.registry.on("created", this.onCreated);
     this.registry.on("removed", this.onRemoved);
     this.registry.on("updated", this.onUpdated);
     this.registry.on("regrouped", this.onRegrouped);
     const a = this.current();
     if (a) await this.whenReady(a);
-    else this.log.debug("No terminal to mirror sessions into; they get tabs once iTerm2 is installed");
+    else this.log.debug("No terminal to mirror sessions into; the Mac app and the phone show them");
+  }
+
+  /** The kind asked for and the terminal it means right now. */
+  status(): { terminal: TerminalKind; using: string | null } {
+    return { terminal: this.kind(), using: this.current()?.name ?? null };
+  }
+
+  /** Catches up the terminal wanted now, so a change of kind opens tabs at once rather than at the next event. */
+  refresh(): void {
+    const a = this.current();
+    if (a) void this.whenReady(a).catch((e) => this.log.warn(`Could not list the ${a.name} tabs`, { error: e }));
   }
 
   stop(): void {

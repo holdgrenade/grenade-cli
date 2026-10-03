@@ -14,6 +14,7 @@ import { registerPushCommand } from "./cli/pushCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
 import { registerUpdateCommand } from "./cli/updateCommand.js";
+import { registerTerminalCommand } from "./cli/terminalCommand.js";
 import { RESTART_EXIT_CODE, underLaunchd } from "./update/underLaunchd.js";
 import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
 import { startDaemon } from "./daemon/server.js";
@@ -38,7 +39,7 @@ program
   .option("--port <port>", "WebSocket/HTTP port", parsePort, DEFAULT_PORT)
   .option("--name <name>", "name shown on the phone")
   .option("--no-advertise", "do not publish over Bonjour")
-  .option("--terminal <kind>", "mirror sessions into terminal tabs: auto | iterm | terminal | none (default: auto, iTerm2 when installed, else Terminal.app)", parseTerminal)
+  .option("--terminal <kind>", "mirror sessions into terminal tabs: auto | iterm | terminal | none; pins it over `grenade terminal` (default: that setting, none unless set)", parseTerminal)
   .option("--no-summaries", "do not describe sessions with claude -p (Haiku)")
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
@@ -87,6 +88,7 @@ registerSetupCommand(program, { control, controlPort });
 registerPushCommand(program, { control });
 registerPromptCommand(program, { control });
 registerUpdateCommand(program, { control });
+registerTerminalCommand(program, { control });
 
 // Like Claude Code: after a command, one line when a new version is out. Read from the daemon, which checks the tap.
 program.hook("postAction", async (_program, action) => {

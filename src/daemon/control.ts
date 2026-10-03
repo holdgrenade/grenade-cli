@@ -6,6 +6,8 @@
  *   POST /update/install    → UpdateStatus   (installs the latest release now, in the background; the Mac app's Update)
  *   POST /update/restart    { force? } → { restarting: true } | 409 { error: "busy" | "cannot_restart" }   (the Mac app's Restart)
  *   POST /relay/reload      → RelayStatus (re-reads relay.json, restarts the relay link)
+ *   GET  /terminal          → TerminalStatus   (which terminal sessions open in on the Mac, if any)
+ *   POST /terminal/reload   → TerminalStatus   (re-reads terminal.json and opens the tabs it now asks for)
  *   GET  /sessions          → Session[]
  *   POST /sessions          { name, cwd, agent, group? } → Session
  *   PUT  /sessions/:id/group { group: string | null, index? } → Session (null moves it into a group of its own; index places or reorders)
@@ -33,6 +35,7 @@ import type { PairingCodes } from "./pairing.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
 import type { PushStatus, TestPushResult } from "../push/pusher.js";
 import type { UpdateStatus } from "../update/versions.js";
+import type { TerminalStatus } from "../terminal/mirror.js";
 import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
 
@@ -54,6 +57,7 @@ export interface ControlDeps {
   log: Logger;
   relay: { status(): RelayStatus; reload(): RelayStatus };
   push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
+  terminal: { status(): TerminalStatus; reload(): TerminalStatus };
   updates: {
     current(): UpdateStatus;
     checkTap(): Promise<UpdateStatus>;
@@ -98,6 +102,8 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     return sendJson(res, 409, { error: result === "busy" ? "busy" : "cannot_restart" });
   }
   if (method === "POST" && url.pathname === "/relay/reload") return sendJson(res, 200, d.relay.reload());
+  if (method === "GET" && url.pathname === "/terminal") return sendJson(res, 200, d.terminal.status());
+  if (method === "POST" && url.pathname === "/terminal/reload") return sendJson(res, 200, d.terminal.reload());
   if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());

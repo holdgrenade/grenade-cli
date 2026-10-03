@@ -40,12 +40,11 @@ describe("problems", () => {
 });
 
 describe("nextSteps", () => {
-  it("says where the agent shows up, with and without iTerm2", () => {
-    expect(nextSteps(true).join("\n")).toContain("tab of its own in iTerm2");
-    expect(nextSteps(false).join("\n")).toContain("Terminal window of its own");
-    expect(nextSteps(false).join("\n")).toContain("holdgrenade.com/docs#iterm2");
-    expect(nextSteps(false).join("\n")).toContain("Terminal window");
-    expect(nextSteps(false)[0]).toContain("grenade new myproject");
+  it("points at the apps and says how to open sessions in a terminal too", () => {
+    expect(nextSteps(true)[0]).toContain("grenade new myproject");
+    expect(nextSteps(true).join("\n")).toContain("Grenade Mac app");
+    expect(nextSteps(true).join("\n")).toContain("grenade terminal iterm");
+    expect(nextSteps(false).join("\n")).toContain("grenade terminal terminal");
   });
 });
 
