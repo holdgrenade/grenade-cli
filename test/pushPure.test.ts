@@ -87,6 +87,14 @@ describe("push content", () => {
     });
     expect(PushContent.safeParse(testPushContent("n_2", 0, daemon)).success).toBe(true);
   });
+
+  it("carries the session's title for the phone to head the notification with", () => {
+    const at = Date.parse("2026-09-29T12:14:25.000Z");
+    const titled = pushContentFor({ id: "n_1", at, event: "done", daemon, session: { ...session, title: "tmux vs raw PTY capture" } });
+    expect(PushContent.parse(titled)).toMatchObject({ sessionName: "grenade", sessionTitle: "tmux vs raw PTY capture" });
+    expect(pushContentFor({ id: "n_1", at, event: "done", daemon, session })).not.toHaveProperty("sessionTitle");
+    expect(pushContentFor({ id: "n_1", at, event: "done", daemon, session: { ...session, title: "  " } })).not.toHaveProperty("sessionTitle");
+  });
 });
 
 describe("push policy", () => {

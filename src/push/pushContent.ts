@@ -1,5 +1,5 @@
 /** Pure: what a push says. PROTOCOL.md "Push encryption" has the shape, this file the wording rules. */
-import type { DaemonInfo, PushContent, PushEvent, Session } from "@grenade/protocol";
+import { SESSION_TITLE_MAX, type DaemonInfo, type PushContent, type PushEvent, type Session } from "@grenade/protocol";
 
 export const PUSH_TEXT_MAX = 200;
 
@@ -35,12 +35,13 @@ export interface PushContentInput {
   at: number;
   event: Exclude<PushEvent, "test">;
   daemon: Pick<DaemonInfo, "id" | "name">;
-  session: Pick<Session, "id" | "name" | "agent" | "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
+  session: Pick<Session, "id" | "name" | "title" | "agent" | "summary" | "lastLine" | "waitingFor" | "stoppedBecause">;
   /** What the agent asked, when a hook said so. */
   asked?: string | undefined;
 }
 
 export function pushContentFor(input: PushContentInput): PushContent {
+  const title = clip(input.session.title ?? "", SESSION_TITLE_MAX);
   return {
     v: 1,
     id: input.id,
@@ -50,6 +51,8 @@ export function pushContentFor(input: PushContentInput): PushContent {
     daemonName: clip(input.daemon.name, 100),
     sessionId: input.session.id,
     sessionName: clip(input.session.name, 40) || input.session.id,
+    // What the phone heads the notification with; a session without a title yet is headed with its name.
+    ...(title ? { sessionTitle: title } : {}),
     agent: input.session.agent,
     text: pushText(input.event, input.session, input.asked),
   };
