@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Push notifications, end to end, against a RUNNING daemon whose push route is a relay you started yourself.
+ * Push notifications, end to end, against a RUNNING daemon whose push route is a relay you started on this Mac.
  * Acts as a phone: pairs, says hello, registers for pushes with a made-up device token and a push key of its own,
  * then asks the daemon for a test push and opens what the daemon sealed... as far as the relay lets it get:
  * a relay without a push key answers 503, and this script then checks that the daemon says so.
@@ -26,7 +26,9 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
 
 const status = await ctl("GET", "/push").catch(() => fail("the daemon does not answer on its control port"));
 if (!status.enabled) fail("push is off on this daemon: grenade push on <url of your relay>");
-if (/relay\.holdgrenade\.com|grenade-relay-.*herokuapp/.test(status.gateway ?? "")) fail(`this daemon pushes through ${status.gateway}; point it at a relay of your own for this test`);
+// Only a relay on this Mac: never the main relay, nor any other that could reach Apple.
+const gatewayHost = (() => { try { return new URL(status.gateway).hostname; } catch { return ""; } })();
+if (!["127.0.0.1", "localhost", "[::1]"].includes(gatewayHost)) fail(`this daemon pushes through ${status.gateway}; point it at a relay you started on this Mac for this test`);
 console.log("push route", status.gateway);
 
 const client = { name: "push-smoke", platform: "test", version: "0" };

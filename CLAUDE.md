@@ -176,7 +176,7 @@ src/update/installer.ts    runInstall: runs brew or npm asynchronously with a ti
 src/update/autoSetting.ts  ~/.grenade/update.json `{ "auto": false }` turns automatic installs off; read at every check
 src/update/installedVersion.ts, underService.ts  the version on disk behind the command; whether this is the launchd agent (`XPC_SERVICE_NAME`) or the systemd service (its marker and `SYSTEMD_EXEC_PID` equal to this pid), which is what lets the daemon restart itself
 scripts/smoke.mjs          end-to-end check against a running daemon (needs tmux)
-scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run against a daemon that pushes through the main relay
+scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run unless the daemon pushes through a relay on this Mac (127.0.0.1, localhost)
 scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
 scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the offer, pairs with its secret on this Mac or `--via relay`, says hello
 scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
