@@ -16,7 +16,7 @@ grenade setup                            # start at login, relay, then a QR code
 3. It offers the relay, for reaching the Mac from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
 4. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
 
-Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. The first Codex session asks once to trust them: pick "Trust all and continue".
+Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. The first Codex session asks once to trust them; the phone shows it as a card, so tap Trust there or pick "Trust all and continue" in the terminal.
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
 
