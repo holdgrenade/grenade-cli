@@ -216,10 +216,12 @@ export function agentCommand(agent: AgentKind, shell = process.env["SHELL"] ?? "
       return `${claude} --resume ${resume} --fork-session`;
     case "codex": {
       const codex = flags.codex ? `codex ${flags.codex}` : "codex";
+      // Inline, like Claude Code: on its alternate screen Codex leaves no scrollback in tmux, so a phone or a terminal
+      // could not scroll back through it, and a drag on the phone's terminal could only select.
+      if (resume === undefined) return `${codex} --no-alt-screen`;
       // A copy, as for Claude Code: `codex fork` starts a new thread with the history and leaves the original alone.
-      if (resume === undefined) return codex;
       if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
-      return `${codex} fork ${resume}`;
+      return `${codex} fork --no-alt-screen ${resume}`;
     }
     case "shell":
       return shell;

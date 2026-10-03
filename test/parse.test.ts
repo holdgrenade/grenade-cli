@@ -135,13 +135,13 @@ describe("helpers", () => {
   });
   it("agentCommand", () => {
     expect(agentCommand("claude")).toBe("claude");
-    expect(agentCommand("codex")).toBe("codex");
+    expect(agentCommand("codex")).toBe("codex --no-alt-screen");
     expect(agentCommand("shell", "/bin/fish")).toBe("/bin/fish");
   });
   it("agentCommand resumes a copy of a conversation, and refuses an id a shell would read", () => {
     expect(agentCommand("claude", undefined, "9a76de47-6489-4620-8e10-4bf9c4d12b09")).toBe("claude --resume 9a76de47-6489-4620-8e10-4bf9c4d12b09 --fork-session");
     expect(() => agentCommand("claude", undefined, "x; rm -rf ~")).toThrow();
-    expect(agentCommand("codex", undefined, "0190c0de-1111-7000-8000-00000000000a", { codex: "-c x=1" })).toBe("codex -c x=1 fork 0190c0de-1111-7000-8000-00000000000a");
+    expect(agentCommand("codex", undefined, "0190c0de-1111-7000-8000-00000000000a", { codex: "-c x=1" })).toBe("codex -c x=1 fork --no-alt-screen 0190c0de-1111-7000-8000-00000000000a");
     expect(() => agentCommand("codex", undefined, "x; rm -rf ~")).toThrow();
     expect(() => agentCommand("aider")).toThrow(/not an agent/);
   });
