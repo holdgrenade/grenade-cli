@@ -245,6 +245,11 @@ export class Pusher {
     this.timer.unref();
   }
 
+  /** Someone is at the Mac right now (input within `atMacMs`, screen not locked). The Mac board asks it before an alert. */
+  async atMac(): Promise<boolean> {
+    return isAtMac(await this.presence(), this.d.atMacMs());
+  }
+
   private async presence(): Promise<MacPresence | null> {
     if (this.d.atMacMs() <= 0) return null;
     const at = this.now();

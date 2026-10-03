@@ -101,6 +101,8 @@ export interface DaemonOptions {
   pushPath?: string;
   /** Where the phones' push registrations are kept. Defaults to ~/.grenade/push-devices.json; in memory when tokens are. */
   pushDevicesPath?: string;
+  /** Where the phones' Mac boards are kept. Defaults to ~/.grenade/push-boards.json; in memory when tokens are. */
+  pushBoardsPath?: string;
   /**
    * Updates (src/update/): ask the tap for the latest release (default on unless GRENADE_UPDATE_CHECK=off), watch the
    * version on disk behind `program` (the `grenade` command; none: nothing to watch), and call `restart` once a newer
@@ -124,7 +126,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, codexActivity: 1, agents: [...AGENTS] };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) } });
@@ -374,6 +376,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     relay: () => (opts.relay === false ? null : loadRelayConfig(opts.relayPath ?? paths.relay)),
     configPath: opts.pushPath ?? paths.push,
     devicesPath: opts.pushDevicesPath ?? (opts.tokensPath === null ? undefined : paths.pushDevices),
+    boardsPath: opts.pushBoardsPath ?? (opts.tokensPath === null ? undefined : paths.pushBoards),
     log,
   });
   const live = new LiveConnections();
@@ -449,6 +452,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
       pair: pairPhone,
       push: push.pusher,
+      board: push.board,
       prompts,
       groups: groupOrder,
       conversations,

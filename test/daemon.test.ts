@@ -184,7 +184,7 @@ describe("Codex hooks", () => {
     const p = await phone(d.port, Buffer.alloc(0), false);
     p.hello(token ?? "");
     await until(() => p.types().includes("welcome"));
-    expect(p.frames.find((f) => f.type === "welcome")).toMatchObject({ daemon: { codexActivity: 1 } });
+    expect(p.frames.find((f) => f.type === "welcome")).toMatchObject({ daemon: { codexActivity: 1, board: 1 } });
     p.send({ type: "subscribe", sessionId: "gr-cx" });
     const stop = { hook_event_name: "Stop", session_id: "s", transcript_path: rollout, model: "gpt-6-luna", last_assistant_message: "done" };
     const res = await fetch(`${base}/hooks/codex?session=gr-cx`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(stop) });

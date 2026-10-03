@@ -23,6 +23,7 @@ export const paths = {
   attachments: join(GRENADE_DIR, "attachments"),
   push: join(GRENADE_DIR, "push.json"),
   pushDevices: join(GRENADE_DIR, "push-devices.json"),
+  pushBoards: join(GRENADE_DIR, "push-boards.json"),
   update: join(GRENADE_DIR, "update.json"),
   conversations: join(GRENADE_DIR, "conversations.json"),
   // Claude Code keeps its settings, transcripts and process files in CLAUDE_CONFIG_DIR when that is set.

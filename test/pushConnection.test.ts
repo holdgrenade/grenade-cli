@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DaemonFrame, PushRegisterFrame, PushStateFrame } from "@grenade/protocol";
+import type { BoardRegisterFrame, DaemonFrame, PushRegisterFrame, PushStateFrame } from "@grenade/protocol";
 import { Connection } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
 
@@ -40,6 +40,16 @@ function connect(withPush: boolean) {
               calls.push(`watch:${token}`);
               tell.send = send;
               return () => void calls.push(`unwatch:${token}`);
+            },
+          },
+          board: {
+            register(token: string, frame: BoardRegisterFrame) {
+              calls.push(`board:${token}:${frame.pushToken.slice(0, 4)}`);
+              return { type: "board.state" as const, registered: true, delivery: "gateway" as const };
+            },
+            unregister(token: string) {
+              calls.push(`unboard:${token}`);
+              return { type: "board.state" as const, registered: false, delivery: "gateway" as const };
             },
           },
         }
@@ -92,5 +102,25 @@ describe("Connection: push notifications", () => {
     await conn.handleMessage(fixture("client.hello.json"));
     await conn.handleMessage(fixture("client.push.register.json"));
     expect(out.at(-1)).toEqual({ type: "push.state", registered: false, delivery: "off", events: [] });
+  });
+});
+
+describe("Connection: Mac board", () => {
+  it("registers the board of the phone that said hello, and answers board.state", async () => {
+    const { conn, out, calls } = connect(true);
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.board.register.json"));
+    expect(calls.at(-1)).toMatch(/^board:grt_example_token:/);
+    expect(out.at(-1)).toEqual(JSON.parse(fixture("daemon.board.state.json")));
+    await conn.handleMessage(fixture("client.board.unregister.json"));
+    expect(calls.at(-1)).toBe("unboard:grt_example_token");
+    expect(out.at(-1)).toEqual({ type: "board.state", registered: false, delivery: "gateway" });
+  });
+
+  it("a daemon that keeps no board says so", async () => {
+    const { conn, out } = connect(false);
+    await conn.handleMessage(fixture("client.hello.json"));
+    await conn.handleMessage(fixture("client.board.register.json"));
+    expect(out.at(-1)).toEqual({ type: "board.state", registered: false, delivery: "off" });
   });
 });

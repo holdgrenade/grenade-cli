@@ -4,7 +4,7 @@
  */
 import { listFolders } from "../folders/listFolders.js";
 import { agentInfo } from "../agents/agentCatalog.js";
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -16,6 +16,8 @@ import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
 const NO_PUSH: PushStateFrame = { type: "push.state", registered: false, delivery: "off", events: [] };
+/** What a daemon that keeps no Mac board answers to `board.register`. */
+const NO_BOARD: BoardStateFrame = { type: "board.state", registered: false, delivery: "off" };
 /** What a phone that predates the encrypted local network is told (PROTOCOL.md "Older clients and daemons"). */
 export const PLAIN_REFUSED = "This Mac only accepts encrypted connections. Update Grenade on your phone.";
 /** What a `pair` outside the encrypted channel is told (PROTOCOL.md "Pairing inside the encrypted channel"). */
@@ -125,6 +127,11 @@ export interface ConnectionDeps {
     unregister(token: string): PushStateFrame;
     /** Hands `send` a new `push.state` when the Mac starts or stops sending pushes. Returns how to stop. */
     watch?(token: string, send: (state: PushStateFrame) => void): () => void;
+  };
+  /** The phone's Mac board, its Live Activity (PROTOCOL.md "Mac board"). Absent means this daemon keeps none. */
+  board?: {
+    register(token: string, frame: BoardRegisterFrame): BoardStateFrame;
+    unregister(token: string): BoardStateFrame;
   };
   /** Prompts the agent is showing (PROTOCOL.md "Prompts"). Absent means this daemon has none to offer. */
   prompts?: PromptsPort;
@@ -417,6 +424,10 @@ export class Connection {
         return this.send((this.token && this.d.push?.register(this.token, frame)) || NO_PUSH);
       case "push.unregister":
         return this.send((this.token && this.d.push?.unregister(this.token)) || NO_PUSH);
+      case "board.register":
+        return this.send((this.token && this.d.board?.register(this.token, frame)) || NO_BOARD);
+      case "board.unregister":
+        return this.send((this.token && this.d.board?.unregister(this.token)) || NO_BOARD);
       case "prompt.answer": {
         const outcome = this.d.prompts?.answer(frame.sessionId, frame.promptId, frame) ?? "elsewhere";
         if (typeof outcome === "object") return this.fail("bad_frame", outcome.error, frame.type);

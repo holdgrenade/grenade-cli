@@ -1,14 +1,16 @@
-/** Builds the daemon's push notifications from its files and the things it shares with the rest of the daemon. */
+/** Builds the daemon's push notifications and Mac boards from their files and the things they share with the rest of the daemon. */
 import type { DaemonInfo } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import type { X25519Pair } from "../relay/e2e.js";
 import type { RelayConfig } from "../relay/relayConfig.js";
 import { atMacMs, loadPushConfig, pushGatewayFor, pushMode, type PushConfig } from "./pushConfig.js";
+import { BoardDevices } from "./boardDevices.js";
+import { BoardPusher, type BoardPusherDeps, type BoardRegistryPort } from "./boardPusher.js";
 import { PushDevices } from "./pushDevices.js";
 import { Pusher, type PairedPhone, type PushStatus, type PusherDeps, type PusherRegistryPort, type TestPushResult } from "./pusher.js";
 
 export interface PushServiceDeps {
-  registry: PusherRegistryPort;
+  registry: PusherRegistryPort & BoardRegistryPort;
   /** The paired phones, and a call whenever one is paired or unpaired. */
   tokens: { list(): PairedPhone[]; onChange(listener: () => void): void };
   daemon: Pick<DaemonInfo, "id" | "name">;
@@ -19,13 +21,17 @@ export interface PushServiceDeps {
   configPath: string;
   /** push-devices.json; undefined keeps registrations in memory (tests). */
   devicesPath?: string | undefined;
+  /** push-boards.json (the phones' Mac boards); undefined keeps them in memory (tests). */
+  boardsPath?: string | undefined;
   log: Logger;
   /** For tests: the sender, the clock, the presence reading. */
-  overrides?: Partial<Pick<PusherDeps, "post" | "presence" | "now" | "sleep" | "tickMs" | "graceMs" | "retryMs">>;
+  overrides?: Partial<Pick<PusherDeps, "post" | "presence" | "now" | "sleep" | "tickMs" | "graceMs" | "retryMs">> & { boardPost?: BoardPusherDeps["post"] };
 }
 
 export interface PushService {
   pusher: Pusher;
+  /** The phones' Mac boards (PROTOCOL.md "Mac board"). */
+  board: BoardPusher;
   status(): PushStatus;
   /** Re-reads push.json. Called by `grenade push on|off|auto`. */
   reload(): PushStatus;
@@ -49,8 +55,23 @@ export function startPush(d: PushServiceDeps): PushService {
     log: d.log,
     ...d.overrides,
   });
-  d.tokens.onChange(() => pusher.pairingsChanged());
+  const paired = () => d.tokens.list().map((t) => ({ id: t.id, token: t.token }));
+  const board = new BoardPusher({
+    registry: d.registry,
+    boards: new BoardDevices(d.boardsPath),
+    paired,
+    gateway: () => pushGatewayFor(config, d.relay()),
+    atMac: () => pusher.atMac(),
+    log: d.log,
+    ...(d.overrides?.boardPost ? { post: d.overrides.boardPost } : {}),
+    ...(d.overrides?.now ? { now: d.overrides.now } : {}),
+  });
+  d.tokens.onChange(() => {
+    pusher.pairingsChanged();
+    board.pairingsChanged();
+  });
   pusher.start();
+  board.start();
   const describe = () => {
     const s = pusher.status();
     const off = s.mode === "auto" ? "Push notifications are off: remote access is off (grenade push on turns them on)" : "Push notifications are off";
@@ -60,6 +81,7 @@ export function startPush(d: PushServiceDeps): PushService {
   describe();
   return {
     pusher,
+    board,
     status: () => pusher.status(),
     reload() {
       config = loadPushConfig(d.configPath);
@@ -72,6 +94,9 @@ export function startPush(d: PushServiceDeps): PushService {
       if (pusher.status().enabled !== before) describe();
     },
     test: () => pusher.test(),
-    stop: () => pusher.stop(),
+    stop() {
+      pusher.stop();
+      board.stop();
+    },
   };
 }

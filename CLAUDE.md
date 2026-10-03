@@ -42,7 +42,7 @@ grenade prompt test [session] [--kind permission|question|plan|all] [--wait 120]
 grenade --control-port 7790 <cmd>                          # talk to a daemon on another control port
 ```
 
-Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `groups.json` (the order groups are listed in), `daemon-id`, `daemon.log`, `relay.json`, `e2e-key`, `push.json` (push on or off, and the route), `push-devices.json` (the phones' push registrations, mode 0600) and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
+Env: `GRENADE_HOME` (default `~/.grenade`) holds `tokens.json`, `sessions.json`, `groups.json` (the order groups are listed in), `daemon-id`, `daemon.log`, `relay.json`, `e2e-key`, `push.json` (push on or off, and the route), `push-devices.json` (the phones' push registrations, mode 0600), `push-boards.json` (the phones' Mac boards, mode 0600) and `attachments/`. `GRENADE_LOG=debug` for verbose logs (iTerm tabs, Bonjour, hooks, ignored input to ended sessions). Info is for things a person cares about: start/stop, phones pairing and connecting, sessions started and ended. `NO_COLOR` turns off color. `TMUX_BIN` overrides the tmux path. `CLAUDE_BIN` overrides the claude path used for summaries; `GRENADE_SUMMARIES=off` turns summaries off. `GRENADE_DEVICE_IDLE_DAYS` is how long a phone may stay unseen before it is unpaired (default 90, 0 never).
 
 ## Layout
 
@@ -145,7 +145,10 @@ src/push/macPresence.ts    is someone at the Mac: pure parsers for `ioreg` (idle
 src/push/pushGateway.ts    postPush: one HTTPS POST to <relay>/v1/push; outcomeOf (pure) maps the answer to sent / unregistered / retry / refused
 src/push/pushConfig.ts     push.json {enabled?, url?, key?, atMacSeconds?}: load/save; pure pushMode (on / off / auto), pushGatewayFor, pushConfigOn, atMacMs
 src/push/pushDevices.ts    PushDevices: push-devices.json (0600), one registration per paired phone, keyed by device id; prune
-src/push/startPush.ts      startPush(): builds the Pusher from the files and the daemon's registry, tokens and key
+src/push/startPush.ts      startPush(): builds the Pusher and the BoardPusher from the files and the daemon's registry, tokens and key
+src/push/boardPolicy.ts    pure: a session's board key (boardKey), and when a Mac board pushes: observe / boardStep (debounce, min interval, end) / afterTry, boardAlert
+src/push/boardPusher.ts    BoardPusher: listens to the registry, builds each registered phone's board, pushes `kind: "board"` updates and the end; `register`/`unregister` for a Connection
+src/push/boardDevices.ts   BoardDevices: push-boards.json (0600), one Mac board per paired phone, keyed by device id, with the board last sent; prune
 src/cli/pushCommand.ts     `grenade push on | off | status | test`; statusLines and testLine are pure
 src/cli/updateCommand.ts   `grenade update` (`--check`, `--now`, `--auto on|off`): installs with the installer of this copy, then restarts the agent
 src/update/versions.ts     pure: compare versions, the latest from the tap's formula or npm's answer, `installerFor` (absolute brew/npm paths from the command's real path), `InstallState`, notice and status lines
@@ -298,6 +301,18 @@ Read PROTOCOL.md "Push notifications" first. The phone is told that an agent nee
 - Off: `grenade push off` (`push.json` `enabled: false`), or `auto` with remote access off. Phones are told `delivery: "off"` and notify by themselves while they run.
 - `grenade push test` sends every registered phone a push with `event: "test"`; `grenade push status` shows the route, the phones and what became of the last push.
 
+## Mac board (`src/push/board*.ts`)
+
+Read PROTOCOL.md "Mac board" first. A phone's Live Activity shows every session on this Mac; while the app is suspended the daemon keeps it current with board pushes on the same push route. A board push cannot be sealed, so it carries only an opaque key per session (`boardKey`: HMAC under that phone's pairing token), a status and a time; `test/board.test.ts` reproduces `fixtures/board.examples.json`. The daemon says `board: 1` in `welcome` and `paired`.
+
+- Registering: `board.register` → `BoardPusher.register` with the token of the `hello`, answered `board.state` (`delivery` as in `push.state`). One board per paired phone, keyed by device id, kept in `push-boards.json` with the board last sent (so a restart neither alerts again nor misses a change). It goes with `board.unregister`, the end of the pairing (`pairingsChanged`), a 410 from the route, and after its `end`.
+- The phone draws the board itself when it registers, so a registration starts with that board as sent and pushes nothing until the board changes.
+- When: on every registry `updated`/`removed` each phone's board is rebuilt (`boardStateFor` over `registry.list()`, the `sessions` frame order) and `observe`d. A change waits 2 s from when it was first seen (`BOARD_DEBOUNCE_MS`), two pushes to one phone are never closer than 5 s (`BOARD_MIN_INTERVAL_MS`), and a change undone in the meantime sends nothing (`boardStep`). One `setTimeout` for the earliest thing due; no ticking.
+- Alert: `newlyAsking` against the board the route last took, and nobody at the Mac (`Pusher.atMac`, the same reading that holds a notification). Only the alert is held, never the push.
+- End: 15 min (`BOARD_QUIET_END_MS`) with nothing but idle sessions (or none) sends `event: "end"` once and forgets the board.
+- Failures: 410 forgets the board; `retry` (502/503/no answer) gets one more try after the min interval; anything else is a failure and the board waits for the next change. A board that failed is not counted as sent, so its question still alerts next time.
+- With push off (`gateway()` null) nothing is sent and `board.state` says `delivery: "off"`.
+
 ## Network changes
 
 The Mac may hop Wi‑Fi while the daemon runs. On macOS the service is registered with `dns-sd -R`, so mDNSResponder owns the SRV/A records and answers with the current address (and the current `<host>.local` name, which macOS renumbers per network: `-3`, `-4`…). The JS `bonjour-service` fallback snapshots interfaces at publish time and keeps advertising a dead address after a change; it is only used off-macOS. The phone matches the daemon by the `id` TXT key, never by name or address, and re-resolves while it is disconnected.
@@ -349,8 +364,8 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 - The control API binds to `127.0.0.1` only. The WebSocket requires the encryption handshake, then a paired token before anything else, and closes after 5 s without a first frame or without `hello`.
 - A token never crosses a network in the clear: `hello` and `pair` are only accepted on a sealed connection (unless `--allow-plain-lan`). Never log a token, a pairing code or a pairing secret; log the device `id`.
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
-- A device token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
-- Pure modules (`pushPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
+- A device token, a board's push token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
+- Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
 - Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` on `service install`.
 
 ## Adding a frame

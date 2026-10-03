@@ -1,5 +1,5 @@
-/** Posts one sealed push to a relay's push route (PROTOCOL.md "Push route") and says what became of it. */
-import { PushError, RELAY_PUSH_PATH, type PushRequest } from "@grenade/protocol";
+/** Posts one push (a sealed notification or a board push) to a relay's push route (PROTOCOL.md "Push route") and says what became of it. */
+import { PushError, RELAY_PUSH_PATH, type PushRouteRequest } from "@grenade/protocol";
 import type { PushGateway } from "./pushConfig.js";
 
 export type PushOutcome =
@@ -29,7 +29,7 @@ export function outcomeOf(status: number): PushOutcome {
 
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
-export async function postPush(gateway: PushGateway, request: PushRequest, fetchFn: Fetch = fetch, timeoutMs = 10_000): Promise<PushResult> {
+export async function postPush(gateway: PushGateway, request: PushRouteRequest, fetchFn: Fetch = fetch, timeoutMs = 10_000): Promise<PushResult> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (gateway.key) headers["authorization"] = `Bearer ${gateway.key}`;
   try {
