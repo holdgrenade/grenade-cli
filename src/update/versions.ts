@@ -176,7 +176,11 @@ export function restartDecision(running: string, installed: string | null, busy:
   return busy ? "wait" : "restart";
 }
 
-/** A session that a restart would interrupt. */
-export function isBusy(s: { status: string; waitingFor?: string | undefined }): boolean {
-  return s.status === "working" || (s.status === "waiting" && s.waitingFor === "answer");
+/**
+ * A session that a restart would interrupt. One that only waits for background tasks is not: its hold is saved and
+ * picked up again, and a server left running would otherwise keep the daemon from ever restarting.
+ */
+export function isBusy(s: { status: string; waitingFor?: string | undefined; background?: readonly unknown[] | undefined }): boolean {
+  if (s.status === "working") return !s.background?.length;
+  return s.status === "waiting" && s.waitingFor === "answer";
 }

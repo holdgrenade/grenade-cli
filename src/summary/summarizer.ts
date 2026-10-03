@@ -33,6 +33,8 @@ export interface SummarizerOptions {
 
 interface Track {
   status: Session["status"] | undefined;
+  /** Background tasks hold the session `working` after its turn ended. */
+  held: boolean;
   prompts: string[];
   timer: ReturnType<typeof setTimeout> | undefined;
   lastRunAt: number | undefined;
@@ -80,7 +82,11 @@ export class Summarizer {
   private readonly onUpdated = (session: Session): void => {
     const t = this.track(session.id);
     const before = t.status;
+    const wasHeld = t.held;
     t.status = session.status;
+    t.held = session.background !== undefined;
+    // A turn that ended with background tasks running stays `working`, but its reply is there: summarize it now.
+    if (t.held && !wasHeld) return this.schedule(session.id, 0);
     if (before === session.status) return;
     if (session.status === "working") this.schedule(session.id, SUMMARY_WORKING_DELAY_MS);
     else if (session.status === "waiting") this.schedule(session.id, 0);
@@ -94,7 +100,7 @@ export class Summarizer {
   private track(id: string): Track {
     let t = this.tracks.get(id);
     if (!t) {
-      t = { status: undefined, prompts: [], timer: undefined, lastRunAt: undefined, lastInputHash: undefined };
+      t = { status: undefined, held: false, prompts: [], timer: undefined, lastRunAt: undefined, lastInputHash: undefined };
       this.tracks.set(id, t);
     }
     return t;

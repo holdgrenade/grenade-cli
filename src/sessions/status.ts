@@ -30,10 +30,25 @@ export interface StatusState {
   lastLookAt?: number | undefined;
   /** The Mac slept during the current turn. Cleared when a turn starts. */
   sleptThisTurn?: boolean | undefined;
+  /**
+   * The turn ended, but what the agent started in the background still runs (PROTOCOL.md "Background tasks"): the
+   * session stays `working` until that is over. Any other hook clears it.
+   */
+  background?: boolean | undefined;
 }
 
 export type StatusEvent =
-  | { kind: "hook"; status: SessionStatus; waitingFor?: WaitingFor | undefined; at: number }
+  /**
+   * `background`: a turn that ended with tasks still running; only with `working`.
+   * `aside`: work that is not the agent's own turn (a tool call inside a subagent, a prompt that was answered); only
+   * with `working`. It never starts a turn on a session that has finished, and never ends a background hold.
+   */
+  | { kind: "hook"; status: SessionStatus; waitingFor?: WaitingFor | undefined; background?: boolean | undefined; aside?: boolean | undefined; at: number }
+  /**
+   * What is known of the background tasks without a hook: `running: false` ends the hold (the turn is `done`);
+   * `running: true` holds a hook-driven session that had just finished, for a screen that showed them a moment late.
+   */
+  | { kind: "background"; running: boolean; at: number }
   /** `busy`: what the screen says, for an agent whose screen shows it (Claude Code's spinner); absent otherwise. */
   | { kind: "output"; changed: boolean; busy?: boolean | undefined; at: number }
   /**
@@ -54,14 +69,22 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
     case "gone":
       return set(s, "gone", e.at);
     case "hook": {
-      const hooked = s.hookDriven ? s : { ...s, hookDriven: true };
-      if (e.status !== "waiting") return set(hooked, e.status, e.at);
+      if (e.aside && e.status === "working") return aside(s.hookDriven ? s : { ...s, hookDriven: true }, e.at);
       const reason = e.waitingFor ?? "done";
+      // A question asked while background tasks hold the session leaves the hold in place: answered, it is held again.
+      const keepsHold = e.status === "waiting" && reason === "answer";
+      const background = e.status === "working" && e.background === true ? true : keepsHold ? s.background : undefined;
+      const hooked = s.hookDriven && s.background === background ? s : { ...s, hookDriven: true, background };
+      if (e.status !== "waiting") return set(hooked, e.status, e.at);
       if (reason === "stopped") return stop(hooked, "error", e.at);
       // The user has seen this already: a Notification for the prompt a PermissionRequest announced.
       if (hooked.status === "idle" && hooked.waitingFor === reason) return hooked;
       return wait(hooked, reason, e.at);
     }
+    case "background":
+      if (!e.running) return s.background && s.status === "working" ? wait({ ...s, background: undefined }, "done", e.at) : s;
+      if (!s.hookDriven || s.status !== "waiting" || (s.waitingFor ?? "done") !== "done") return s;
+      return { ...s, status: "working", since: e.at, waitingFor: undefined, background: true };
     case "asks":
       // Seen already: the same dialog stays up, and the user knows.
       if (s.status === "idle" && s.waitingFor === "answer") return s;
@@ -82,7 +105,7 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
           next = wait(next, "done", e.at);
         }
       }
-      if (next.hookDriven && next.status === "working" && e.busy === false && e.at - next.lastOutputAt >= STOPPED_QUIET_MS) {
+      if (next.hookDriven && next.status === "working" && !next.background && e.busy === false && e.at - next.lastOutputAt >= STOPPED_QUIET_MS) {
         next = stop(next, next.sleptThisTurn ? "sleep" : "quiet", e.at);
       }
       if (next.status === "waiting" && next.waitingFor !== "stopped" && e.at - next.since >= WAITING_TO_IDLE_MS) next = set(next, "idle", e.at);
@@ -108,6 +131,16 @@ function set(s: StatusState, status: SessionStatus, at: number): StatusState {
   const turn = status === "working" && s.status !== "working" ? { lastLookAt: undefined, sleptThisTurn: undefined, stoppedBecause: undefined } : {};
   if (s.status === status) return s.waitingFor === waitingFor ? s : { ...s, waitingFor };
   return { ...s, ...turn, status, since: at, waitingFor };
+}
+
+/**
+ * Work that is not the agent's own turn. A held session stays (or, after a question, is again) held; a session whose
+ * turn is over stays over, because no `Stop` would follow; a question that was answered is `working` again.
+ */
+function aside(s: StatusState, at: number): StatusState {
+  if (s.background) return set(s, "working", at);
+  const over = s.status === "waiting" ? (s.waitingFor ?? "done") === "done" : s.status === "idle" && s.waitingFor !== "answer";
+  return over ? s : set(s, "working", at);
 }
 
 /** Stopped partway through a turn, and why. */

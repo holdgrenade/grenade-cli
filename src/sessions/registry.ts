@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, Session, SessionStatus, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionStatus, WaitingFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
@@ -18,6 +18,7 @@ import { defaultGroupFor, isJoinableGroup, membersInOrder, nextOrder, otherMembe
 import { initialStatus, reduceStatus, shownStoppedBecause, shownWaitingFor, type StatusState } from "./status.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { WIDTH_FLOOR, onRelease, onSweep } from "./widthFloor.js";
+import { NO_TASKS, heldTasks, restoreHeld, shownTask, type HeldTask } from "../background/heldTasks.js";
 
 export interface RegistryEvents {
   /** A brand-new session (not an adopted one). */
@@ -53,6 +54,12 @@ interface Record_ {
   aiTitle: string | undefined;
   /** The summarizer's title, used until Claude Code has written one and for other agents. */
   guessedTitle: string | undefined;
+  /** The background tasks that hold the session `working` (PROTOCOL.md "Background tasks"); `NO_TASKS` when none do. */
+  held: readonly HeldTask[];
+  /** The `held` the session's `background` was last made from. */
+  shownHeld: readonly HeldTask[];
+  /** When a hook saw a background task start, by the agent's id for it. */
+  backgroundStarts: Map<string, string>;
 }
 
 interface PersistedSession {
@@ -68,6 +75,8 @@ interface PersistedSession {
   guessedTitle?: string | undefined;
   model?: string | undefined;
   transcript?: string | undefined;
+  /** The background tasks holding the session `working`, so a restarted daemon keeps holding it. */
+  background?: readonly HeldTask[] | undefined;
   resumedFrom?: string | undefined;
   resumedAt?: string | undefined;
 }
@@ -172,6 +181,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         guessedTitle: meta?.guessedTitle,
         model: meta?.model,
         transcript: meta?.transcript,
+        background: meta?.background,
         resumedFrom: meta?.resumedFrom,
         resumedAt: meta?.resumedAt,
       });
@@ -389,12 +399,61 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
-  /** `waitingFor` says why, for a hook that makes the session wait. */
-  applyHook(id: string, status: SessionStatus, waitingFor?: WaitingFor): boolean {
+  /**
+   * `waitingFor` says why, for a hook that makes the session wait. `aside`: work that is not the agent's own turn (a
+   * tool call inside a subagent, a prompt that was answered), which starts no turn and ends no background hold.
+   */
+  applyHook(id: string, status: SessionStatus, waitingFor?: WaitingFor, aside?: boolean): boolean {
     const r = this.records.get(id);
     if (!r) return false;
-    this.setState(r, reduceStatus(r.state, { kind: "hook", status, waitingFor, at: this.now() }));
+    this.setState(r, reduceStatus(r.state, { kind: "hook", status, waitingFor, aside, at: this.now() }));
     return true;
+  }
+
+  /**
+   * A turn ended with these tasks still running: the session stays `working` and lists them (PROTOCOL.md
+   * "Background tasks"). The next hook of any other kind lets go of them.
+   */
+  holdForBackground(id: string, tasks: readonly ReportedBackgroundTask[]): boolean {
+    const r = this.records.get(id);
+    if (!r) return false;
+    const at = this.now();
+    r.held = heldTasks(tasks, r.held, r.backgroundStarts, new Date(at).toISOString());
+    for (const started of r.backgroundStarts.keys()) if (!tasks.some((t) => t.id === started)) r.backgroundStarts.delete(started);
+    this.setState(r, reduceStatus(r.state, { kind: "hook", status: "working", background: r.held.length > 0, at }));
+    return true;
+  }
+
+  /** A hook saw the agent start a background task: its time, for when a later hook lists it. */
+  backgroundStarted(id: string, taskId: string): void {
+    this.records.get(id)?.backgroundStarts.set(taskId, new Date(this.now()).toISOString());
+  }
+
+  /** The background tasks that held the session are over, and no hook said so: its turn is done. */
+  backgroundOver(id: string): void {
+    const r = this.records.get(id);
+    if (r) this.setState(r, reduceStatus(r.state, { kind: "background", running: false, at: this.now() }));
+  }
+
+  /**
+   * What the screen says runs in the background, for an agent whose hooks do not. None: a held session is done.
+   * Some: a held session lists them, and one that has just finished is held after all (its screen showed them a
+   * moment after its hook).
+   */
+  screenBackground(id: string, tasks: readonly ReportedBackgroundTask[]): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    if (tasks.length === 0) return r.state.background ? this.backgroundOver(id) : undefined;
+    const at = this.now();
+    const next = r.state.background ? r.state : reduceStatus(r.state, { kind: "background", running: true, at });
+    if (!next.background) return;
+    r.held = heldTasks(tasks, r.held, r.backgroundStarts, new Date(at).toISOString());
+    this.setState(r, next);
+  }
+
+  /** The sessions background tasks hold `working`, with the transcript their last hook named. */
+  heldInBackground(): { id: string; agent: AgentKind; transcript: string | undefined }[] {
+    return [...this.records.values()].filter((r) => r.state.background && r.state.status === "working").map((r) => ({ id: r.session.id, agent: r.session.agent, transcript: r.transcript }));
   }
 
   /** The screen shows a dialog the agent waits on: `waiting` for an answer, status still read from the screen. */
@@ -474,7 +533,9 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   private add(meta: PersistedSession): Session {
     const at = this.now();
-    const state = initialStatus(at);
+    // A session that background tasks held when the daemon stopped is held again; what ends the hold still applies.
+    const held = restoreHeld(meta.background);
+    const state: StatusState = held.length > 0 ? { ...initialStatus(at), hookDriven: true, background: true } : initialStatus(at);
     const session: Session = {
       id: meta.id,
       name: meta.name,
@@ -482,6 +543,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       cwd: meta.cwd,
       status: state.status,
       statusSince: new Date(state.since).toISOString(),
+      ...(held.length > 0 ? { background: held.map(shownTask) } : {}),
       lastLine: "",
       ...((meta.aiTitle ?? meta.guessedTitle) !== undefined ? { title: meta.aiTitle ?? meta.guessedTitle } : {}),
       ...(meta.summary !== undefined ? { summary: meta.summary } : {}),
@@ -492,7 +554,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map() });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -505,22 +567,29 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   }
 
   private setState(r: Record_, next: StatusState, emit = true): void {
-    if (next === r.state) return;
+    // Only a held session keeps background tasks, and it lists them while it is `working` (not under a question).
+    if (!next.background) r.held = NO_TASKS;
+    const shown = next.status === "working" ? r.held : NO_TASKS;
+    const heldChanged = shown !== r.shownHeld;
+    if (next === r.state && !heldChanged) return;
     // A session that waits for something else than before (a question after a finished turn) changed too.
     const changed =
-      next.status !== r.state.status || shownWaitingFor(next) !== r.session.waitingFor || shownStoppedBecause(next) !== r.session.stoppedBecause;
+      heldChanged || next.status !== r.state.status || shownWaitingFor(next) !== r.session.waitingFor || shownStoppedBecause(next) !== r.session.stoppedBecause;
     r.state = next;
     if (changed) {
-      const { waitingFor: _was, stoppedBecause: _because, ...rest } = r.session;
+      const { waitingFor: _was, stoppedBecause: _because, background: _held, ...rest } = r.session;
       const waitingFor = shownWaitingFor(next);
       const stoppedBecause = shownStoppedBecause(next);
+      r.shownHeld = shown;
       r.session = {
         ...rest,
         status: next.status,
         statusSince: new Date(next.since).toISOString(),
         ...(waitingFor ? { waitingFor } : {}),
         ...(stoppedBecause ? { stoppedBecause } : {}),
+        ...(shown.length > 0 ? { background: shown.map(shownTask) } : {}),
       };
+      if (heldChanged) this.persist();
       if (emit) this.emit("updated", r.session);
     }
   }
@@ -547,7 +616,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle, held }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

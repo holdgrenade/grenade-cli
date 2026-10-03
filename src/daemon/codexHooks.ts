@@ -1,6 +1,7 @@
 /** POST /hooks/codex?session=<id>: Codex hook payloads become session status (PROTOCOL.md "Codex hooks"). */
 import { CodexHookEvent, statusForCodexHook, waitingForCodexHook } from "@grenade/protocol";
 import type { Logger } from "../log.js";
+import { countedTasks } from "../background/heldTasks.js";
 import type { HookRegistryPort, HookResult } from "./hooks.js";
 
 export interface CodexHookListeners {
@@ -10,6 +11,8 @@ export interface CodexHookListeners {
   onTranscript?: (sessionId: string, path: string, event: string) => void;
   /** The model slug the payload names. */
   onModel?: (sessionId: string, model: string) => void;
+  /** How many background terminals the session's screen shows; Codex's hooks do not say (PROTOCOL.md "Background tasks"). */
+  background?: (sessionId: string) => number;
 }
 
 export function handleCodexHook(registry: HookRegistryPort, sessionParam: string | null, rawBody: string, log: Logger, on: CodexHookListeners = {}): HookResult {
@@ -25,10 +28,14 @@ export function handleCodexHook(registry: HookRegistryPort, sessionParam: string
   const event = parsed.data.hook_event_name;
   const status = statusForCodexHook(event);
   if (!status) return { status: 202, body: { ok: true, reason: `event ${event} carries no status` } };
-  if (!registry.applyHook(sessionParam, status, waitingForCodexHook(event) ?? undefined)) return { status: 404, body: { ok: false, reason: `unknown session ${sessionParam}` } };
+  // A turn that ends with background terminals still running holds the session working until the screen drops them.
+  const running = event === "Stop" ? (on.background?.(sessionParam) ?? 0) : 0;
+  const applied = running > 0 ? registry.holdForBackground(sessionParam, countedTasks(running)) : registry.applyHook(sessionParam, status, waitingForCodexHook(event) ?? undefined);
+  if (!applied) return { status: 404, body: { ok: false, reason: `unknown session ${sessionParam}` } };
   if (parsed.data.model) on.onModel?.(sessionParam, parsed.data.model);
   if (parsed.data.prompt !== undefined) on.onPrompt?.(sessionParam, parsed.data.prompt);
   if (parsed.data.transcript_path) on.onTranscript?.(sessionParam, parsed.data.transcript_path, event);
-  log.debug(`Codex hook ${event}`, { session: sessionParam, status });
-  return { status: 200, body: { ok: true, applied: status } };
+  const shown = running > 0 ? "working" : status;
+  log.debug(`Codex hook ${event}`, { session: sessionParam, status: shown });
+  return { status: 200, body: { ok: true, applied: shown } };
 }

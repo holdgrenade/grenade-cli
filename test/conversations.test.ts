@@ -36,7 +36,8 @@ describe("conversationInfoIn", () => {
 
 describe("running Claude processes", () => {
   it("parses a sessions file and ignores anything else", () => {
-    expect(parseClaudeProcess('{"pid":34419,"sessionId":"5b3e","cwd":"/w","status":"busy"}')).toEqual({ pid: 34419, sessionId: "5b3e" });
+    expect(parseClaudeProcess('{"pid":34419,"sessionId":"5b3e","cwd":"/w","status":"busy"}')).toEqual({ pid: 34419, sessionId: "5b3e", status: "busy" });
+    expect(parseClaudeProcess('{"pid":34419,"sessionId":"5b3e"}')).toEqual({ pid: 34419, sessionId: "5b3e" });
     expect(parseClaudeProcess('{"pid":"1","sessionId":"x"}')).toBeNull();
     expect(parseClaudeProcess("nope")).toBeNull();
   });

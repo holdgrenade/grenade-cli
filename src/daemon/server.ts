@@ -40,6 +40,9 @@ import { startDiscovery } from "./discovery.js";
 import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
 import { ScreenPrompts } from "../prompts/screenPrompts.js";
+import { ClaudeBackgroundWatch } from "../background/claudeBackgroundWatch.js";
+import { codexBackgroundIn } from "../background/codexBackground.js";
+import { watchScreenBackground } from "../background/screenBackground.js";
 import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
 import { readBody, sendJson } from "./http.js";
@@ -227,7 +230,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const interrupted = (id: string) => {
     const session = registry.get(id);
     const path = registry.transcriptOf(id);
-    if (session?.agent === "claude" && session.status === "working" && path) interruptCatchUp.start(id, path);
+    // A session that only waits for background tasks is at its prompt already: Esc stops nothing there.
+    if (session?.agent === "claude" && session.status === "working" && !session.background && path) interruptCatchUp.start(id, path);
   };
   // The store lives in memory: after a restart, read every saved transcript from its start rather than wait for
   // each session's next hook, so a phone sees what was said the moment it subscribes.
@@ -280,7 +284,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       body,
       log,
       (id, prompt) => {
-        summarizer?.notePrompt(id, prompt);
+        // Claude Code tells itself that a background task ended with a prompt of its own; the user asked nothing.
+        if (!prompt.trimStart().startsWith("<task-notification>")) summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
       },
       (id, path, event) => {
@@ -306,6 +311,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const applyCodexHook = (session: string | null, body: string) =>
     handleCodexHook(registry, session, body, log, {
       onModel: (id, model) => registry.setModel(id, model),
+      background: (id) => codexBackgroundIn(registry.screenOf(id)?.lines ?? []),
       onPrompt: (id, prompt) => {
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
@@ -388,9 +394,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const prompts = new PromptStore();
   const promptTests = new PromptTests(prompts);
   prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
-  prompts.on("answered", (id) => registry.applyHook(id, "working"));
+  // An answer is not a new turn: a session that background tasks held before the question is held again.
+  prompts.on("answered", (id) => registry.applyHook(id, "working", undefined, true));
   // Codex's startup dialogs, read off the screen, are cards too (PROTOCOL.md "Codex dialogs").
   new ScreenPrompts(registry, prompts, log);
+  // What an agent left running when its turn ended holds the session working (PROTOCOL.md "Background tasks"):
+  // Codex's is read off its screen, and Claude Code's own files say when a task ended without a hook.
+  watchScreenBackground(registry);
+  const backgroundWatch = new ClaudeBackgroundWatch(registry, join(opts.claudeDir ?? paths.claudeDir, "sessions"), log);
+  backgroundWatch.start();
   registry.on("removed", (id) => {
     prompts.closeSession(id);
     activity.forget(id);
@@ -608,6 +620,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       // Held hook requests would keep the HTTP server from closing.
       prompts.closeAll();
       summarizer?.stop();
+      backgroundWatch.stop();
       catchUp.stop();
       interruptCatchUp.stop();
       codexStopCatchUp.stop();
