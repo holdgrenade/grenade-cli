@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type ConversationsPort, type TermHandle, type TermOpen } from "../src/daemon/wsHandler.js";
+import { Connection, type ConversationsPort, type ModelsPort, type TermHandle, type TermOpen } from "../src/daemon/wsHandler.js";
+import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
 import { UnknownGroupError } from "../src/sessions/registry.js";
 
@@ -86,7 +87,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -109,6 +110,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     route: "lan",
     ...(opts.acceptsPlain ? { acceptsPlain: opts.acceptsPlain } : {}),
     ...(opts.conversations ? { conversations: opts.conversations } : {}),
+    ...(opts.models ? { models: opts.models } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
@@ -179,6 +181,61 @@ describe("Connection", () => {
     expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.rename" });
   });
 
+  it("switches a session's model, and says why when it cannot", async () => {
+    const switched: string[] = [];
+    let refuse = false;
+    const models: ModelsPort = {
+      async switch(s, model, effort) {
+        if (refuse) throw new ModelSwitchError("Claude Code did not open its model picker.");
+        switched.push(`${s.id}:${model}:${effort}`);
+        const next = { ...s, model, ...(effort ? { effort } : {}) };
+        registry.sessions.set(s.id, next);
+        registry.emit("updated", next);
+        return next;
+      },
+    };
+    const { conn, registry, out } = connect({ models });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    // The switch itself answers every client through the registry's `updated`.
+    await conn.handleMessage(fixture("client.session.model.json"));
+    expect(switched).toEqual(["gr-a1b2c3:Opus 5.5:high"]);
+    expect(out).toEqual([{ type: "session.updated", session: { ...session, model: "Opus 5.5", effort: "high" } }]);
+    // The same choice again touches nothing and still answers.
+    await conn.handleMessage(fixture("client.session.model.json"));
+    expect(switched).toHaveLength(1);
+    expect(out).toHaveLength(2);
+    const send = (frame: object) => conn.handleMessage(JSON.stringify({ type: "session.model", sessionId: session.id, ...frame }));
+    await send({ model: "GPT-6-Luna" });
+    expect(out[2]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model", message: "Claude Code has no model named GPT-6-Luna" });
+    await send({ model: "Haiku 4.5", effort: "high" });
+    expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model", message: "Haiku 4.5 has no high effort" });
+    await conn.handleMessage(JSON.stringify({ type: "session.model", sessionId: "gr-nope", model: "Opus 5.5" }));
+    expect(out[4]).toMatchObject({ type: "error", code: "unknown_session", ref: "session.model" });
+    registry.sessions.set(session.id, { ...session, status: "working" });
+    await send({ model: "Sonnet 5.5" });
+    expect(out[5]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model", message: "the agent is working: choose a model when its turn is over" });
+    registry.sessions.set(session.id, { ...session, waitingFor: "answer" });
+    await send({ model: "Sonnet 5.5" });
+    expect(out[6]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model" });
+    registry.sessions.set(session.id, { ...session, agent: "codex" });
+    await send({ model: "Sonnet 5.5" });
+    expect(out[7]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model", message: "this session's agent has no models to choose from" });
+    registry.sessions.set(session.id, session);
+    refuse = true;
+    await send({ model: "Sonnet 5.5", effort: "low" });
+    expect(out[8]).toEqual({ type: "error", code: "tmux_failed", ref: "session.model", message: "Claude Code did not open its model picker." });
+    expect(switched).toHaveLength(1);
+  });
+
+  it("answers session.model with bad_frame when the daemon switches no models", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.session.model.json"));
+    expect(out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.model" });
+  });
+
   it("accepts every client fixture without a bad_frame", async () => {
     const everything: ConversationsPort = {
       async list() { return []; },
@@ -187,7 +244,7 @@ describe("Connection", () => {
       async resume({ name }) { return { ...session, id: `gr-${name}`, name }; },
     };
     const term = { input() {}, resize() {}, close() {} };
-    const { conn, out } = connect({ conversations: everything, openTerm: () => term });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     const first = ["client.hello.json", "client.term.open.json"];
     const last = ["client.term.close.json", "client.unpair.json"];

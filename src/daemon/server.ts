@@ -22,6 +22,7 @@ import { TerminalMirror, terminalFromEnv, type TerminalKind, type TerminalStatus
 import { readTerminalSetting } from "../terminal/terminalSetting.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
+import { ModelSwitchError, switchClaudeModel, type ModelTerminal } from "../models/claudeModelSwitch.js";
 import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
@@ -53,7 +54,7 @@ import { isLoopback } from "./loopback.js";
 import { typedCode } from "./pairCheck.js";
 import { CODE_TTL_MS, DEVICE_IDLE_MS, PairingCodes, TokenStore, type TokenRecord } from "./pairing.js";
 import { closePromptsByHook, handlePromptHook } from "./promptHook.js";
-import { Connection, type ConversationsPort, type PairVerdict } from "./wsHandler.js";
+import { Connection, type ConversationsPort, type ModelsPort, type PairVerdict } from "./wsHandler.js";
 import { offerUrlFor } from "../pairing/offer.js";
 import { PairingWatch } from "../pairing/pairingWatch.js";
 import { createAttachmentStore } from "../attachments/attachmentStore.js";
@@ -249,6 +250,27 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }),
     new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held }),
   ]);
+  // Switching a session's model (PROTOCOL.md "Models"). How it is done is the agent's own: Claude Code's picker.
+  const switchingModel = new Set<string>();
+  const models: ModelsPort = {
+    async switch(session, model, effort) {
+      if (switchingModel.has(session.id)) throw new ModelSwitchError("A model switch is already under way in this session.");
+      switchingModel.add(session.id);
+      try {
+        // Straight to tmux: what is typed here is no prompt, so nothing the registry does for one applies.
+        const terminal: ModelTerminal = {
+          lines: async () => (await tmux.capture(session.id)).lines,
+          type: (text) => tmux.sendText(session.id, text, false),
+          key: (key) => tmux.sendKey(session.id, key),
+        };
+        const switched = await switchClaudeModel(terminal, model, effort);
+        return registry.chooseModel(session.id, model, switched.effort);
+      } finally {
+        switchingModel.delete(session.id);
+      }
+    },
+  };
+
   const conversations: ConversationsPort = {
     list: (anyAgent) => conversationIndex.list(anyAgent),
     preview: (id) => conversationIndex.preview(id),
@@ -296,7 +318,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (resumedFrom && conversationIdOf(path) !== resumedFrom) marks.noteCopy(conversationIdOf(path), resumedFrom);
         registry.setTranscript(id, path);
         readTranscriptModel(path)
-          .then((model) => model && registry.setModel(id, model))
+          .then((read) => read && registry.setModel(id, read.model, read.effort, read.at))
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));
         catchUp.cancel(id);
         interruptCatchUp.cancel(id);
@@ -472,6 +494,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       board: push.board,
       prompts,
       groups: groupOrder,
+      models,
       conversations,
       openTerm(open) {
         const stream = new TermStream({

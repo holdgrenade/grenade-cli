@@ -342,6 +342,33 @@ describe("session groups", () => {
     expect(again.get("gr-app")?.model).toBe("Opus 5.5");
   });
 
+  it("keeps a chosen model against replies written before the choice, and restores it on adopt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-model-"));
+    const persistPath = join(dir, "sessions.json");
+    const r = make({ persistPath });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.setModel("gr-app", "Fable 5.1", "high", "2020-01-01T00:00:00.000Z");
+    expect(r.get("gr-app")).toMatchObject({ model: "Fable 5.1", effort: "high" });
+    const seen: string[] = [];
+    r.on("updated", (s) => seen.push(`${s.model} ${s.effort}`));
+    expect(r.chooseModel("gr-app", "Opus 5.5", "low")).toMatchObject({ model: "Opus 5.5", effort: "low" });
+    // A hook that reads the transcript again finds the reply from before the switch: the session keeps the choice.
+    r.setModel("gr-app", "Fable 5.1", "high", "2020-01-01T00:00:00.000Z");
+    r.setModel("gr-app", "Fable 5.1");
+    expect(r.get("gr-app")).toMatchObject({ model: "Opus 5.5", effort: "low" });
+    // A model that takes no effort level carries none.
+    r.chooseModel("gr-app", "Haiku 4.5", undefined);
+    expect(r.get("gr-app")?.effort).toBeUndefined();
+    // A reply written after the choice says what the session runs, whatever was chosen.
+    r.setModel("gr-app", "Sonnet 5.5", "medium", "2999-01-01T00:00:00.000Z");
+    expect(seen).toEqual(["Opus 5.5 low", "Haiku 4.5 undefined", "Sonnet 5.5 medium"]);
+    const again = make({ live: ["gr-app"], persistPath });
+    await again.adopt();
+    expect(again.get("gr-app")).toMatchObject({ model: "Sonnet 5.5", effort: "medium" });
+    again.setModel("gr-app", "Fable 5.1", "high", "2020-01-01T00:00:00.000Z");
+    expect(again.get("gr-app")?.model).toBe("Sonnet 5.5");
+  });
+
   it("saves the transcript a hook named, keeps it off the session, and restores it on adopt", async () => {
     const persistPath = join(mkdtempSync(join(tmpdir(), "grenade-transcript-")), "sessions.json");
     const r = make({ persistPath });

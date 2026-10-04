@@ -4,8 +4,22 @@
  */
 import type { AgentInfo } from "@grenade/protocol";
 
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The models a Claude Code session can be switched to (PROTOCOL.md "Models"): the current ones, named as the rows of
+ * Claude Code's `/model` picker and as `modelLabel` names a reply's model. A name the picker does not have is refused
+ * when it is chosen, so a list that falls behind Claude Code never switches to the wrong model.
+ */
+const CLAUDE_MODELS = [
+  { name: "Fable 5.1", efforts: CLAUDE_EFFORTS },
+  { name: "Opus 5.5", efforts: CLAUDE_EFFORTS },
+  { name: "Sonnet 5.5", efforts: CLAUDE_EFFORTS },
+  { name: "Haiku 4.5" },
+];
+
 export const AGENTS = [
-  { kind: "claude", name: "Claude Code", activity: true, conversations: true },
+  { kind: "claude", name: "Claude Code", activity: true, conversations: true, models: CLAUDE_MODELS },
   { kind: "codex", name: "Codex", activity: true, conversations: true },
   { kind: "shell", name: "Shell" },
 ] as const satisfies readonly AgentInfo[];

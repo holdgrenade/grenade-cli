@@ -13,6 +13,8 @@ import type { Route } from "./devices.js";
 import { SentInputs } from "./sentInputs.js";
 import { isInterrupt } from "../tmux/termPaint.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
+import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
+import { ModelSwitchError } from "../models/claudeModelSwitch.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -105,6 +107,12 @@ export interface GroupsPort {
   off(event: "changed", cb: (f: GroupsFrame) => void): unknown;
 }
 
+/** Switches a session's agent to another model, for that session only (PROTOCOL.md "Models"). */
+export interface ModelsPort {
+  /** Resolves with the session once the agent has switched; rejects with `ModelSwitchError` when it did not. */
+  switch(session: Session, model: string, effort: string | undefined): Promise<Session>;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -145,6 +153,8 @@ export interface ConnectionDeps {
   conversations?: ConversationsPort;
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
+  /** Switches a session's model. Absent means this daemon switches none and answers `session.model` with `bad_frame`. */
+  models?: ModelsPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -413,6 +423,21 @@ export class Connection {
         const before = r.get(frame.sessionId);
         const after = r.setGroup(frame.sessionId, frame.group, frame.index);
         if (after.group === before?.group && after.order === before?.order) this.send({ type: "session.updated", session: after });
+        return;
+      }
+      case "session.model": {
+        const session = r.get(frame.sessionId);
+        if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
+        const problem = (this.d.models ? null : "this daemon switches no models") ?? modelChoiceProblem(agentInfo(session.agent), frame.model, frame.effort) ?? switchTimingProblem(session);
+        if (problem) return this.fail("bad_frame", problem, frame.type);
+        // Nothing to switch: the sender still gets its answer. Every other client hears of a real switch through `updated`.
+        if (session.model === frame.model && (frame.effort === undefined || session.effort === frame.effort)) return this.send({ type: "session.updated", session });
+        try {
+          await this.d.models!.switch(session, frame.model, frame.effort);
+        } catch (e) {
+          if (e instanceof ModelSwitchError) return this.fail("tmux_failed", e.message, frame.type);
+          throw e;
+        }
         return;
       }
       case "group.rename": {

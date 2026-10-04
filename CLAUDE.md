@@ -121,14 +121,17 @@ src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen 
 src/summary/summaryTiming.ts  pure: summaryDelay (wanted delay vs. one run per minute)
 src/summary/claudeCli.ts   resolveClaudeBin + runClaudeSummary: `claude -p --model haiku`, stdin in, reply out
 src/summary/summarizer.ts  Summarizer: listens to the registry, schedules runs, calls registry.setSummary and setGuessedTitle
-src/transcript/modelLabel.ts  pure: lastModelIn (model id of the last assistant reply in transcript JSONL), modelLabel ("claude-opus-5-5" → "Opus 5.5")
-src/transcript/readModel.ts   readTranscriptModel: reads the last 256 KB of a transcript, returns the label
+src/transcript/modelLabel.ts  pure: lastReplyModelIn (model id, effort level and time of the last assistant reply in transcript JSONL), lastModelIn, modelLabel ("claude-opus-5-5" → "Opus 5.5")
+src/transcript/readModel.ts   readTranscriptModel: reads the last 256 KB of a transcript, returns the label, the effort level and when that reply was written
 src/transcript/aiTitle.ts     pure: aiTitleIn (newest Claude Code `ai-title` in transcript JSONL), clipTitle (one line, SESSION_TITLE_MAX)
 src/activity/transcriptReader.ts  TranscriptReader: reads a transcript from where it left off, whole lines only, one read at a time per file; the protocol's `activityEntriesIn` and `workingDirectoryIn` say what the lines mean
 src/activity/catchUp.ts           CatchUp: reads a transcript again at growing delays after a `Stop` that showed no reply yet, until it does (`start`, `cancel`, `stop`)
 src/activity/activityStore.ts     ActivityStore: the last 200 entries per session; `append` (from the transcript), `noteAsked` (a hook's prompt, shown at once; the transcript's copy of it is not sent again, and when the transcript puts it elsewhere the next frame is `full`), `forget`; event `activity` carries new entries as a frame
 src/folders/listFolders.ts  `listFolders(path)`: the `folders` reply (PROTOCOL.md "Folders"), the folders inside a path, links to folders included; `expandHome` and `shownFolders` (hidden dropped, Finder order, capped) are pure
-src/agents/agentCatalog.ts  the agents this daemon can start and what it does with each (`AGENTS`, sent as `daemon.agents`; `agentInfo`, `isKnownAgent`). A new agent starts here (PROTOCOL.md "Agents")
+src/agents/agentCatalog.ts  the agents this daemon can start and what it does with each (`AGENTS`, sent as `daemon.agents`; `agentInfo`, `isKnownAgent`), with the models a Claude Code session can be switched to. A new agent starts here (PROTOCOL.md "Agents")
+src/models/modelChoice.ts   pure: may this `session.model` be done: `modelChoiceProblem` (the model and effort are ones the agent lists), `switchTimingProblem` (the agent is at its prompt)
+src/models/claudeModelPicker.ts pure: Claude Code's `/model` picker read off the screen (`modelPickerIn`: rows, cursor, effort level, the session-only key), `rowsDownTo`, `promptText` (what is typed in the prompt box), `switchedModelIn` (the "Set model to …" line)
+src/models/claudeModelSwitch.ts `switchClaudeModel(terminal, model, effort)`: steers that picker (see "Models"); `ModelSwitchError` says why the agent did not switch
 src/conversations/conversationSource.ts  `ConversationSource` (one agent's conversations: `list`, `find`, `preview`, `trashPaths`) and `AllConversations`, which merges every source newest first and sends each id to the source that has it; `list(false)` keeps Claude Code's only, for apps that send no `anyAgent`
 src/conversations/fileEnds.ts          readEnds (the first and last 128 KB of a transcript) and isDirectoryOnDisk, for both sources
 src/conversations/codexConversations.ts CodexConversations: Codex's ConversationSource, the rollouts in `<codex dir>/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`, titled by `session_index.jsonl`; never `running`; a preview of a fork reads the original's lines first
@@ -267,9 +270,25 @@ Pure reducer over events `{hook, output, asks, seen, gone}`; the registry feeds 
 
 Model: every applied hook with a `transcript_path` makes the daemon read the tail of that transcript and set the session's `model` to the label of the last assistant reply (`<synthetic>` replies are skipped). It changes after a `/model` switch once the next reply lands, is saved in `sessions.json`, and is absent for shell sessions. A Codex session's `model` is the `model` slug of its last hook (`gpt-6-luna`), as Codex names it. A failed read is logged at debug and leaves the old model.
 
+Effort: the same read takes the reply's `effort` (Claude Code writes it on every assistant line) and its `timestamp`, and `registry.setModel(id, model, effort, at)` puts both on the session. Codex's hooks name no level, so a Codex session carries none.
+
 Folder: a session's `cwd` follows the agent. Neither the hook payload's `cwd` nor tmux's `pane_current_path` moves when Claude Code's shell runs `cd` (both stay at the process's folder), but Claude Code stamps every line it writes to the transcript with its shell's `cwd`, so the same transcript read that feeds the activity applies `workingDirectoryIn` (protocol) and calls `registry.setCwd`, which persists it and emits `updated`. A `cd` by the Bash tool shows with the next hook; a `cd` typed as a `!` command shows at the `Stop` of that turn (the `environment` line Claude Code writes for a change comes only with the next prompt, which is why the stamp is read, not that line). Codex and shell sessions keep the folder they started in.
 
 Only sessions launched by Grenade have `GRENADE_SESSION` in their environment; hook posts without `?session=` are answered 202 and ignored.
+
+## Models (`src/models/`)
+
+Read PROTOCOL.md "Models" first. An app switches a running session to another model with `session.model`, **for that session only**: the model and effort saved in the agent's own settings are never changed (Adam chose option A of the "Grenade Model Picker and Handoff" canvas, 2026-10-03).
+
+- What can be chosen is `models` on the agent in `agentCatalog.ts`: for Claude Code the four current models, named as its picker's rows and as `modelLabel` names them, each with its effort levels (Haiku takes none). Codex and the shell list none, so the apps only show their model. Codex is left out because its `/model` saves the choice as the default and it could not be run in a test terminal to read its picker (2026-10-03).
+- `Connection` refuses what is not a choice (`modelChoiceProblem`) and a session whose agent is not at its prompt (`switchTimingProblem`: `working`, waiting for an `answer`, `gone`) with `bad_frame`. A choice the session already has is answered with `session.updated` to the sender and touches nothing.
+- Claude Code has no command that switches one session only: typing `/model <name>` saves it as the user's default, and so does Enter in the picker. The picker's `s` key does not. So `switchClaudeModel` types `/model`, checks that the prompt box holds exactly that (text someone left there would be sent as a prompt: it takes its six characters back out and refuses), presses Enter, reads the picker (`modelPickerIn`), moves the cursor one row at a time until it is on the model, presses Right until the effort line says the level (the levels go round), and presses `s`. It never presses Enter in the picker. A picker without "s to use this session only" (an older Claude Code) is closed with Esc and refused.
+- It reads the screen after every key, so a list in another order, or scrolled, is still steered right; a model the picker does not have ends in Esc and `ModelSwitchError` after 20 moves. Success is the picker closing and a "Set model to <name> for this session only" line; anything else on the screen (Claude Code asking about usage credits for a model) is left for the terminal and reported.
+- It talks to tmux directly (`ModelTerminal` in `server.ts`), not through `registry.sendText`: what it types is no prompt. One switch per session at a time.
+- On success `registry.chooseModel` sets `model` and `effort` at once and remembers when (`modelChosenAt`, saved in `sessions.json`): the next hook reads the transcript's last reply, which is from before the switch, and `setModel` ignores a reply written before the choice. The first reply after it takes over again.
+- A model picked without an effort keeps the level the picker shows, which is the session's current one, not the model's default.
+- A `tmux_failed` error carries the `ModelSwitchError`'s sentence, written for the person who chose.
+- Tested on 2026-10-03 against Claude Code 2.1.289 in a tmux server of its own: seven switches across four models and four levels took under a second each, `model` and `effortLevel` in `~/.claude/settings.json` stayed as they were, text left in the prompt box was refused and left intact, and a model the picker lacks ended with the picker closed. `test/claudeModelPicker.test.ts` holds that picker's screen.
 
 ## Prompts (`src/prompts/`, `src/daemon/promptHook.ts`)
 
@@ -405,7 +424,7 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 - A token never crosses a network in the clear: `hello` and `pair` are only accepted on a sealed connection (unless `--allow-plain-lan`). Never log a token, a pairing code or a pairing secret; log the device `id`.
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
 - A device token, a board's push token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
-- Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
+- Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `claudeModelPicker.ts`, `modelChoice.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
 - Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` (on Linux `~/.config/systemd/user/grenade.service`) on `service install`. On Linux a deleted conversation moves into `~/.local/share/Trash`.
 
 ## Adding a frame

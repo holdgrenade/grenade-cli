@@ -49,6 +49,8 @@ interface Record_ {
   floored: boolean;
   /** Epoch of the pane's history indexes (see historyEpoch.ts). Null until the first capture. */
   mark: HistoryMark | null;
+  /** When a client last chose the model (`chooseModel`), in ms: a reply written before it does not say the model any more. */
+  modelChosenAt: number | undefined;
   /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
   transcript: string | undefined;
   /** Claude Code's title for the conversation; beats `guessedTitle` as the session's `title`. */
@@ -77,6 +79,8 @@ interface PersistedSession {
   aiTitle?: string | undefined;
   guessedTitle?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  modelChosenAt?: number | undefined;
   transcript?: string | undefined;
   /** The background tasks holding the session `working`, so a restarted daemon keeps holding it. */
   background?: readonly HeldTask[] | undefined;
@@ -102,6 +106,12 @@ export interface RegistryOptions {
   isDirectory?: (path: string) => boolean;
   /** Makes a fresh group id. Defaults to `g-` plus 6 random hex digits. */
   newGroupId?: () => string;
+}
+
+/** The session with this effort level, or with none. */
+function withEffort(session: Session, effort: string | undefined): Session {
+  const { effort: _, ...rest } = session;
+  return effort === undefined ? rest : { ...rest, effort };
 }
 
 function isDirectoryOnDisk(path: string): boolean {
@@ -184,6 +194,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         aiTitle: meta?.aiTitle,
         guessedTitle: meta?.guessedTitle,
         model: meta?.model,
+        effort: meta?.effort,
+        modelChosenAt: meta?.modelChosenAt,
         transcript: meta?.transcript,
         background: meta?.background,
         resumedFrom: meta?.resumedFrom,
@@ -418,13 +430,37 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
-  /** The label of the model the agent last answered with (see `readTranscriptModel`). */
-  setModel(id: string, model: string): void {
+  /**
+   * The label of the model the agent last answered with (see `readTranscriptModel`), and its effort level when the
+   * agent says one. `at` is when that reply was written: one from before a client chose the model (`chooseModel`)
+   * says what the session ran then, not now, and changes nothing.
+   */
+  setModel(id: string, model: string, effort?: string, at?: string): void {
     const r = this.records.get(id);
-    if (!r || r.session.model === model) return;
-    r.session = { ...r.session, model };
+    if (!r) return;
+    if (r.modelChosenAt !== undefined) {
+      const written = at === undefined ? NaN : Date.parse(at);
+      if (!(written >= r.modelChosenAt)) return;
+    }
+    // An agent that names no effort level (Codex's hooks) keeps the session's.
+    const nextEffort = effort ?? r.session.effort;
+    if (r.session.model === model && r.session.effort === nextEffort) return;
+    r.session = withEffort({ ...r.session, model }, nextEffort);
     this.persist();
     this.emit("updated", r.session);
+  }
+
+  /**
+   * A client switched the session to `model` (PROTOCOL.md "Models") and the agent took it: the session says so at
+   * once, before the agent's next reply. `effort` undefined is a model that takes none.
+   */
+  chooseModel(id: string, model: string, effort: string | undefined): Session {
+    const r = this.require(id);
+    r.modelChosenAt = this.now();
+    r.session = withEffort({ ...r.session, model }, effort);
+    this.persist();
+    this.emit("updated", r.session);
+    return r.session;
   }
 
   /**
@@ -576,6 +612,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...((meta.aiTitle ?? meta.guessedTitle) !== undefined ? { title: meta.aiTitle ?? meta.guessedTitle } : {}),
       ...(meta.summary !== undefined ? { summary: meta.summary } : {}),
       ...(meta.model !== undefined ? { model: meta.model } : {}),
+      ...(meta.effort !== undefined ? { effort: meta.effort } : {}),
       createdAt: meta.createdAt,
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
@@ -583,7 +620,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map() });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map() });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -645,7 +682,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle, held }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

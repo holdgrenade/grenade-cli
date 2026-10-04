@@ -1,9 +1,20 @@
 /**
- * Pure: which model a Claude Code transcript last answered with, and the short label the phone shows for it.
+ * Pure: which model a Claude Code transcript last answered with (and at which effort level, and when), and the short
+ * label the phone shows for it.
  */
 
-/** The model id of the last assistant reply in some transcript JSONL text, or null. Partial first lines are skipped. */
-export function lastModelIn(jsonl: string): string | null {
+/** The last assistant reply's model, as the transcript has it. */
+export interface TranscriptModel {
+  /** The model id ("claude-opus-5-5"). */
+  id: string;
+  /** The effort level of that reply ("high"), when Claude Code wrote one. */
+  effort?: string;
+  /** When the reply was written (ISO 8601), when the line says. */
+  at?: string;
+}
+
+/** The model, effort and time of the last assistant reply in some transcript JSONL text, or null. */
+export function lastReplyModelIn(jsonl: string): TranscriptModel | null {
   const lines = jsonl.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
@@ -14,12 +25,25 @@ export function lastModelIn(jsonl: string): string | null {
     } catch {
       continue;
     }
-    const message = (entry as { type?: unknown; message?: { model?: unknown } } | null)?.message;
+    const { type, message, effort, timestamp } = (entry ?? {}) as { type?: unknown; message?: { model?: unknown }; effort?: unknown; timestamp?: unknown };
     const model = message?.model;
     // "<synthetic>" marks replies Claude Code wrote itself (errors, interruptions), not a model.
-    if ((entry as { type?: unknown }).type === "assistant" && typeof model === "string" && model && !model.startsWith("<")) return model;
+    if (type !== "assistant" || typeof model !== "string" || !model || model.startsWith("<")) continue;
+    return {
+      id: model,
+      ...(typeof effort === "string" && EFFORT.test(effort) ? { effort } : {}),
+      ...(typeof timestamp === "string" ? { at: timestamp } : {}),
+    };
   }
   return null;
+}
+
+/** An effort level as the protocol carries it (`EffortLevel`). */
+const EFFORT = /^[a-z][a-z0-9-]{0,15}$/;
+
+/** The model id of the last assistant reply in some transcript JSONL text, or null. Partial first lines are skipped. */
+export function lastModelIn(jsonl: string): string | null {
+  return lastReplyModelIn(jsonl)?.id ?? null;
 }
 
 /**
