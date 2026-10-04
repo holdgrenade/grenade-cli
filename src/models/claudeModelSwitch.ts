@@ -2,9 +2,12 @@
  * Switches a Claude Code session to another model for that session only (PROTOCOL.md "Models"), by steering its
  * `/model` picker in the terminal: open it, move to the model's row, set the effort, press "s". The saved default in
  * Claude Code's settings is never touched: Enter, which saves it, is pressed only to open the picker.
+ * In a conversation that has messages Claude Code then asks "Switch model?" (the history is cached for the model it
+ * had): that question is the user's to answer, so the switch ends there, with the screen that asks (`asks`).
  * The screen logic is in `claudeModelPicker.ts`; this file only types and looks.
  */
 import type { KeyName } from "@grenade/protocol";
+import { claudeDialogIn } from "../prompts/claudeDialogs.js";
 import { modelPickerIn, promptText, rowsDownTo, selectedModel, switchedModelIn, type ModelPicker } from "./claudeModelPicker.js";
 
 /** The session's terminal, as much of it as a switch needs. */
@@ -18,6 +21,9 @@ export interface ModelTerminal {
 
 /** The agent did not switch. The message is for the person who asked. */
 export class ModelSwitchError extends Error {}
+
+/** What a `session.model` is answered with when Claude Code asks first: the question is a card in the session by then. */
+export const MODEL_ASKS = "Claude Code asks before it switches. Answer its question in the session.";
 
 export interface ModelSwitchTiming {
   wait(ms: number): Promise<void>;
@@ -37,13 +43,23 @@ const MOST_EFFORT_STEPS = 8;
 
 const DEFAULT_TIMING: ModelSwitchTiming = { wait: (ms) => new Promise((done) => setTimeout(done, ms)), patienceMs: 5000 };
 
-/** Switches to `model` (a row of the picker, "Opus 5.5") and returns the effort level the session then has. */
+export interface ModelSwitched {
+  /** The effort level the session has once it runs the model. */
+  effort: string | undefined;
+  /**
+   * Claude Code asks before it switches: the screen that shows its question. The model is chosen, not yet switched
+   * to; the answer to the question decides (PROTOCOL.md "Claude Code dialogs").
+   */
+  asks?: string[];
+}
+
+/** Switches to `model` (a row of the picker, "Opus 5.5"), as far as Claude Code lets it without asking the user. */
 export async function switchClaudeModel(
   term: ModelTerminal,
   model: string,
   effort: string | undefined,
   timing: ModelSwitchTiming = DEFAULT_TIMING,
-): Promise<{ effort: string | undefined }> {
+): Promise<ModelSwitched> {
   /** Looks until `read` finds something, or patience runs out. */
   const look = async <T>(read: (lines: string[]) => T | null | undefined, patienceMs = timing.patienceMs): Promise<T | null> => {
     for (let waited = 0; ; waited += LOOK_EVERY_MS) {
@@ -95,8 +111,8 @@ export async function switchClaudeModel(
   await term.type("s");
   const closed = await look((lines) => (modelPickerIn(lines) ? null : lines));
   if (!closed) await giveUp("Claude Code did not take the choice.");
-  // The line that confirms it comes a moment after the picker closes.
-  const switched = await look((lines) => (switchedModelIn(lines) === model ? true : null));
-  if (!switched) throw new ModelSwitchError("Claude Code asked something before switching. Answer it in the terminal.");
-  return { effort: chosenEffort };
+  // The line that confirms it comes a moment after the picker closes; so does the question, when Claude Code asks.
+  const after = await look((lines) => (claudeDialogIn(lines) ? { asks: lines } : switchedModelIn(lines) === model ? {} : null));
+  if (!after) throw new ModelSwitchError("Claude Code asked something before switching. Answer it in the terminal.");
+  return { effort: chosenEffort, ...after };
 }

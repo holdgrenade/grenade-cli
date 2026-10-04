@@ -35,6 +35,11 @@ export interface StatusState {
    * session stays `working` until that is over. Any other hook clears it.
    */
   background?: boolean | undefined;
+  /**
+   * What a hook-driven session was when a dialog on its screen made it wait (`asks`): no hook says such a dialog is
+   * over, so the session goes back to this once the screen no longer shows it (`asked`). Any hook forgets it.
+   */
+  beforeAsk?: { status: SessionStatus; since: number; waitingFor: WaitingFor | undefined; stoppedBecause: StoppedBecause | undefined } | undefined;
 }
 
 export type StatusEvent =
@@ -56,6 +61,8 @@ export type StatusEvent =
    * an answer, without making the session hook-driven, since its hooks may never run.
    */
   | { kind: "asks"; at: number }
+  /** That dialog is gone from the screen: a hook-driven session is what it was before it (PROTOCOL.md "Claude Code dialogs"). */
+  | { kind: "asked"; at: number }
   | { kind: "seen"; at: number }
   | { kind: "gone"; at: number };
 
@@ -69,6 +76,8 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
     case "gone":
       return set(s, "gone", e.at);
     case "hook": {
+      // A hook knows better than what the session was before a dialog.
+      if (s.beforeAsk) s = { ...s, beforeAsk: undefined };
       if (e.aside && e.status === "working") return aside(s.hookDriven ? s : { ...s, hookDriven: true }, e.at);
       const reason = e.waitingFor ?? "done";
       // A question asked while background tasks hold the session leaves the hold in place: answered, it is held again.
@@ -88,7 +97,17 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
     case "asks":
       // Seen already: the same dialog stays up, and the user knows.
       if (s.status === "idle" && s.waitingFor === "answer") return s;
-      return wait(s, "answer", e.at);
+      if (s.status === "waiting" && s.waitingFor === "answer") return s;
+      return wait(s.hookDriven ? { ...s, beforeAsk: { status: s.status, since: s.since, waitingFor: s.waitingFor, stoppedBecause: s.stoppedBecause } } : s, "answer", e.at);
+    case "asked": {
+      const was = s.beforeAsk;
+      if (!was) return s;
+      const rest = { ...s, beforeAsk: undefined };
+      if (s.waitingFor !== "answer" || (s.status !== "waiting" && s.status !== "idle")) return rest;
+      // Looked at while the dialog was up: a turn that had finished has been seen too.
+      if (s.status === "idle" && was.status === "waiting" && was.waitingFor !== "stopped") return { ...rest, waitingFor: was.waitingFor };
+      return { ...rest, status: was.status, since: was.since, waitingFor: was.waitingFor, stoppedBecause: was.stoppedBecause };
+    }
     case "seen":
       // A turn that stopped partway is not over because someone looked at it: it waits until the user goes on.
       return s.status === "waiting" && s.waitingFor !== "stopped" ? set(s, "idle", e.at) : s;

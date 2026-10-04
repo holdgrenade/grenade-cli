@@ -56,7 +56,7 @@ describe("codexDialogIn", () => {
 
 describe("ScreenPrompts", () => {
   const setup = () => {
-    const registry = Object.assign(new EventEmitter(), { asked: [] as string[], keys: [] as KeyName[], asks(id: string) { this.asked.push(id); }, async sendKey(_id: string, k: KeyName) { this.keys.push(k); } });
+    const registry = Object.assign(new EventEmitter(), { asking: [] as string[], keys: [] as KeyName[], asks(id: string) { this.asking.push(id); }, asked() {}, chooseModel() {}, async sendKey(_id: string, k: KeyName) { this.keys.push(k); } });
     const prompts = new PromptStore({ newId: (() => { let n = 0; return () => `p-${++n}`; })() });
     const events: string[] = [];
     prompts.on("opened", (f) => events.push(`opened ${f.promptId}`));
@@ -69,7 +69,7 @@ describe("ScreenPrompts", () => {
     show(hooksScreen);
     show(hooksScreen);
     expect(events).toEqual(["opened p-1"]);
-    expect(registry.asked).toEqual(["gr-c"]);
+    expect(registry.asking).toEqual(["gr-c"]);
     expect(prompts.answer("gr-c", "p-1", { allow: true, answers: [["Trust"]] })).toBe("answered");
     await new Promise((r) => setImmediate(r));
     expect(registry.keys).toEqual(["down", "enter"]);

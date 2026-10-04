@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KeyName } from "@grenade/protocol";
 import { ModelSwitchError, switchClaudeModel, type ModelTerminal } from "../src/models/claudeModelSwitch.js";
+import { switchScreen } from "./claudeDialogs.test.js";
 import { pickerScreen } from "./claudeModelPicker.test.js";
 
 const NAMES = ["Default (recommended)", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 4.5", "Sonnet 5", "Opus 5", "Fable 5", "Opus 4.8"];
@@ -9,15 +10,17 @@ const SHOWN: Record<string, string> = { low: "○ Low", medium: "◐ Medium", hi
 const timing = { wait: async () => {}, patienceMs: 600 };
 
 /** A terminal that behaves like Claude Code's prompt and picker. `draft` is text someone left in the prompt box. */
-function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boolean; asksFirst?: boolean } = {}) {
+function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boolean; asksFirst?: boolean; confirms?: boolean } = {}) {
   let typed = opts.draft ?? "";
   let open = false;
   let cursor = 3;
   let level = 2;
   let said: string | null = null;
+  let confirming = false;
   const pressed: string[] = [];
   const term: ModelTerminal = {
     async lines() {
+      if (confirming) return switchScreen(NAMES[cursor - 1]);
       if (!open) return [...(said ? ["❯ /model", `  ⎿  ${said}`] : []), "────", `❯ ${typed}`, "────"];
       const effort = NAMES[cursor - 1] === "Haiku 4.5" ? "  ○ Effort not supported for Haiku 4.5" : `  ${SHOWN[LEVELS[level]!]} effort ←/→ to adjust`;
       return pickerScreen(cursor, effort, opts.sessionOnly === false ? "  Enter to confirm · Esc to cancel" : undefined);
@@ -29,7 +32,8 @@ function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boole
       else if (text === "s") {
         open = false;
         typed = "";
-        said = opts.asksFirst ? null : `Set model to ${NAMES[cursor - 1]} for this session only`;
+        confirming = opts.confirms === true;
+        said = opts.asksFirst || confirming ? null : `Set model to ${NAMES[cursor - 1]} for this session only`;
       }
     },
     async key(key: KeyName) {
@@ -82,7 +86,12 @@ describe("switchClaudeModel", () => {
     await expect(switchClaudeModel(claude.term, "Haiku 4.5", "high", timing)).rejects.toThrow(/no high effort/);
     expect(claude.pressed).not.toContain("s");
   });
-  it("says so when the picker never opens, or Claude Code asks something first", async () => {
+  it("stops at Claude Code's \"Switch model?\" with the screen that asks, pressing nothing in it", async () => {
+    const claude = fakeClaude({ confirms: true });
+    await expect(switchClaudeModel(claude.term, "Opus 5.5", "max", timing)).resolves.toEqual({ effort: "max", asks: switchScreen("Opus 5.5") });
+    expect(claude.pressed).toEqual(["/model", "enter", "up", "right", "right", "s"]);
+  });
+  it("says so when the picker never opens, or Claude Code asks something else first", async () => {
     await expect(switchClaudeModel(fakeClaude({ opens: false }).term, "Opus 5.5", undefined, timing)).rejects.toThrow(/did not open/);
     await expect(switchClaudeModel(fakeClaude({ asksFirst: true }).term, "Opus 5.5", undefined, timing)).rejects.toThrow(/asked something/);
   });

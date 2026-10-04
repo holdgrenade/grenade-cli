@@ -97,3 +97,16 @@ export function switchedModelIn(lines: string[]): string | null {
   }
   return null;
 }
+
+/**
+ * The switch Claude Code last confirmed for this session only, with the effort level it names: "Set model to Opus 5.5
+ * for this session only with high effort" (no level for a model that takes none). Null when its newest word on the
+ * model is that it kept it, or when the screen says neither. A narrow terminal wraps the line, so the rows are read
+ * as one text.
+ */
+export function sessionModelIn(lines: string[]): { model: string; effort: string | undefined } | null {
+  const text = lines.map((l) => plain(l).trim()).join(" ").replace(/\s+/g, " ");
+  let newest: RegExpExecArray | null = null;
+  for (const said of text.matchAll(/Kept model as|Set model to (.+?) for this session only(?: with (\w+) effort)?/g)) newest = said;
+  return newest?.[1] ? { model: newest[1].trim(), effort: newest[2]?.toLowerCase() } : null;
+}

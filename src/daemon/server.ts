@@ -22,7 +22,7 @@ import { TerminalMirror, terminalFromEnv, type TerminalKind, type TerminalStatus
 import { readTerminalSetting } from "../terminal/terminalSetting.js";
 import { createTmux, type Tmux } from "../tmux/tmux.js";
 import { readTranscriptModel } from "../transcript/readModel.js";
-import { ModelSwitchError, switchClaudeModel, type ModelTerminal } from "../models/claudeModelSwitch.js";
+import { MODEL_ASKS, ModelSwitchError, switchClaudeModel, type ModelTerminal } from "../models/claudeModelSwitch.js";
 import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
@@ -276,6 +276,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           key: (key) => tmux.sendKey(session.id, key),
         };
         const switched = await switchClaudeModel(terminal, model, effort);
+        if (switched.asks) {
+          // Claude Code asks first ("Switch model?"): its card opens before the error that points at it, and the
+          // answer does the rest (`ScreenPrompts`).
+          screenPrompts.saw(session.id, session.agent, switched.asks);
+          throw new ModelSwitchError(MODEL_ASKS);
+        }
         return registry.chooseModel(session.id, model, switched.effort);
       } finally {
         switchingModel.delete(session.id);
@@ -432,8 +438,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   prompts.on("opened", (frame) => push.pusher.noteAsked(frame.sessionId, promptText(frame)));
   // An answer is not a new turn: a session that background tasks held before the question is held again.
   prompts.on("answered", (id) => registry.applyHook(id, "working", undefined, true));
-  // Codex's startup dialogs, read off the screen, are cards too (PROTOCOL.md "Codex dialogs").
-  new ScreenPrompts(registry, prompts, log);
+  // Dialogs read off the screen are cards too (PROTOCOL.md "Codex dialogs", "Claude Code dialogs").
+  const screenPrompts = new ScreenPrompts(registry, prompts, log);
   // What an agent left running when its turn ended holds the session working (PROTOCOL.md "Background tasks"):
   // Codex's is read off its screen, and Claude Code's own files say when a task ended without a hook.
   watchScreenBackground(registry);

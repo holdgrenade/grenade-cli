@@ -526,6 +526,12 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (r) this.setState(r, reduceStatus(r.state, { kind: "asks", at: this.now() }));
   }
 
+  /** That dialog is gone from the screen: a hook-driven session is what it was before it. */
+  asked(id: string): void {
+    const r = this.records.get(id);
+    if (r) this.setState(r, reduceStatus(r.state, { kind: "asked", at: this.now() }));
+  }
+
   /** A hook has spoken for this session: its status no longer comes from watching the screen. */
   hookDriven(id: string): boolean {
     return this.records.get(id)?.state.hookDriven ?? false;
