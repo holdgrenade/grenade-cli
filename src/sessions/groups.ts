@@ -2,7 +2,7 @@
  * Pure rules for session groups (see "Groups" in PROTOCOL.md). A group is an opaque id shared by
  * sessions that belong together; it only changes how sessions are shown, never how they run.
  */
-import type { Session } from "@grenade/protocol";
+import { GROUP_NAME_MAX, type Session } from "@grenade/protocol";
 
 const live = (s: Session): boolean => s.status !== "gone";
 
@@ -35,6 +35,23 @@ export function membersInOrder(group: string, sessions: readonly Session[]): Ses
 /** Live members of `group` other than `exceptId`, in group order. */
 export function otherMembers(group: string, sessions: readonly Session[], exceptId: string): Session[] {
   return membersInOrder(group, sessions).filter((s) => live(s) && s.id !== exceptId);
+}
+
+/** The name the user gave `group` (PROTOCOL.md "Group names"): what a member other than `exceptId` carries. */
+export function groupNameOf(group: string, sessions: readonly Session[], exceptId?: string): string | undefined {
+  return sessions.find((s) => s.group === group && s.id !== exceptId && s.groupName !== undefined)?.groupName;
+}
+
+/** `session` carrying `name` as its group's name, or none. */
+export function named(session: Session, name: string | undefined): Session {
+  const { groupName: _was, ...rest } = session;
+  return name === undefined ? rest : { ...rest, groupName: name };
+}
+
+/** A name as it was typed, ready to keep: trimmed, at most `GROUP_NAME_MAX` long. Undefined when nothing is left. */
+export function cleanGroupName(name: string | null): string | undefined {
+  const clean = (name ?? "").trim().slice(0, GROUP_NAME_MAX).trim();
+  return clean === "" ? undefined : clean;
 }
 
 /** The `order` for a session added last to `group`. */

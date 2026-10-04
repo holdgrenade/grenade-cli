@@ -6,6 +6,7 @@ import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { Connection, type ConversationsPort, type TermHandle, type TermOpen } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
+import { UnknownGroupError } from "../src/sessions/registry.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
 const fixture = (name: string) => readFileSync(join(fixtures, name), "utf8");
@@ -51,6 +52,18 @@ class FakeRegistry extends EventEmitter {
     this.sessions.set(id, s);
     if (s.group !== before.group) this.emit("updated", s);
     return s;
+  }
+  renameGroup(group: string, name: string | null) {
+    this.calls.push(`rename:${group}:${name}`);
+    // The one session here stands for every group but "g-nope".
+    const first = group === "g-nope" ? undefined : this.sessions.get(session.id);
+    if (!first) throw new UnknownGroupError(`no session in group ${group}`);
+    const { groupName: was, ...rest } = first;
+    const next = name?.trim() || undefined;
+    const renamed: Session = next === undefined ? rest : { ...rest, groupName: next };
+    this.sessions.set(renamed.id, renamed);
+    if (was !== next) this.emit("updated", renamed);
+    return { session: renamed, changed: was !== next };
   }
   async kill(id: string) { this.calls.push(`kill:${id}`); this.sessions.delete(id); }
 }
@@ -149,6 +162,21 @@ describe("Connection", () => {
     conn.handleClose();
     groups.move("g-0c2d4e", 0);
     expect(out).toHaveLength(3);
+  });
+
+  it("renames a group: every client hears it once, a rename that changes nothing still answers, an unknown group is a bad frame", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.group.rename.json"));
+    expect(registry.calls).toContain("rename:g-7f3a91:Launch week");
+    expect(out).toEqual([{ type: "session.updated", session: { ...session, groupName: "Launch week" } }]);
+    await conn.handleMessage(fixture("client.group.rename.json"));
+    expect(out).toHaveLength(2);
+    await conn.handleMessage(JSON.stringify({ type: "group.rename", group: "g-7f3a91", name: null }));
+    expect(out[2]).toEqual({ type: "session.updated", session });
+    await conn.handleMessage(JSON.stringify({ type: "group.rename", group: "g-nope", name: "x" }));
+    expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.rename" });
   });
 
   it("accepts every client fixture without a bad_frame", async () => {

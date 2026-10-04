@@ -15,7 +15,7 @@ import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
 import type { Tmux } from "../tmux/tmux.js";
 import { nextHistoryMark, type HistoryMark } from "./historyEpoch.js";
-import { defaultGroupFor, isJoinableGroup, membersInOrder, nextOrder, otherMembers, placeAt } from "./groups.js";
+import { cleanGroupName, defaultGroupFor, groupNameOf, isJoinableGroup, membersInOrder, named, nextOrder, otherMembers, placeAt } from "./groups.js";
 import { initialStatus, reduceStatus, shownStoppedBecause, shownWaitingFor, type StatusState } from "./status.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { WIDTH_FLOOR, onRelease, onSweep } from "./widthFloor.js";
@@ -71,6 +71,8 @@ interface PersistedSession {
   createdAt: string;
   group?: string | undefined;
   order?: number | undefined;
+  /** The name the user gave the session's group, the same on every member. */
+  groupName?: string | undefined;
   summary?: string | undefined;
   aiTitle?: string | undefined;
   guessedTitle?: string | undefined;
@@ -177,6 +179,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         createdAt: createdAt(id),
         group,
         order: meta?.order ?? nextOrder(group, this.list()),
+        groupName: meta?.groupName ?? groupNameOf(group, this.list()),
         summary: meta?.summary,
         aiTitle: meta?.aiTitle,
         guessedTitle: meta?.guessedTitle,
@@ -211,7 +214,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const order = nextOrder(group, others);
     const createdAt = new Date(this.now()).toISOString();
     const resumed = input.resume !== undefined ? { resumedFrom: input.resume, resumedAt: createdAt } : {};
-    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, ...resumed });
+    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: groupNameOf(group, others), ...resumed });
     this.log.info(`Started ${input.agent} session ${id}`, { cwd, group });
     this.emit("created", session);
     return session;
@@ -236,7 +239,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
    * Moves a live session into `group` (another live session's group), or out into a new group of
    * its own when `group` is null. `index` places it among the group's members (clamped; default
    * last); with its own group and an `index` this reorders the group. Returns the session; a move
-   * to where it already is changes nothing.
+   * to where it already is changes nothing. The group's name stays with the group: a session that
+   * joins carries it, one that moves out carries none.
    */
   setGroup(id: string, group: string | null, index?: number): Session {
     const r = this.require(id);
@@ -244,7 +248,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const from = r.session.group;
     if (group === null) {
       if (from !== undefined && otherMembers(from, this.list(), id).length === 0) return r.session;
-      r.session = { ...r.session, group: this.newGroupId(), order: 0 };
+      r.session = named({ ...r.session, group: this.newGroupId(), order: 0 }, undefined);
       this.persist();
       this.log.info(`Moved ${id} into a group of its own`);
       this.emit("updated", r.session);
@@ -255,11 +259,12 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (group !== from && !isJoinableGroup(group, this.list(), id)) throw new UnknownGroupError(`no live session in group ${group}`);
     const ids = membersInOrder(group, this.list()).map((s) => s.id);
     const placed = placeAt(ids, id, index ?? ids.length);
+    const name = groupNameOf(group, this.list(), id);
     const changed: Record_[] = [];
     placed.forEach((memberId, order) => {
       const m = this.records.get(memberId);
       if (!m || (m.session.group === group && m.session.order === order)) return;
-      m.session = { ...m.session, group, order };
+      m.session = memberId === id && group !== from ? named({ ...m.session, group, order }, name) : { ...m.session, group, order };
       changed.push(m);
     });
     if (changed.length === 0) return r.session;
@@ -268,6 +273,28 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     for (const m of changed) this.emit("updated", m.session);
     this.emit("regrouped", r.session, from);
     return r.session;
+  }
+
+  /**
+   * Names `group` (PROTOCOL.md "Group names"); null or an empty name gives it back its folder's
+   * name. Emits `updated` for every member whose name changed. Returns the group's first member and
+   * whether anything changed.
+   */
+  renameGroup(group: string, name: string | null): { session: Session; changed: boolean } {
+    const first = membersInOrder(group, this.list())[0];
+    if (!first) throw new UnknownGroupError(`no session in group ${group}`);
+    const next = cleanGroupName(name);
+    const changed: Record_[] = [];
+    for (const m of this.records.values()) {
+      if (m.session.group !== group || m.session.groupName === next) continue;
+      m.session = named(m.session, next);
+      changed.push(m);
+    }
+    if (changed.length === 0) return { session: first, changed: false };
+    this.persist();
+    this.log.info(next === undefined ? `Group ${group} is named after its folder again` : `Renamed group ${group}`);
+    for (const m of changed) this.emit("updated", m.session);
+    return { session: this.get(first.id) ?? first, changed: true };
   }
 
   markGone(id: string): void {
@@ -552,6 +579,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       createdAt: meta.createdAt,
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
+      ...(meta.groupName !== undefined ? { groupName: meta.groupName } : {}),
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
@@ -617,7 +645,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle, held }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle, held }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

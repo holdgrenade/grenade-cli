@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session } from "@grenade/protocol";
-import { byGroupOrder, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
+import { byGroupOrder, cleanGroupName, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
 import { BadCwdError, SessionRegistry, UnknownGroupError } from "../src/sessions/registry.js";
 import type { Tmux } from "../src/tmux/tmux.js";
 import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
@@ -232,6 +232,42 @@ describe("session groups", () => {
     expect(r.list().sort(byGroupOrder).map((s) => `${s.id}:${s.order}`)).toEqual(["gr-b:0", "gr-a:1", "gr-c:2"]);
     const saved = JSON.parse(readFileSync(persistPath, "utf8")) as { id: string; order: number }[];
     expect(Object.fromEntries(saved.map((s) => [s.id, s.order]))).toEqual({ "gr-a": 1, "gr-b": 0, "gr-c": 2 });
+  });
+
+  it("names a group: every member carries the name, it follows the group, and it survives a restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-group-name-"));
+    const persistPath = join(dir, "sessions.json");
+    const r = make({ persistPath });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    await r.create({ name: "zsh", cwd: "~/app", agent: "shell" });
+    await r.create({ name: "web", cwd: "~/web", agent: "shell" });
+    const updated: string[] = [];
+    r.on("updated", (s) => updated.push(`${s.id}:${s.groupName ?? "-"}`));
+    expect(r.renameGroup("g-1", "  Launch week ")).toMatchObject({ changed: true, session: { id: "gr-app", groupName: "Launch week" } });
+    expect(updated).toEqual(["gr-app:Launch week", "gr-zsh:Launch week"]);
+    expect(r.renameGroup("g-1", "Launch week").changed).toBe(false);
+    expect(updated).toHaveLength(2);
+    expect(() => r.renameGroup("g-nope", "x")).toThrow(UnknownGroupError);
+    // A new session in the group and one moved in carry the name; one moved out carries none.
+    expect((await r.create({ name: "more", cwd: "~/app", agent: "shell" })).groupName).toBe("Launch week");
+    expect(r.setGroup("gr-web", "g-1").groupName).toBe("Launch week");
+    expect(r.setGroup("gr-zsh", null).groupName).toBeUndefined();
+    expect(r.get("gr-app")?.groupName).toBe("Launch week");
+    // A reorder keeps it.
+    expect(r.setGroup("gr-web", "g-1", 0).groupName).toBe("Launch week");
+    const again = make({ live: ["gr-app", "gr-zsh", "gr-web", "gr-more"], persistPath });
+    await again.adopt();
+    expect(again.list().map((s) => `${s.id}:${s.groupName ?? "-"}`).sort()).toEqual(["gr-app:Launch week", "gr-more:Launch week", "gr-web:Launch week", "gr-zsh:-"]);
+    // An empty name gives the group back its folder's name.
+    expect(again.renameGroup("g-1", " ")).toMatchObject({ changed: true });
+    expect(again.list().every((s) => s.groupName === undefined)).toBe(true);
+  });
+
+  it("cleans a typed group name", () => {
+    expect(cleanGroupName("  Launch week  ")).toBe("Launch week");
+    expect(cleanGroupName("   ")).toBeUndefined();
+    expect(cleanGroupName(null)).toBeUndefined();
+    expect(cleanGroupName("x".repeat(80))).toHaveLength(60);
   });
 
   it("a gone session's group cannot be joined and it cannot move", async () => {
