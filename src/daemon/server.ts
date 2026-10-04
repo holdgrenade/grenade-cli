@@ -69,6 +69,7 @@ import { installedVersion, resolveProgram } from "../update/installedVersion.js"
 import { UpdateChecker } from "../update/updateChecker.js";
 import { installerFor, isBusy } from "../update/versions.js";
 import { startPush } from "../push/startPush.js";
+import { VoiceService } from "../voice/voiceService.js";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
@@ -110,6 +111,10 @@ export interface DaemonOptions {
   pushDevicesPath?: string;
   /** Where the phones' Mac boards are kept. Defaults to ~/.grenade/push-boards.json; in memory when tokens are. */
   pushBoardsPath?: string;
+  /** Where the owner's voice provider keys are kept (PROTOCOL.md "Voice providers"). Defaults to ~/.grenade/voice-keys.json; in memory when tokens are. */
+  voiceKeysPath?: string;
+  /** How the daemon reaches a voice provider. Tests pass a fake. */
+  voiceFetch?: typeof fetch;
   /**
    * Updates (src/update/): ask the tap for the latest release (default on unless GRENADE_UPDATE_CHECK=off), watch the
    * version on disk behind `program` (the `grenade` command; none: nothing to watch), and call `restart` once a newer
@@ -133,7 +138,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, codexActivity: 1, agents: [...AGENTS] };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) }, serverScope: underSystemd() });
@@ -252,6 +257,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   ]);
   // Switching a session's model (PROTOCOL.md "Models"). How it is done is the agent's own: Claude Code's picker.
   const switchingModel = new Set<string>();
+  // The owner's keys for Talk and dictation, and the short-lived tokens clients get in their place.
+  const voice = new VoiceService({
+    path: opts.voiceKeysPath ?? (opts.tokensPath === null ? undefined : paths.voiceKeys),
+    daemonId: info.id,
+    log,
+    ...(opts.voiceFetch ? { fetch: opts.voiceFetch } : {}),
+  });
   const models: ModelsPort = {
     async switch(session, model, effort) {
       if (switchingModel.has(session.id)) throw new ModelSwitchError("A model switch is already under way in this session.");
@@ -495,6 +507,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       prompts,
       groups: groupOrder,
       models,
+      voice,
       conversations,
       openTerm(open) {
         const stream = new TermStream({
@@ -612,6 +625,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
     },
     push,
+    voice,
     terminal: {
       status: terminalStatus,
       reload() {

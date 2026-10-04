@@ -171,6 +171,15 @@ src/push/boardPolicy.ts    pure: a session's board key (boardKey), and when a Ma
 src/push/boardPusher.ts    BoardPusher: listens to the registry, builds each registered phone's board, pushes `kind: "board"` updates and the end; `register`/`unregister` for a Connection
 src/push/boardDevices.ts   BoardDevices: push-boards.json (0600), one Mac board per paired phone, keyed by device id, with the board last sent; prune
 src/cli/pushCommand.ts     `grenade push on | off | status | test`; statusLines and testLine are pure
+src/voice/voiceService.ts  VoiceService: the daemon's side of PROTOCOL.md "Voice providers": `list`/`frame`, `setKey` (checked with the provider first), `token`, `reload`; emits `changed`
+src/voice/voiceProvider.ts what a provider is to the daemon (`VoiceProvider`: id, name, uses, `tokenRequest`, `readToken`), `TokenAsk`, `MintedToken`, `VoiceError`; pure `refusalWords`
+src/voice/openai.ts        pure: OpenAI for Talk, a Realtime client secret. `gemini.ts`: Google for Talk, an ephemeral Live API token. `wisprFlow.ts`: Wispr Flow for dictation, a client access token
+src/voice/voiceCatalog.ts  `VOICE_PROVIDERS`, every provider in the order clients list them; `voiceProvider(id)`
+src/voice/mintToken.ts     `mintToken`: one HTTPS POST to the provider with the key, 10 s; the provider's words on a refusal, with the key taken out
+src/voice/voiceKey.ts      pure: `cleanVoiceKey` (what was pasted), `maskVoiceKey` ("sk-…a1b2"), `withoutKey`
+src/voice/voiceKeyStore.ts voice-keys.json (0600): the key per provider id; load/save
+src/cli/voiceCommand.ts    `grenade voice | voice key <provider> | voice forget <provider>`: checks and writes voice-keys.json itself, then POST /voice/reload; `statusLines` is pure
+src/cli/readSecret.ts      `readSecret`: a key typed without being shown, or the first line of piped stdin
 src/cli/updateCommand.ts   `grenade update` (`--check`, `--now`, `--auto on|off`): installs with the installer of this copy, then restarts the agent
 src/update/tarballInstall.ts pure: a copy unpacked from the release's tarball (`<data home>/grenade/package`, what the website's `install.sh` lays down on Linux): `tarballRoot`, and the shell script that brings it up to date (formula → download → sha256 → unpack → swap)
 src/update/versions.ts     pure: compare versions, the latest from the tap's formula or npm's answer, `installerFor` (absolute brew/npm paths from the command's real path, or the tarball's root), `installerName`, `InstallState`, notice and status lines
@@ -372,6 +381,16 @@ Read PROTOCOL.md "Mac board" first. A phone's Live Activity shows every session 
 - Failures: 410 forgets the board; `retry` (502/503/no answer) gets one more try after the min interval; anything else is a failure and the board waits for the next change. A board that failed is not counted as sent, so its question still alerts next time.
 - With push off (`gateway()` null) nothing is sent and `board.state` says `delivery: "off"`.
 
+## Voice providers (`src/voice/`)
+
+Read PROTOCOL.md "Voice providers" first. The owner's API keys for Talk (speech to speech) and dictation (speech to text) live on this computer, in `voice-keys.json`, and on no phone. A client asks for a short-lived token (`voice.token`) each time it opens a connection to the provider; the audio never passes through the daemon.
+
+- **A provider is one file and one line.** `VoiceProvider` says its `id`, `name`, `uses` (`talk`, `dictation`) and two pure functions: `tokenRequest(key, ask)` (the POST that makes a token) and `readToken(body, ask)` (the token, when it stops opening connections, and whether it opens one connection only). To add one (another speech-to-text service, say), write its file beside `wisprFlow.ts`, add it to `VOICE_PROVIDERS`, and add its row to PROTOCOL.md's table. No frame, no schema and nothing in `Connection` changes; the apps need their own code to speak with it. A provider with two uses lists both and tells them apart by `ask.use`.
+- **Checking a key is making a token.** `VoiceService.setKey` and `grenade voice key` both call `mintToken` with the provider's first use and no model, and keep the key only when a token came back. It bills nothing. There is no second "is this key good" call to keep in step.
+- **What each token is.** OpenAI: a client secret, 60 s to open its one connection; one made for a `model` opens that model only, one made for none opens any (tried against the API, 2026-10-04). Gemini: `uses: 1`, 60 s to start the session, 30 minutes to speak in it (Talk opens a new session every 8). Wispr Flow: 15 minutes, any number of sockets, `client_id` this daemon's id. **Gemini's and Wispr Flow's are written from their docs and have not been tried against the API** (no key at hand): if one fails, look at `tokenRequest`'s body and `readToken`'s field first.
+- **Who is told.** A connection that sent `voice` once gets the `voice` frame on every `changed` (`Connection.watchesVoice`). `voice.key` always answers its sender, once. `grenade voice` writes the file itself and posts `/voice/reload`, so it works with the daemon stopped, and the key never travels over the control API.
+- **Never logged, never sent back.** No frame and no control route carries a key, only `maskVoiceKey`'s form. `mintToken` never passes on a failed request's own error text (it can name headers) and takes the key out of a provider's words. `test/voice.test.ts` checks the log, `test/daemon.test.ts` that neither a key nor a token is readable on the socket.
+
 ## Network changes
 
 The Mac may hop Wi‑Fi while the daemon runs. On macOS the service is registered with `dns-sd -R`, so mDNSResponder owns the SRV/A records and answers with the current address (and the current `<host>.local` name, which macOS renumbers per network: `-3`, `-4`…). The JS `bonjour-service` fallback snapshots interfaces at publish time and keeps advertising a dead address after a change; it is only used off-macOS. The phone matches the daemon by the `id` TXT key, never by name or address, and re-resolves while it is disconnected.
@@ -424,8 +443,9 @@ Two steps for a user: install (`brew install holdgrenade/tap/grenade`) and `gren
 - A token never crosses a network in the clear: `hello` and `pair` are only accepted on a sealed connection (unless `--allow-plain-lan`). Never log a token, a pairing code or a pairing secret; log the device `id`.
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
 - A device token, a board's push token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
-- Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `claudeModelPicker.ts`, `modelChoice.ts`, `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
-- Files in `GRENADE_HOME` are the only things written to disk (`relay.json` and `e2e-key` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` (on Linux `~/.config/systemd/user/grenade.service`) on `service install`. On Linux a deleted conversation moves into `~/.local/share/Trash`.
+- A voice provider's API key and the tokens made with it never reach a log line, a frame (a key goes out masked only) or the control API. A key leaves this computer in one place, `mintToken`, to its own provider over HTTPS.
+- Pure modules (`pushPolicy.ts`, `boardPolicy.ts`, `pushContent.ts`, `pushSeal.ts`, `status.ts`, `parse.ts`, `installHooks.ts`, `modelLabel.ts`, `claudeModelPicker.ts`, `modelChoice.ts`, `voiceKey.ts`, the provider files (`openai.ts`, `gemini.ts`, `wisprFlow.ts`), `summaryPrompt.ts`, `summaryTiming.ts`, `PairingCodes`, `e2e.ts`, `access.ts`, `localIps.ts`) take no I/O and no clock; inject `now`.
+- Files in `GRENADE_HOME` are the only things written to disk (`relay.json`, `e2e-key` and `voice-keys.json` with mode 0600, uploads under `attachments/`), plus `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that is set) on `install-hooks` (and a refresh of Grenade's own entries in `setup`), which merge and never clobber, `~/.codex/hooks.json` when CLI 1.0.23's entries are taken out, and `~/Library/LaunchAgents/com.adamchew.grenade.daemon.plist` (on Linux `~/.config/systemd/user/grenade.service`) on `service install`. On Linux a deleted conversation moves into `~/.local/share/Trash`.
 
 ## Adding a frame
 

@@ -15,6 +15,8 @@ import { isInterrupt } from "../tmux/termPaint.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
+import type { VoiceFrame } from "@grenade/protocol";
+import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -113,6 +115,17 @@ export interface ModelsPort {
   switch(session: Session, model: string, effort: string | undefined): Promise<Session>;
 }
 
+/** The owner's voice provider keys and the tokens made with them (PROTOCOL.md "Voice providers"); `VoiceService` in the daemon. */
+export interface VoicePort {
+  frame(): VoiceFrame;
+  /** Resolves with whether anything changed; rejects with `VoiceError`. */
+  setKey(provider: string, key: string | null): Promise<boolean>;
+  /** Rejects with `VoiceError`. */
+  token(provider: string, use: string, model: string | undefined): Promise<MintedToken>;
+  on(event: "changed", cb: (f: VoiceFrame) => void): unknown;
+  off(event: "changed", cb: (f: VoiceFrame) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -155,6 +168,8 @@ export interface ConnectionDeps {
   groups?: GroupsPort;
   /** Switches a session's model. Absent means this daemon switches none and answers `session.model` with `bad_frame`. */
   models?: ModelsPort;
+  /** Voice providers' keys and tokens. Absent means this daemon keeps none (no `voice: 1`) and answers their frames with `bad_frame`. */
+  voice?: VoicePort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -192,6 +207,9 @@ export class Connection {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
   };
   private readonly onGroups = (f: GroupsFrame) => this.send(f);
+  /** This client asked for `voice` once, so it hears of every change (PROTOCOL.md "Voice providers"). */
+  private watchesVoice = false;
+  private readonly onVoice = (f: VoiceFrame) => this.send(f);
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   private readonly onActivity = (f: ActivityFrame) => {
     if (!this.subscriptions.has(f.sessionId)) return;
@@ -270,6 +288,7 @@ export class Connection {
       this.d.prompts?.off("closed", this.onPrompt);
       this.d.activity?.off("activity", this.onActivity);
       this.d.groups?.off("changed", this.onGroups);
+      this.d.voice?.off("changed", this.onVoice);
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -418,6 +437,33 @@ export class Connection {
         return this.send({ type: "conversations", conversations: await this.d.conversations.list(this.anyAgentConversations) });
       case "folders":
         return this.send(await listFolders(frame.path));
+      case "voice":
+        if (!this.d.voice) return this.fail("bad_frame", "this daemon keeps no voice keys", frame.type);
+        if (!this.watchesVoice) this.d.voice.on("changed", this.onVoice);
+        this.watchesVoice = true;
+        return this.send(this.d.voice.frame());
+      case "voice.key": {
+        if (!this.d.voice) return this.fail("bad_frame", "this daemon keeps no voice keys", frame.type);
+        try {
+          const changed = await this.d.voice.setKey(frame.provider, frame.key);
+          // A change reaches a client that watches through `changed`; the sender gets its answer either way.
+          if (!changed || !this.watchesVoice) this.send(this.d.voice.frame());
+        } catch (e) {
+          if (e instanceof VoiceError) return this.fail(e.code, e.message, frame.type);
+          throw e;
+        }
+        return;
+      }
+      case "voice.token": {
+        if (!this.d.voice) return this.fail("bad_frame", "this daemon keeps no voice keys", frame.type, false, frame.id);
+        try {
+          const minted = await this.d.voice.token(frame.provider, frame.use, frame.model);
+          return this.send({ type: "voice.token", id: frame.id, provider: frame.provider, use: frame.use, token: minted.token, expiresAt: minted.expiresAt.toISOString(), ...(minted.once ? { once: true as const } : {}) });
+        } catch (e) {
+          if (e instanceof VoiceError) return this.fail(e.code, e.message, frame.type, false, frame.id);
+          throw e;
+        }
+      }
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);

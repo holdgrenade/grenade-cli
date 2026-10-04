@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type ConversationsPort, type ModelsPort, type TermHandle, type TermOpen } from "../src/daemon/wsHandler.js";
+import { Connection, type ConversationsPort, type ModelsPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
+import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
 import { UnknownGroupError } from "../src/sessions/registry.js";
@@ -74,6 +75,30 @@ class FakeActivity extends EventEmitter {
   entriesOf(id: string) { return this.entries.get(id) ?? []; }
 }
 
+/** A daemon's voice keys: OpenAI takes any key but "bad", and a token is the key's first letters with a count. */
+class FakeVoice extends EventEmitter {
+  keys = new Map<string, string>();
+  minted = 0;
+  frame() {
+    const provider = (id: string, name: string, use: string) => ({ id, name, uses: [use], ...(this.keys.has(id) ? { key: "sk-…ABCD" } : {}) });
+    return { type: "voice" as const, providers: [provider("openai", "OpenAI", "talk"), provider("wispr-flow", "Wispr Flow", "dictation")] };
+  }
+  async setKey(provider: string, key: string | null) {
+    if (provider !== "openai" && provider !== "wispr-flow") throw new VoiceError("bad_frame", `no voice provider "${provider}"`);
+    if (key === "bad") throw new VoiceError("provider_failed", "Incorrect API key provided.");
+    if ((this.keys.get(provider) ?? null) === key) return false;
+    if (key === null) this.keys.delete(provider);
+    else this.keys.set(provider, key);
+    this.emit("changed", this.frame());
+    return true;
+  }
+  async token(provider: string, _use: string, _model: string | undefined) {
+    if (!this.keys.has(provider)) throw new VoiceError("bad_frame", "No OpenAI API key is kept on this Mac.");
+    this.minted += 1;
+    return { token: `ek_${this.minted}`, expiresAt: new Date("2026-10-04T12:01:00.000Z"), once: provider === "openai" };
+  }
+}
+
 class FakeGroups extends EventEmitter {
   order = ["g-7f3a91", "g-0c2d4e"];
   frame() { return { type: "groups" as const, order: [...this.order] }; }
@@ -87,7 +112,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -111,6 +136,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.acceptsPlain ? { acceptsPlain: opts.acceptsPlain } : {}),
     ...(opts.conversations ? { conversations: opts.conversations } : {}),
     ...(opts.models ? { models: opts.models } : {}),
+    ...(opts.voice ? { voice: opts.voice } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
@@ -244,9 +270,11 @@ describe("Connection", () => {
       async resume({ name }) { return { ...session, id: `gr-${name}`, name }; },
     };
     const term = { input() {}, resize() {}, close() {} };
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, openTerm: () => term });
+    const voice = new FakeVoice();
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
-    const first = ["client.hello.json", "client.term.open.json"];
+    // `voice.key` before `voice.token`: a token needs a key.
+    const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
     const last = ["client.term.close.json", "client.unpair.json"];
     const names = readdirSync(fixtures).filter((n) => n.startsWith("client.") && !first.includes(n) && !last.includes(n));
     for (const name of [...first, ...names, ...last]) {
@@ -255,6 +283,66 @@ describe("Connection", () => {
       const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
       expect(errors, name).toEqual([]);
     }
+  });
+
+  it("keeps a voice key and tells every client that asked; a refused key and a missing one are errors of their own", async () => {
+    const voice = new FakeVoice();
+    const { conn, out } = connect({ voice });
+    const other = connect({ voice });
+    await conn.handleMessage(fixture("client.hello.json"));
+    await other.conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    other.out.length = 0;
+    // A client that never asked for `voice` still gets its answer, once; the other hears nothing.
+    await conn.handleMessage(fixture("client.voice.key.json"));
+    expect(out).toEqual([voice.frame()]);
+    expect(out[0]).toMatchObject({ providers: [{ id: "openai", key: "sk-…ABCD" }, { id: "wispr-flow" }] });
+    expect(other.out).toEqual([]);
+    // Once it asked, a change by anyone reaches it, and its own change is not sent twice.
+    await other.conn.handleMessage(fixture("client.voice.json"));
+    await other.conn.handleMessage(fixture("client.voice.json"));
+    expect(other.out).toHaveLength(2);
+    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "openai", key: null }));
+    expect(other.out).toHaveLength(3);
+    await other.conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "wispr-flow", key: "fl-1" }));
+    expect(other.out).toHaveLength(4);
+    // Forgetting a key that is not kept changes nothing and still answers.
+    await other.conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "openai", key: null }));
+    expect(other.out).toHaveLength(5);
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "openai", key: "bad" }));
+    expect(out).toEqual([{ type: "error", code: "provider_failed", message: "Incorrect API key provided.", ref: "voice.key" }]);
+    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "nobody", key: "k" }));
+    expect(out[1]).toMatchObject({ type: "error", code: "bad_frame", ref: "voice.key" });
+    // After close it hears no more.
+    other.conn.handleClose();
+    await conn.handleMessage(fixture("client.voice.key.json"));
+    expect(other.out).toHaveLength(5);
+  });
+
+  it("answers voice.token with a token under the request's id, or an error under it", async () => {
+    const voice = new FakeVoice();
+    const { conn, out } = connect({ voice });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.voice.token.json"));
+    expect(out).toEqual([{ type: "error", code: "bad_frame", message: "No OpenAI API key is kept on this Mac.", ref: "voice.token", id: "v_1" }]);
+    await conn.handleMessage(fixture("client.voice.key.json"));
+    await conn.handleMessage(fixture("client.voice.token.json"));
+    expect(out[2]).toEqual({ type: "voice.token", id: "v_1", provider: "openai", use: "talk", token: "ek_1", expiresAt: "2026-10-04T12:01:00.000Z", once: true });
+    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "wispr-flow", key: "fl-1" }));
+    await conn.handleMessage(JSON.stringify({ type: "voice.token", id: "v_2", provider: "wispr-flow", use: "dictation" }));
+    // A token that can be used again says nothing of `once`.
+    expect(out[4]).toEqual({ type: "voice.token", id: "v_2", provider: "wispr-flow", use: "dictation", token: "ek_2", expiresAt: "2026-10-04T12:01:00.000Z" });
+  });
+
+  it("a daemon with no voice keys answers their frames with a bad frame", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.voice.json"));
+    await conn.handleMessage(fixture("client.voice.token.json"));
+    expect(out).toMatchObject([{ type: "error", code: "bad_frame", ref: "voice" }, { type: "error", code: "bad_frame", ref: "voice.token", id: "v_1" }]);
   });
 
   it("dispatches input, key, seen, resize and subscribe to the registry", async () => {

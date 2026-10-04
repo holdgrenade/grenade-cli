@@ -12,6 +12,7 @@ import { ago, matchDevice, type Device } from "./daemon/devices.js";
 import { showPairing } from "./cli/pairCommand.js";
 import { registerPromptCommand } from "./cli/promptCommand.js";
 import { registerPushCommand } from "./cli/pushCommand.js";
+import { registerVoiceCommand } from "./cli/voiceCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
 import { registerUpdateCommand } from "./cli/updateCommand.js";
@@ -90,6 +91,7 @@ program
 registerServiceCommand(program, { control, controlPort });
 registerSetupCommand(program, { control, controlPort });
 registerPushCommand(program, { control });
+registerVoiceCommand(program, { control });
 registerPromptCommand(program, { control });
 registerUpdateCommand(program, { control });
 registerTerminalCommand(program, { control });

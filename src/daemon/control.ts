@@ -21,12 +21,13 @@
  *   GET  /push              → PushStatus   (on or off, the relay pushes go through, the phones that registered)
  *   POST /push/reload       → PushStatus   (re-reads push.json)
  *   POST /push/test         → TestPushResult[]   (a test notification to every registered phone)
+ *   POST /voice/reload      → VoiceProviderInfo[]   (re-reads voice-keys.json and tells the clients; a key is never in it, only masked)
  *   POST /prompts/test      { kind, session?, wait? } → { promptId, sessionId, sessionName, kind, phones }
  *                             (puts a test card on a session, PROTOCOL.md "Prompts"; `wait` is in seconds)
  *   GET  /prompts/test/:id  → PromptTestResult   (answers when the phone has, or the wait ran out)
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { PromptKind, SessionCreateFrame, SessionGroupFrame, type DaemonInfo, type PromptFrame } from "@grenade/protocol";
+import { PromptKind, SessionCreateFrame, SessionGroupFrame, type DaemonInfo, type PromptFrame, type VoiceProviderInfo } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import type { SessionRegistry } from "../sessions/registry.js";
 import type { RelayStatus } from "../relay/relayLink.js";
@@ -58,6 +59,8 @@ export interface ControlDeps {
   relay: { status(): RelayStatus; reload(): RelayStatus };
   push: { status(): PushStatus; reload(): PushStatus; test(): Promise<TestPushResult[]> };
   terminal: { status(): TerminalStatus; reload(): TerminalStatus };
+  /** Voice providers' keys (PROTOCOL.md "Voice providers"). Absent in tests that have none. */
+  voice?: { reload(): VoiceProviderInfo[] };
   updates: {
     current(): UpdateStatus;
     checkTap(): Promise<UpdateStatus>;
@@ -107,6 +110,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "GET" && url.pathname === "/push") return sendJson(res, 200, d.push.status());
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
+  if (method === "POST" && url.pathname === "/voice/reload") return sendJson(res, 200, d.voice?.reload() ?? []);
   if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   if (method === "POST" && url.pathname === "/activity/test") return injectActivityTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);

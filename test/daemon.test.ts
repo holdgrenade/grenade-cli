@@ -60,7 +60,7 @@ afterEach(async () => {
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 let run = 0;
-async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?: Tmux; sessionsPath?: string } = {}) {
+async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?: Tmux; sessionsPath?: string; voiceFetch?: typeof fetch } = {}) {
   const dir = join(home, `run-${++run}`);
   const relayPath = join(dir, "relay.json");
   const tokensPath = join(dir, "tokens.json");
@@ -77,6 +77,8 @@ async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?:
     relayPath,
     e2eKeyPath: join(dir, "e2e-key"),
     attachmentsDir: join(dir, "attachments"),
+    voiceKeysPath: join(dir, "voice-keys.json"),
+    ...(opts.voiceFetch ? { voiceFetch: opts.voiceFetch } : {}),
     ...(opts.allowPlainLan ? { allowPlainLan: true } : {}),
   });
   stops.push(() => d.stop());
@@ -421,5 +423,46 @@ describe("group order", () => {
     await until(() => orders(b).at(-1)?.[0] === below);
     expect(orders(b).at(-1)).toEqual([below, top]);
     expect(orders(a).at(-1)).toEqual([below, top]);
+  });
+});
+
+describe("voice providers", () => {
+  it("keep the owner's key on the Mac: a phone hands it over sealed, gets tokens back, and every phone hears of a change", async () => {
+    const key = "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzABCD";
+    let minted = 0;
+    const voiceFetch = (async () => new Response(JSON.stringify({ value: `ek_secret_${++minted}`, expires_at: 1791115260 }), { status: 200 })) as unknown as typeof fetch;
+    const { d, dir, control, pairPlain, key: daemonKey } = await daemon({ allowPlainLan: true, voiceFetch });
+    expect(d.info.voice).toBe(1);
+    const a = await phone(d.port, daemonKey, true);
+    a.hello((await pairPlain()).body.token ?? "");
+    const b = await phone(d.port, daemonKey, true);
+    b.hello((await pairPlain()).body.token ?? "");
+    await until(() => a.frames.length >= 3 && b.frames.length >= 3);
+    const voices = (p: typeof a) => p.frames.flatMap((f) => (f.type === "voice" ? [f.providers] : []));
+    b.send({ type: "voice" });
+    await until(() => voices(b).length === 1);
+    expect(voices(b)[0]!.map((p) => [p.id, p.key])).toEqual([["openai", undefined], ["gemini", undefined], ["wispr-flow", undefined]]);
+
+    a.send({ type: "voice.key", provider: "openai", key });
+    await until(() => voices(a).length === 1 && voices(b).length === 2);
+    expect(voices(b)[1]![0]).toEqual({ id: "openai", name: "OpenAI", uses: ["talk"], key: "sk-…ABCD" });
+    expect(JSON.parse(readFileSync(join(dir, "voice-keys.json"), "utf8"))).toEqual({ openai: key });
+
+    a.send({ type: "voice.token", id: "v_1", provider: "openai", use: "talk", model: "gpt-realtime-2.1-mini" });
+    a.send({ type: "voice.token", id: "v_2", provider: "gemini", use: "talk" });
+    await until(() => a.frames.some((f) => f.type === "error" && f.id === "v_2") && a.frames.some((f) => f.type === "voice.token"));
+    expect(a.frames.find((f) => f.type === "voice.token")).toEqual({ type: "voice.token", id: "v_1", provider: "openai", use: "talk", token: "ek_secret_2", expiresAt: "2026-10-04T12:01:00.000Z", once: true });
+    expect(a.frames.find((f) => f.type === "error")).toMatchObject({ code: "bad_frame", ref: "voice.token", id: "v_2" });
+    // Neither the key nor a token was readable on the socket, in either direction's frames as the daemon sent them.
+    expect(a.raw.join("\n")).not.toContain("ek_secret");
+    expect(a.raw.join("\n")).not.toContain(key);
+    // No frame ever carries the key back.
+    expect(JSON.stringify([...a.frames, ...b.frames])).not.toContain(key);
+
+    // `grenade voice forget` writes the file and asks the daemon to read it again: both phones hear.
+    writeFileSync(join(dir, "voice-keys.json"), "{}");
+    expect((await control("POST", "/voice/reload")).body.map((p) => (p as { key?: string }).key)).toEqual([undefined, undefined, undefined]);
+    await until(() => voices(b).length === 3);
+    expect(voices(b)[2]![0]).toEqual({ id: "openai", name: "OpenAI", uses: ["talk"] });
   });
 });
