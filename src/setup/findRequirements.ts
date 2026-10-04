@@ -19,7 +19,8 @@ export function findRequirements(): Found {
   };
 }
 
-function packageTool(platform: string): PackageTool | null {
+/** The package tool on PATH that installs what is missing. */
+export function packageTool(platform: string): PackageTool | null {
   const candidates: readonly PackageTool[] = platform === "darwin" ? ["brew"] : LINUX_TOOLS;
   return candidates.find(onPath) ?? null;
 }

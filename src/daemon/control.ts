@@ -22,6 +22,8 @@
  *   POST /push/reload       → PushStatus   (re-reads push.json)
  *   POST /push/test         → TestPushResult[]   (a test notification to every registered phone)
  *   POST /voice/reload      → VoiceProviderInfo[]   (re-reads voice-keys.json and tells the clients; a key is never in it, only masked)
+ *   GET  /agents            → { agents: AgentSetup[] }   (each agent this daemon can start from its PATH, signed in or not, and the
+ *                             commands that install it and sign it in: the Mac app's first run)
  *   POST /prompts/test      { kind, session?, wait? } → { promptId, sessionId, sessionName, kind, phones }
  *                             (puts a test card on a session, PROTOCOL.md "Prompts"; `wait` is in seconds)
  *   GET  /prompts/test/:id  → PromptTestResult   (answers when the phone has, or the wait ran out)
@@ -37,6 +39,7 @@ import type { PairingState } from "../pairing/pairingWatch.js";
 import type { PushStatus, TestPushResult } from "../push/pusher.js";
 import type { UpdateStatus } from "../update/versions.js";
 import type { TerminalStatus } from "../terminal/mirror.js";
+import type { AgentSetup } from "../agents/agentSetup.js";
 import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
 
@@ -61,6 +64,8 @@ export interface ControlDeps {
   terminal: { status(): TerminalStatus; reload(): TerminalStatus };
   /** Voice providers' keys (PROTOCOL.md "Voice providers"). Absent in tests that have none. */
   voice?: { reload(): VoiceProviderInfo[] };
+  /** What each agent needs on this computer (`findAgentSetup`). Absent in tests that have none. */
+  agents?: () => Promise<AgentSetup[]>;
   updates: {
     current(): UpdateStatus;
     checkTap(): Promise<UpdateStatus>;
@@ -111,6 +116,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "POST" && url.pathname === "/push/reload") return sendJson(res, 200, d.push.reload());
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
   if (method === "POST" && url.pathname === "/voice/reload") return sendJson(res, 200, d.voice?.reload() ?? []);
+  if (method === "GET" && url.pathname === "/agents") return sendJson(res, 200, { agents: (await d.agents?.()) ?? [] });
   if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   if (method === "POST" && url.pathname === "/activity/test") return injectActivityTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);

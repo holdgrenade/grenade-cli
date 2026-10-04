@@ -37,6 +37,7 @@ import { conversationIdOf, heldConversations } from "../conversations/heldConver
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
+import { findAgentSetup } from "../agents/findAgentSetup.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
 import { underSystemd } from "../update/underService.js";
@@ -617,6 +618,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     daemon: info,
     startedAt: Date.now(),
     log,
+    agents: findAgentSetup,
     promptTests,
     activityTests: {
       noteErrored: (sessionId, message) => activity.noteErrored(sessionId, message, new Date().toISOString()),
