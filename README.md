@@ -72,6 +72,10 @@ grenade push test        # send every registered phone a test notification
 grenade push on          # send them also with remote access off, through the main relay
 grenade push off         # send none (grenade push auto: on while remote access is on, the default)
 
+grenade voice            # your API keys for Talk and dictation: the providers, and which hold a key
+grenade voice key openai # keep a key on this Mac: asked for without showing it, checked with the provider (also: gemini, wispr-flow)
+grenade voice forget openai
+
 grenade update           # install the latest version now (grenaded also does it by itself)
 grenade update --auto off  # stop grenaded installing new versions by itself (grenade update --auto on: back)
 ```
@@ -111,6 +115,8 @@ With `grenade terminal iterm` (or `auto` and iTerm2 installed) a group is one ta
 Away from home the phone reaches the daemon through a relay: both sides dial out to it, and everything between them is end-to-end encrypted, so the relay only learns which Macs are online and their IP addresses. With the relay on, a phone also pairs from anywhere: the QR code carries the Mac's key and a one-time secret, and both work once, for two minutes. The typed code pairs on the same Wi‑Fi only. You can host your own relay: [Self-host a relay](https://www.holdgrenade.com/relay).
 
 Push notifications tell the phone that an agent needs an answer or has finished, even while the app is closed. They follow remote access: with `grenade relay on` they are on and go through that relay; with remote access off they are off and the Mac talks to no relay. `grenade push on` turns them on by themselves, through the main relay. The Mac seals each one so that only your phone can read it, and the relay hands it to Apple. That relay learns the Mac's public IP address, the phone's device token and the time, never the session or the text. A push waits while you are at the Mac (keyboard or mouse used in the last two minutes; `grenade push on --at-mac 0` to never wait) and is dropped once you have answered.
+
+Talk (a spoken conversation about your sessions, in the Mac app and the iPhone app) and dictation with Wispr Flow (the iPhone's mic) run at a provider, under your own API key: OpenAI or Google's Gemini for Talk, Wispr Flow for dictation. The key is kept on this Mac, in `~/.grenade/voice-keys.json` (readable by you only), and never on a phone. `grenade voice key openai` asks for the key without showing it (or reads it from stdin: `grenade voice key openai < key.txt`), checks it with the provider, and keeps it; `gemini` and `wispr-flow` work the same way. Pasting a key in an app's settings hands it to this Mac in the same way. Each time an app opens a connection to the provider it asks grenaded for a pass that lasts about a minute (fifteen for dictation), so the app never holds the key, and what you say goes straight from the app to the provider, never through grenaded or a relay. `grenade voice` lists the providers and shows a kept key masked (`sk-…a1b2`); `grenade voice forget <provider>` removes it at once (to make the key itself worthless, revoke it at the provider). The apps use this from the Mac app 1.0.78 and the iPhone app 1.0.53; earlier ones kept the key themselves.
 
 The daemon listens on `:7788` (WebSocket at `/ws`) and advertises itself as `_grenade._tcp` so the phone finds it on the same Wi‑Fi. State lives in `~/.grenade/`.
 
