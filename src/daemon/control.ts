@@ -16,6 +16,8 @@
  *                             `offer` is the URL for the QR code, PROTOCOL.md "Pairing offer (QR code)")
  *   GET  /pair-code         → PairingState   (what became of the last pair code: waiting, paired with which phone, expired)
  *   GET  /devices           → Device[]   (paired phones, without their tokens)
+ *   GET  /published         → PublishedLink[]   (canvases published to secret links, without their keys)
+ *   DELETE /published/<token> → PublishedLink[]   (takes that link down at the share host)
  *   DELETE /devices/:id     → { ok, closed }   (unpair one phone; `closed` connections went with it)
  *   DELETE /devices         → { removed, closed }   (unpair every phone)
  *   GET  /push              → PushStatus   (on or off, the relay pushes go through, the phones that registered)
@@ -28,6 +30,7 @@
  *                             (puts a test card on a session, PROTOCOL.md "Prompts"; `wait` is in seconds)
  *   GET  /prompts/test/:id  → PromptTestResult   (answers when the phone has, or the wait ran out)
  */
+import type { PublishedLink } from "@grenade/protocol";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { PromptKind, SessionCreateFrame, SessionGroupFrame, type DaemonInfo, type PromptFrame, type VoiceProviderInfo } from "@grenade/protocol";
 import type { Logger } from "../log.js";
@@ -64,6 +67,8 @@ export interface ControlDeps {
   terminal: { status(): TerminalStatus; reload(): TerminalStatus };
   /** Voice providers' keys (PROTOCOL.md "Voice providers"). Absent in tests that have none. */
   voice?: { reload(): VoiceProviderInfo[] };
+  /** Canvases published to secret links (PROTOCOL.md "Publishing"). Absent when this daemon publishes none. */
+  publish?: { list(): PublishedLink[]; remove(token: string): Promise<PublishedLink[]> };
   /** What each agent needs on this computer (`findAgentSetup`). Absent in tests that have none. */
   agents?: () => Promise<AgentSetup[]>;
   updates: {
@@ -160,6 +165,16 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "GET" && url.pathname === "/pair-code") return sendJson(res, 200, d.pairing.state());
   if (method === "GET" && url.pathname === "/devices") return sendJson(res, 200, d.devices.list());
   if (method === "DELETE" && url.pathname === "/devices") return sendJson(res, 200, d.devices.unpairAll());
+  if (method === "GET" && url.pathname === "/published") return sendJson(res, 200, d.publish?.list() ?? []);
+  const published = url.pathname.match(/^\/published\/([A-Za-z0-9_-]{16})$/);
+  if (method === "DELETE" && published?.[1]) {
+    if (!d.publish) return sendJson(res, 404, { error: "not_found", message: "this daemon publishes nothing" });
+    try {
+      return sendJson(res, 200, await d.publish.remove(published[1]));
+    } catch (e) {
+      return sendJson(res, 400, { error: "bad_request", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
   const device = url.pathname.match(/^\/devices\/([^/]+)$/);
   if (method === "DELETE" && device?.[1]) {
     const r = d.devices.unpair(decodeURIComponent(device[1]));

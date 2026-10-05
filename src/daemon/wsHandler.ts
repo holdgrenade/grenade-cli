@@ -20,6 +20,8 @@ import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
 import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame } from "@grenade/protocol";
 import { CanvasError, type CanvasReply } from "../canvas/canvasService.js";
 import { boardTooLarge } from "../canvas/boardListing.js";
+import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
+import { PublishError } from "../publish/publisher.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -136,6 +138,15 @@ export interface CanvasPort {
   watch(cwd: string, onChange: (reply: CanvasReply) => void): Promise<{ reply: CanvasReply; stop: () => void }>;
 }
 
+/** Canvases published to secret links (PROTOCOL.md "Publishing"); `Publisher` in the daemon. Changes reject with `PublishError`. */
+export interface PublishPort {
+  list(): PublishedLink[];
+  publishCanvas(cwd: string, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean): Promise<PublishedLink[]>;
+  remove(token: string): Promise<PublishedLink[]>;
+  on(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
+  off(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -184,6 +195,8 @@ export interface ConnectionDeps {
   limits?: { list(): PlanLimit[] };
   /** A group's design canvas. Absent means this daemon serves none (no `canvas: 1`) and answers its frames with `bad_frame`. */
   canvas?: CanvasPort;
+  /** Canvases published to secret links. Absent means this daemon publishes none (no `publish: 1`) and answers their frames with `bad_frame`. */
+  publish?: PublishPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -226,6 +239,9 @@ export class Connection {
   /** This client asked for `voice` once, so it hears of every change (PROTOCOL.md "Voice providers"). */
   private watchesVoice = false;
   private readonly onVoice = (f: VoiceFrame) => this.send(f);
+  /** This client sent a publish frame once, so it hears of every change to a link (PROTOCOL.md "Publishing"). */
+  private watchesPublish = false;
+  private readonly onPublished = (links: PublishedLink[]) => this.send({ type: "published", links });
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   private readonly onActivity = (f: ActivityFrame) => {
     if (!this.subscriptions.has(f.sessionId)) return;
@@ -270,7 +286,7 @@ export class Connection {
       await this.dispatch(frame);
     } catch (e) {
       // An `input` (or a canvas request) with an id gets its id back, so the phone knows which one did not arrive.
-      const id = frame.type === "input" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" ? frame.id : undefined;
+      const id = frame.type === "input" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -307,6 +323,7 @@ export class Connection {
       this.d.activity?.off("activity", this.onActivity);
       this.d.groups?.off("changed", this.onGroups);
       this.d.voice?.off("changed", this.onVoice);
+      this.d.publish?.off("changed", this.onPublished);
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -489,6 +506,10 @@ export class Connection {
       case "canvas.unsubscribe":
       case "canvas.board":
         return this.handleCanvas(frame);
+      case "publish.list":
+      case "publish.canvas":
+      case "publish.remove":
+        return this.handlePublish(frame);
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);
@@ -547,6 +568,24 @@ export class Connection {
         this.d.log.info("Saved an attachment from the phone", { session: frame.sessionId, path: saved.path, bytes: saved.bytes });
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });
       }
+    }
+  }
+
+  /** The publish frames (PROTOCOL.md "Publishing"): answered with every link and the request's `id`; a refusal is `bad_frame` with it. */
+  private async handlePublish(frame: Extract<ClientFrame, { type: "publish.list" | "publish.canvas" | "publish.remove" }>): Promise<void> {
+    const publish = this.d.publish;
+    if (!publish) return this.fail("bad_frame", "this daemon publishes nothing", frame.type, false, frame.id);
+    if (!this.watchesPublish) publish.on("changed", this.onPublished);
+    this.watchesPublish = true;
+    try {
+      const links =
+        frame.type === "publish.list" ? publish.list()
+        : frame.type === "publish.canvas" ? await publish.publishCanvas(frame.cwd, frame.scope, frame.expiry, frame.newLink === true)
+        : await publish.remove(frame.token);
+      this.send({ type: "published", id: frame.id, links });
+    } catch (e) {
+      if (e instanceof PublishError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
+      throw e;
     }
   }
 

@@ -73,6 +73,11 @@ import { startPush } from "../push/startPush.js";
 import { VoiceService } from "../voice/voiceService.js";
 import { CanvasService } from "../canvas/canvasService.js";
 import { CanvasWatcher } from "../canvas/canvasWatcher.js";
+import { listCanvas, readBoard } from "../canvas/canvasFolder.js";
+import { Publisher } from "../publish/publisher.js";
+import { ShareClient, type Fetch } from "../publish/shareClient.js";
+import { assetFiles, readAsset } from "../publish/publishFolder.js";
+import { OFFICIAL_SHARE_URL } from "@grenade/protocol";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
@@ -121,6 +126,12 @@ export interface DaemonOptions {
   voiceKeysPath?: string;
   /** How the daemon reaches a voice provider. Tests pass a fake. */
   voiceFetch?: typeof fetch;
+  /** published.json (PROTOCOL.md "Publishing"). With `tokensPath: null` and none given, this daemon publishes nothing. */
+  publishedPath?: string;
+  /** The share host; default `GRENADE_SHARE_URL`, else the official one. */
+  shareUrl?: string;
+  /** How the share host is reached (tests). */
+  shareFetch?: Fetch;
   /**
    * Updates (src/update/): ask the tap for the latest release (default on unless GRENADE_UPDATE_CHECK=off), watch the
    * version on disk behind `program` (the `grenade` command; none: nothing to watch), and call `restart` once a newer
@@ -144,7 +155,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, codexActivity: 1, agents: [...AGENTS] };
+  const publishedPath = opts.publishedPath ?? (opts.tokensPath === null ? undefined : paths.published);
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -286,7 +298,22 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     ...(opts.voiceFetch ? { fetch: opts.voiceFetch } : {}),
   });
   // A group's design canvas (PROTOCOL.md "Canvas"): only the folders of the sessions it lists, read and never written.
-  const canvas = new CanvasService(() => registry.list(), new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) })));
+  const canvasWatcher = new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) }));
+  const canvas = new CanvasService(() => registry.list(), canvasWatcher);
+  // Canvases published to secret links (PROTOCOL.md "Publishing"): the daemon keeps each page up to date as boards are saved.
+  const publisher = publishedPath
+    ? new Publisher({
+        path: publishedPath,
+        client: new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch),
+        folderOf: (cwd) => canvas.folderOf(cwd),
+        listCanvas: (folder) => listCanvas(folder),
+        watchCanvas: (folder, current, onChange) => canvasWatcher.watch(folder, current, () => onChange()),
+        readBoard: (folder, file) => readBoard(folder, file, computerWord()),
+        assetFiles,
+        readAsset,
+        log,
+      })
+    : undefined;
   const models: ModelsPort = {
     async switch(session, model, effort) {
       if (switchingModel.has(session.id)) throw new ModelSwitchError("A model switch is already under way in this session.");
@@ -551,6 +578,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       models,
       voice,
       canvas,
+      ...(publisher ? { publish: publisher } : {}),
       limits: planLimits,
       conversations,
       openTerm(open) {
@@ -671,6 +699,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     },
     push,
     voice,
+    ...(publisher ? { publish: publisher } : {}),
     terminal: {
       status: terminalStatus,
       reload() {
@@ -688,6 +717,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   if (allowPlainLan) log.warn("Accepting phones without encryption on the Wi‑Fi (--allow-plain-lan). Update them, then start without it.");
   log.info("Pair a phone with: grenade pair");
   updates.start();
+  void publisher?.start();
 
   return {
     info,
@@ -700,6 +730,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       mirror.stop();
       poller.stop();
       relayLink?.stop();
+      publisher?.stop();
       canvas.stop();
       push.stop();
       // Held hook requests would keep the HTTP server from closing.

@@ -28,6 +28,7 @@ export const paths = {
   terminal: join(GRENADE_DIR, "terminal.json"),
   conversations: join(GRENADE_DIR, "conversations.json"),
   voiceKeys: join(GRENADE_DIR, "voice-keys.json"),
+  published: join(GRENADE_DIR, "published.json"),
   // Claude Code keeps its settings, transcripts and process files in CLAUDE_CONFIG_DIR when that is set.
   claudeDir: process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"),
   claudeSettings: join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "settings.json"),

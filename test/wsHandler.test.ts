@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
+import { Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -112,7 +112,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -138,6 +138,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.models ? { models: opts.models } : {}),
     ...(opts.voice ? { voice: opts.voice } : {}),
     ...(opts.canvas ? { canvas: opts.canvas } : {}),
+    ...(opts.publish ? { publish: opts.publish } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
@@ -278,7 +279,8 @@ describe("Connection", () => {
       async board() { return { html: "<html></html>", modified: "2026-10-04T10:02:11.000Z", bytes: 13 }; },
       async watch() { return { reply: listing, stop() {} }; },
     };
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, openTerm: () => term });
+    const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [], async publishCanvas() { return []; }, async remove() { return []; } });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
