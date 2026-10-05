@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionStatus, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionContext, SessionStatus, WaitingFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
@@ -447,6 +447,19 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (r.session.model === model && r.session.effort === nextEffort) return;
     r.session = withEffort({ ...r.session, model }, nextEffort);
     this.persist();
+    this.emit("updated", r.session);
+  }
+
+  /**
+   * How full the session's context is (PROTOCOL.md "Usage"): Claude Code's status line, Codex's rollout. Not saved:
+   * the next status line or hook after a restart brings it back.
+   */
+  setContext(id: string, context: SessionContext): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    const now = r.session.context;
+    if (now && now.used === context.used && now.size === context.size) return;
+    r.session = { ...r.session, context: { used: context.used, size: context.size } };
     this.emit("updated", r.session);
   }
 

@@ -77,6 +77,9 @@ import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
 import { SentInputs } from "./sentInputs.js";
+import { PlanLimits } from "../usage/planLimits.js";
+import { claudeStatusUsage, STATUS_LINE_PATH } from "../usage/claudeStatusLine.js";
+import { readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -141,10 +144,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, codexActivity: 1, agents: [...AGENTS] };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
-  const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) }, serverScope: underSystemd() });
+  const tmux = opts.tmux ?? createTmux({ agentFlags: {
+        // Read as each session starts, so a status line the user set up since is the one it runs.
+        get claude() {
+          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")));
+        },
+        codex: codexHookFlags(port),
+      }, serverScope: underSystemd() });
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
   const codes = new PairingCodes();
   const pairing = new PairingWatch();
@@ -164,6 +173,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const terminalStatus = (): TerminalStatus => ({ ...mirror.status(), pinned: pinnedTerminal !== undefined });
   mirror.start().catch((e) => log.warn("Could not mirror sessions into a terminal", { error: e }));
 
+  // Each agent's plan windows on this computer, answered to `limits` (PROTOCOL.md "Usage").
+  const planLimits = new PlanLimits();
+
   const http = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
@@ -178,6 +190,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         // The agent moved on: a prompt that was open was answered in the terminal.
         closePromptsByHook(prompts, session, body);
         return sendJson(res, r.status, r.body);
+      }
+      if (req.method === "POST" && url.pathname === STATUS_LINE_PATH) {
+        // Claude Code's status line payload (PROTOCOL.md "Usage"): the context and the plan windows.
+        if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
+        applyStatusLine(url.searchParams.get("session"), await readBody(req));
+        return sendJson(res, 200, { ok: true });
       }
       if (req.method === "POST" && url.pathname === "/hooks/codex") {
         if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
@@ -359,6 +377,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
+        readCodexUsage(path)
+          .then((usage) => {
+            if (usage?.context) registry.setContext(id, usage.context);
+            if (usage) planLimits.record("codex", usage.limits);
+          })
+          .catch((e) => log.debug("Could not read the usage from a Codex rollout", { session: id, path, error: e }));
         catchUp.cancel(id);
         codexStopCatchUp.cancel(id);
         readActivity(id, path)
@@ -369,6 +393,19 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           .catch((e) => log.debug("Could not read the activity from a Codex rollout", { session: id, path, error: e }));
       },
     });
+
+  /** One Claude Code status line payload: the session's context by Claude Code's own count, and the plan windows. */
+  function applyStatusLine(session: string | null, body: string): void {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body || "{}");
+    } catch {
+      return;
+    }
+    const usage = claudeStatusUsage(payload, new Date().toISOString());
+    planLimits.record("claude", usage.limits);
+    if (session && usage.context) registry.setContext(session, usage.context);
+  }
 
   function handlePair(raw: string, res: Parameters<typeof sendJson>[0]): void {
     // The code and the token would cross the Wi‑Fi in the clear.
@@ -514,6 +551,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       models,
       voice,
       canvas,
+      limits: planLimits,
       conversations,
       openTerm(open) {
         const stream = new TermStream({

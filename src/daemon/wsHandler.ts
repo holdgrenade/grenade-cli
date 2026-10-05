@@ -15,7 +15,7 @@ import { isInterrupt } from "../tmux/termPaint.js";
 import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
-import type { VoiceFrame } from "@grenade/protocol";
+import type { PlanLimit, VoiceFrame } from "@grenade/protocol";
 import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
 import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame } from "@grenade/protocol";
 import { CanvasError, type CanvasReply } from "../canvas/canvasService.js";
@@ -180,6 +180,8 @@ export interface ConnectionDeps {
   models?: ModelsPort;
   /** Voice providers' keys and tokens. Absent means this daemon keeps none (no `voice: 1`) and answers their frames with `bad_frame`. */
   voice?: VoicePort;
+  /** Each agent's plan windows (PROTOCOL.md "Usage"). Absent means this daemon reads none and answers `limits` with an empty list. */
+  limits?: { list(): PlanLimit[] };
   /** A group's design canvas. Absent means this daemon serves none (no `canvas: 1`) and answers its frames with `bad_frame`. */
   canvas?: CanvasPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
@@ -453,6 +455,8 @@ export class Connection {
         return this.send({ type: "conversations", conversations: await this.d.conversations.list(this.anyAgentConversations) });
       case "folders":
         return this.send(await listFolders(frame.path));
+      case "limits":
+        return this.send({ type: "limits", limits: this.d.limits?.list() ?? [] });
       case "voice":
         if (!this.d.voice) return this.fail("bad_frame", "this daemon keeps no voice keys", frame.type);
         if (!this.watchesVoice) this.d.voice.on("changed", this.onVoice);

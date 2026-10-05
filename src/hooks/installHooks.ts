@@ -7,6 +7,7 @@
  */
 import { PROMPT_HOOK_PATH, PROMPT_HOOK_TIMEOUT_S } from "@grenade/protocol";
 import { shellQuote } from "./shellQuote.js";
+import { claudeStatusLine, type UserStatusLine } from "../usage/claudeStatusLine.js";
 
 /** Events that report status: a command that posts the payload and does not wait. */
 export const HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification", "Stop", "StopFailure", "SessionEnd"] as const;
@@ -50,9 +51,13 @@ export function mergeHooks(input: unknown, port: number): { settings: Settings; 
   return mergeEntries(input, [...HOOK_EVENTS.map((e) => [e, command] as const), [PROMPT_EVENT, promptHook(port)] as const], isGrenadeHook);
 }
 
-/** `--settings '<the hooks as JSON>'`, quoted for the shell tmux runs the agent in. */
-export function claudeHookFlags(port: number): string {
-  return `--settings ${shellQuote(JSON.stringify(mergeHooks({}, port).settings))}`;
+/**
+ * `--settings '<the hooks and the status line as JSON>'`, quoted for the shell tmux runs the agent in. The status line
+ * reports usage to the daemon and then runs `userStatusLine`, the user's own, so their line looks as it did.
+ */
+export function claudeHookFlags(port: number, userStatusLine?: UserStatusLine): string {
+  const settings = { ...mergeHooks({}, port).settings, statusLine: claudeStatusLine(port, userStatusLine) };
+  return `--settings ${shellQuote(JSON.stringify(settings))}`;
 }
 
 export function removeHooks(input: unknown): { settings: Settings; changed: boolean } {

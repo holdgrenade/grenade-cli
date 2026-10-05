@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { claudeStatusLine } from "../src/usage/claudeStatusLine.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,10 +53,10 @@ describe("the hooks an agent starts with", () => {
     // Inline, so tmux keeps its scrollback (the alternate screen keeps none).
     expect(args.at(-1)).toBe("--no-alt-screen");
   });
-  it("gives Claude Code the same hooks install-hooks writes, as --settings, also for a resumed copy", () => {
+  it("gives Claude Code the same hooks install-hooks writes, and Grenade's status line, as --settings, also for a resumed copy", () => {
     const args = argv(agentCommand("claude", undefined, "9a76de47-6489-4620-8e10-4bf9c4d12b09", { claude: claudeHookFlags(7788) }), "claude");
     expect(args[0]).toBe("--settings");
-    expect(JSON.parse(args[1]!)).toEqual(mergeHooks({}, 7788).settings);
+    expect(JSON.parse(args[1]!)).toEqual({ ...mergeHooks({}, 7788).settings, statusLine: claudeStatusLine(7788) });
     expect(args.slice(2)).toEqual(["--resume", "9a76de47-6489-4620-8e10-4bf9c4d12b09", "--fork-session"]);
   });
   it("are the same for every session, so Codex asks to trust them once", () => {

@@ -29,7 +29,7 @@ grenade setup
 3. It offers the relay, for reaching the computer from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
 4. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
 
-Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. The first Codex session asks once to trust them; the phone shows it as a card, so tap Trust there or pick "Trust all and continue" in the terminal.
+Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. Claude Code also starts with a status line of Grenade's, which tells grenaded how full the conversation is and how much of your Pro or Max plan is used, and then runs your own status line, if you have one, so your line looks as before (a change to it applies to sessions started after). The first Codex session asks once to trust them; the phone shows it as a card, so tap Trust there or pick "Trust all and continue" in the terminal.
 
 `--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
 
