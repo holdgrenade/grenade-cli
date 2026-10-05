@@ -17,6 +17,9 @@ import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.j
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
 import type { VoiceFrame } from "@grenade/protocol";
 import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
+import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame } from "@grenade/protocol";
+import { CanvasError, type CanvasReply } from "../canvas/canvasService.js";
+import { boardTooLarge } from "../canvas/boardListing.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -126,6 +129,13 @@ export interface VoicePort {
   off(event: "changed", cb: (f: VoiceFrame) => void): unknown;
 }
 
+/** A group's design canvas (PROTOCOL.md "Canvas"); `CanvasService` in the daemon. Each call rejects with `CanvasError` for a folder or a board it does not serve. */
+export interface CanvasPort {
+  list(cwd: string): Promise<CanvasReply>;
+  board(cwd: string, file: string): Promise<{ html: string; modified: string; bytes: number }>;
+  watch(cwd: string, onChange: (reply: CanvasReply) => void): Promise<{ reply: CanvasReply; stop: () => void }>;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -170,6 +180,8 @@ export interface ConnectionDeps {
   models?: ModelsPort;
   /** Voice providers' keys and tokens. Absent means this daemon keeps none (no `voice: 1`) and answers their frames with `bad_frame`. */
   voice?: VoicePort;
+  /** A group's design canvas. Absent means this daemon serves none (no `canvas: 1`) and answers its frames with `bad_frame`. */
+  canvas?: CanvasPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -196,6 +208,8 @@ export class Connection {
   /** Live terminals this client has open, by session. */
   private readonly terms = new Map<string, TermHandle>();
   private stopWatchingPush: (() => void) | undefined;
+  /** Canvases this client watches, by `cwd` as it sent it (PROTOCOL.md "Canvas", "Watching"). */
+  private readonly canvasWatches = new Map<string, () => void>();
   private helloTimer: unknown;
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
   private readonly onRemoved = (id: string) => {
@@ -253,8 +267,8 @@ export class Connection {
     try {
       await this.dispatch(frame);
     } catch (e) {
-      // An `input` with an id gets its id back, so the phone knows which prompt did not arrive.
-      const id = frame.type === "input" ? frame.id : undefined;
+      // An `input` (or a canvas request) with an id gets its id back, so the phone knows which one did not arrive.
+      const id = frame.type === "input" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" ? frame.id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -280,6 +294,8 @@ export class Connection {
     for (const id of this.subscriptions) this.d.registry.unsubscribe(id);
     this.subscriptions.clear();
     for (const id of [...this.terms.keys()]) this.closeTerm(id);
+    for (const stop of this.canvasWatches.values()) stop();
+    this.canvasWatches.clear();
     if (this.authed) {
       this.d.registry.off("updated", this.onUpdated);
       this.d.registry.off("removed", this.onRemoved);
@@ -464,6 +480,11 @@ export class Connection {
           throw e;
         }
       }
+      case "canvas":
+      case "canvas.subscribe":
+      case "canvas.unsubscribe":
+      case "canvas.board":
+        return this.handleCanvas(frame);
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);
@@ -522,6 +543,42 @@ export class Connection {
         this.d.log.info("Saved an attachment from the phone", { session: frame.sessionId, path: saved.path, bytes: saved.bytes });
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });
       }
+    }
+  }
+
+  /** The canvas frames (PROTOCOL.md "Canvas"): a refused folder, a missing or too large board is `bad_frame` with the request's `id`. */
+  private async handleCanvas(frame: Extract<ClientFrame, { type: "canvas" | "canvas.subscribe" | "canvas.unsubscribe" | "canvas.board" }>): Promise<void> {
+    if (frame.type === "canvas.unsubscribe") {
+      this.canvasWatches.get(frame.cwd)?.();
+      this.canvasWatches.delete(frame.cwd);
+      return;
+    }
+    const canvas = this.d.canvas;
+    if (!canvas) return this.fail("bad_frame", "this daemon serves no canvas", frame.type, false, frame.id);
+    const { cwd, id } = frame;
+    const framed = (reply: CanvasReply, withId: boolean): CanvasFrame => ({ type: "canvas", ...(withId ? { id } : {}), cwd, ...reply });
+    try {
+      if (frame.type === "canvas") return this.send(framed(await canvas.list(cwd), true));
+      if (frame.type === "canvas.subscribe") {
+        const again = this.canvasWatches.get(cwd);
+        if (!again && this.canvasWatches.size >= CANVAS_SUBSCRIPTIONS_MAX) {
+          return this.fail("bad_frame", `A connection watches at most ${CANVAS_SUBSCRIPTIONS_MAX} canvases; unsubscribe from one first.`, frame.type, false, id);
+        }
+        const { reply, stop } = await canvas.watch(cwd, (changed) => this.send(framed(changed, false)));
+        // The connection ended while the folder was read.
+        if (!this.authed) return stop();
+        again?.();
+        this.canvasWatches.set(cwd, stop);
+        return this.send(framed(reply, true));
+      }
+      const board = await canvas.board(cwd, frame.file);
+      const reply = { type: "canvas.board" as const, id, cwd, file: frame.file, ...board };
+      const tooLarge = boardTooLarge(frame.file, board.bytes, Buffer.byteLength(JSON.stringify(reply)), computerWord());
+      if (tooLarge) return this.fail("bad_frame", tooLarge, frame.type, false, id);
+      return this.send(reply);
+    } catch (e) {
+      if (e instanceof CanvasError) return this.fail("bad_frame", e.message, frame.type, false, id);
+      throw e;
     }
   }
 

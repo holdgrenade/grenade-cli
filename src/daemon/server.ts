@@ -71,6 +71,8 @@ import { UpdateChecker } from "../update/updateChecker.js";
 import { installerFor, isBusy } from "../update/versions.js";
 import { startPush } from "../push/startPush.js";
 import { VoiceService } from "../voice/voiceService.js";
+import { CanvasService } from "../canvas/canvasService.js";
+import { CanvasWatcher } from "../canvas/canvasWatcher.js";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
@@ -139,7 +141,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const log = opts.log ?? createLogger({ file: paths.log, level: (process.env["GRENADE_LOG"] as "debug" | undefined) ?? "info" });
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, codexActivity: 1, agents: [...AGENTS] };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, codexActivity: 1, agents: [...AGENTS] };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: { claude: claudeHookFlags(port), codex: codexHookFlags(port) }, serverScope: underSystemd() });
@@ -265,6 +267,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     log,
     ...(opts.voiceFetch ? { fetch: opts.voiceFetch } : {}),
   });
+  // A group's design canvas (PROTOCOL.md "Canvas"): only the folders of the sessions it lists, read and never written.
+  const canvas = new CanvasService(() => registry.list(), new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) })));
   const models: ModelsPort = {
     async switch(session, model, effort) {
       if (switchingModel.has(session.id)) throw new ModelSwitchError("A model switch is already under way in this session.");
@@ -509,6 +513,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       groups: groupOrder,
       models,
       voice,
+      canvas,
       conversations,
       openTerm(open) {
         const stream = new TermStream({
@@ -657,6 +662,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       mirror.stop();
       poller.stop();
       relayLink?.stop();
+      canvas.stop();
       push.stop();
       // Held hook requests would keep the HTTP server from closing.
       prompts.closeAll();

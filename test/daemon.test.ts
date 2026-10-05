@@ -198,6 +198,30 @@ describe("Codex hooks", () => {
   });
 });
 
+describe("the design canvas", () => {
+  it("says canvas: 1, lists a session's boards and sends one, and refuses a folder no session uses", async () => {
+    const dir = join(home, "canvas-project");
+    mkdirSync(join(dir, ".grenade", "canvas"), { recursive: true });
+    writeFileSync(join(dir, ".grenade", "canvas", "R1A · Cards.html"), `<meta name="board" content="390x844"><h1>Cards</h1>`);
+    const sessionsPath = join(home, "canvas-sessions.json");
+    writeFileSync(sessionsPath, JSON.stringify([{ id: "gr-cv", name: "cv", agent: "claude", cwd: dir, createdAt: "2026-10-04T10:00:00.000Z" }]));
+    const live: Tmux = { ...tmux, async listSessions() { return ["gr-cv"]; } };
+    const { d, pairPlain } = await daemon({ allowPlainLan: true, tmux: live, sessionsPath });
+    const { token } = (await pairPlain()).body;
+    const p = await phone(d.port, Buffer.alloc(0), false);
+    p.hello(token ?? "");
+    await until(() => p.types().includes("welcome"));
+    expect(p.frames.find((f) => f.type === "welcome")).toMatchObject({ daemon: { canvas: 1 } });
+    p.send({ type: "canvas", id: "c_1", cwd: dir });
+    p.send({ type: "canvas.board", id: "c_2", cwd: dir, file: "R1A · Cards.html" });
+    p.send({ type: "canvas", id: "c_3", cwd: home });
+    await until(() => p.types().filter((t) => t === "canvas" || t === "canvas.board" || t === "error").length >= 3);
+    expect(p.frames.find((f) => f.type === "canvas")).toMatchObject({ id: "c_1", boards: [{ file: "R1A · Cards.html", name: "Cards", revision: 1, letter: "A", width: 390, height: 844 }] });
+    expect(p.frames.find((f) => f.type === "canvas.board")).toMatchObject({ id: "c_2", html: `<meta name="board" content="390x844"><h1>Cards</h1>` });
+    expect(p.frames.find((f) => f.type === "error")).toMatchObject({ code: "bad_frame", ref: "canvas", id: "c_3" });
+  });
+});
+
 describe("the pairing code", () => {
   it("comes with check digits for this daemon's key", async () => {
     const { control, key } = await daemon();
