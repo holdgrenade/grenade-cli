@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { computerWord } from "../src/platform/computer.js";
 import { CANVAS_BOARD_MAX_BYTES, CANVAS_BOARDS_MAX, type Session } from "@grenade/protocol";
 import { allowedCanvasCwd, canvasCwds, canvasFolderOf, normalizeCwd, sharedFolder } from "../src/canvas/canvasAccess.js";
 import { boardsFrom, boardTooLarge, isBoardFile, listingKey } from "../src/canvas/boardListing.js";
@@ -224,7 +225,7 @@ describe("watching a canvas", () => {
 describe("CanvasService", () => {
   it("refuses a cwd no session uses before it reads anything", async () => {
     const service = new CanvasService(() => [session("gr-a", "/Users/adam/app")], new CanvasWatcher(() => () => {}), "/Users/adam");
-    await expect(service.list("/etc")).rejects.toThrow("No session on this Mac works in /etc, so it has no canvas to show.");
+    await expect(service.list("/etc")).rejects.toThrow(`No session on this ${computerWord()} works in /etc, so it has no canvas to show.`);
     await expect(service.board("/Users/adam", "x.html")).rejects.toBeInstanceOf(CanvasError);
     await expect(service.watch("/Users/adam/app/..", () => {})).rejects.toBeInstanceOf(CanvasError);
   });

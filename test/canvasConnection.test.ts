@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { computerWord } from "../src/platform/computer.js";
 import { CANVAS_SUBSCRIPTIONS_MAX, DaemonFrame, type Session } from "@grenade/protocol";
 import { Connection } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
@@ -90,7 +91,7 @@ describe("canvas on a connection", () => {
     await send({ type: "canvas.board", id: "c_3", cwd: `${project}/..`, file: "x.html" });
     expect(out).toMatchObject([
       { type: "error", code: "bad_frame", ref: "canvas", id: "c_1" },
-      { type: "error", code: "bad_frame", ref: "canvas.subscribe", id: "c_2", message: "No session on this Mac works in /etc, so it has no canvas to show." },
+      { type: "error", code: "bad_frame", ref: "canvas.subscribe", id: "c_2", message: `No session on this ${computerWord()} works in /etc, so it has no canvas to show.` },
       { type: "error", code: "bad_frame", ref: "canvas.board", id: "c_3" },
     ]);
   });
@@ -110,7 +111,7 @@ describe("canvas on a connection", () => {
     await send(JSON.parse(hello));
     out.length = 0;
     await send({ type: "canvas.board", id: "c_1", cwd: project, file: "R1A · Quotes.html" });
-    expect(out).toEqual([{ type: "error", code: "bad_frame", ref: "canvas.board", id: "c_1", message: `"R1A · Quotes" is too large to show here (3.1 MB; at most 2 MB). Open it on the Mac.` }]);
+    expect(out).toEqual([{ type: "error", code: "bad_frame", ref: "canvas.board", id: "c_1", message: `"R1A · Quotes" is too large to show here (3.1 MB; at most 2 MB). Open it on the ${computerWord()}.` }]);
   });
 
   it("sends the canvas again without an id when a board is written, until unsubscribed", async () => {
