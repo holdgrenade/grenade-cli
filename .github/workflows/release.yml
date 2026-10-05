@@ -167,15 +167,21 @@ jobs:
           fi
 
       # Best effort: the same tarball on npm. A failure here leaves the Homebrew release standing.
+      # It does not wait for the tap: a version the tap has but npm lacks is published from its GitHub release, so a
+      # rerun (or a manual dispatch) catches npm up after it was unusable.
       - name: Publish to npm
-        if: steps.version.outputs.released == 'false'
         continue-on-error: true
         working-directory: grenade-cli
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           if npm view "@holdgrenade/cli@$VERSION" version >/dev/null 2>&1; then
             echo "@holdgrenade/cli@$VERSION is on npm already."
           else
+            if [ ! -f "released/holdgrenade-cli-$VERSION.tgz" ]; then
+              mkdir -p released
+              gh release download "v$VERSION" --pattern "holdgrenade-cli-$VERSION.tgz" --dir released
+            fi
             npm publish "./released/holdgrenade-cli-$VERSION.tgz"   # `./` matters: npm reads a bare path as a GitHub repo
           fi
