@@ -96,7 +96,7 @@ describe("sessionModelIn", () => {
 });
 
 describe("ScreenPrompts on a Claude Code session", () => {
-  const setup = () => {
+  const setup = (steering = () => false) => {
     let at = 0;
     const registry = Object.assign(new EventEmitter(), {
       log: [] as string[],
@@ -110,7 +110,7 @@ describe("ScreenPrompts on a Claude Code session", () => {
     const events: string[] = [];
     prompts.on("opened", (f) => events.push(`opened ${f.promptId}`));
     prompts.on("closed", (f) => events.push(`closed ${f.promptId} ${f.reason}`));
-    const screens = new ScreenPrompts(registry, prompts, silentLogger, () => at);
+    const screens = new ScreenPrompts(registry, prompts, silentLogger, steering, () => at);
     const settle = () => new Promise((r) => setImmediate(r));
     return { registry, prompts, events, screens, settle, later: (ms: number) => { at += ms; }, show: (lines: string[]) => registry.emit("captured", "gr-c", "claude", lines) };
   };
@@ -128,6 +128,17 @@ describe("ScreenPrompts on a Claude Code session", () => {
     show(switchedScreen);
     expect(registry.log).toEqual(["asks", "asked", "chose Opus 5.5 high"]);
     expect(events).toEqual(["opened p-1", "closed p-1 answered"]);
+  });
+  it("opens no card while the daemon steers the screen itself (a switch from an app answers its own question)", () => {
+    let steering = true;
+    const { registry, events, show } = setup(() => steering);
+    show(switchScreen());
+    show(switchedScreen);
+    expect(events).toEqual([]);
+    expect(registry.log).toEqual([]);
+    steering = false;
+    show(switchScreen("Sonnet 5.5"));
+    expect(events).toEqual(["opened p-1"]);
   });
   it("\"Don't switch\" presses No, then closes the picker Claude Code goes back to", async () => {
     const { registry, prompts, settle, show } = setup();

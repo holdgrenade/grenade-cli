@@ -48,6 +48,8 @@ export class ScreenPrompts {
     private readonly registry: ScreenPromptsPort,
     private readonly prompts: PromptStore,
     private readonly log: Logger,
+    /** A session whose screen is being steered by the daemon itself (a model switch, which answers its own dialog). */
+    private readonly steering: (id: string) => boolean = () => false,
     private readonly now: () => number = Date.now,
   ) {
     registry.on("captured", (id, agent, lines) => this.saw(id, agent, lines));
@@ -58,8 +60,10 @@ export class ScreenPrompts {
     });
   }
 
-  /** A session's screen, as it is now. Also called by whoever saw a dialog come up before the next capture did. */
+  /** A session's screen, as it is now. */
   saw(id: string, agent: AgentKind, lines: string[]): void {
+    // What comes up while the daemon steers the screen is answered by it: no card for a dialog gone a moment later.
+    if (this.steering(id)) return;
     this.payOwed(id, lines);
     const read = READERS[agent];
     if (read) this.look(id, read(lines), lines);

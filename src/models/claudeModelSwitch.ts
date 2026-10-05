@@ -3,7 +3,8 @@
  * `/model` picker in the terminal: open it, move to the model's row, set the effort, press "s". The saved default in
  * Claude Code's settings is never touched: Enter, which saves it, is pressed only to open the picker.
  * In a conversation that has messages Claude Code then asks "Switch model?" (the history is cached for the model it
- * had): that question is the user's to answer, so the switch ends there, with the screen that asks (`asks`).
+ * had). The person already answered it by choosing in an app, so the switch presses "Yes" (Adam, 2026-10-04: the
+ * question as a card of its own, under the app's picker, was one dialog too many).
  * The screen logic is in `claudeModelPicker.ts`; this file only types and looks.
  */
 import type { KeyName } from "@grenade/protocol";
@@ -21,9 +22,6 @@ export interface ModelTerminal {
 
 /** The agent did not switch. The message is for the person who asked. */
 export class ModelSwitchError extends Error {}
-
-/** What a `session.model` is answered with when Claude Code asks first: the question is a card in the session by then. */
-export const MODEL_ASKS = "Claude Code asks before it switches. Answer its question in the session.";
 
 export interface ModelSwitchTiming {
   wait(ms: number): Promise<void>;
@@ -46,14 +44,9 @@ const DEFAULT_TIMING: ModelSwitchTiming = { wait: (ms) => new Promise((done) => 
 export interface ModelSwitched {
   /** The effort level the session has once it runs the model. */
   effort: string | undefined;
-  /**
-   * Claude Code asks before it switches: the screen that shows its question. The model is chosen, not yet switched
-   * to; the answer to the question decides (PROTOCOL.md "Claude Code dialogs").
-   */
-  asks?: string[];
 }
 
-/** Switches to `model` (a row of the picker, "Opus 5.5"), as far as Claude Code lets it without asking the user. */
+/** Switches to `model` (a row of the picker, "Opus 5.5"), for this session only. */
 export async function switchClaudeModel(
   term: ModelTerminal,
   model: string,
@@ -111,8 +104,15 @@ export async function switchClaudeModel(
   await term.type("s");
   const closed = await look((lines) => (modelPickerIn(lines) ? null : lines));
   if (!closed) await giveUp("Claude Code did not take the choice.");
-  // The line that confirms it comes a moment after the picker closes; so does the question, when Claude Code asks.
-  const after = await look((lines) => (claudeDialogIn(lines) ? { asks: lines } : switchedModelIn(lines) === model ? {} : null));
-  if (!after) throw new ModelSwitchError("Claude Code asked something before switching. Answer it in the terminal.");
-  return { effort: chosenEffort, ...after };
+  // The line that confirms it comes a moment after the picker closes; so does "Switch model?", when Claude Code asks.
+  const switched = (lines: string[]) => switchedModelIn(lines) === model;
+  const after = await look((lines) => (switched(lines) ? "switched" : claudeDialogIn(lines)));
+  if (after === "switched") return { effort: chosenEffort };
+  const yes = after?.choices[0];
+  if (!yes) throw new ModelSwitchError("Claude Code asked something before switching. Answer it in the terminal.");
+  for (const key of yes.keys) await term.key(key);
+  if (!(await look((lines) => (switched(lines) ? true : null)))) {
+    throw new ModelSwitchError("Claude Code did not switch after asking. Look at the terminal.");
+  }
+  return { effort: chosenEffort };
 }

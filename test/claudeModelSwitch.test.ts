@@ -10,7 +10,7 @@ const SHOWN: Record<string, string> = { low: "○ Low", medium: "◐ Medium", hi
 const timing = { wait: async () => {}, patienceMs: 600 };
 
 /** A terminal that behaves like Claude Code's prompt and picker. `draft` is text someone left in the prompt box. */
-function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boolean; asksFirst?: boolean; confirms?: boolean } = {}) {
+function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boolean; asksFirst?: boolean; confirms?: boolean; staysAsking?: boolean } = {}) {
   let typed = opts.draft ?? "";
   let open = false;
   let cursor = 3;
@@ -38,7 +38,11 @@ function fakeClaude(opts: { draft?: string; opens?: boolean; sessionOnly?: boole
     },
     async key(key: KeyName) {
       pressed.push(key);
-      if (key === "backspace") typed = typed.slice(0, -1);
+      if (confirming && key === "enter") {
+        // "Yes, switch to …" is the selected row of "Switch model?".
+        confirming = opts.staysAsking === true;
+        if (!confirming) said = `Set model to ${NAMES[cursor - 1]} for this session only`;
+      } else if (key === "backspace") typed = typed.slice(0, -1);
       else if (key === "enter" && !open) open = opts.opens !== false && typed === "/model";
       else if (key === "escape") { open = false; typed = ""; }
       // The list wraps, as Claude Code's does (nine rows here).
@@ -86,10 +90,13 @@ describe("switchClaudeModel", () => {
     await expect(switchClaudeModel(claude.term, "Haiku 4.5", "high", timing)).rejects.toThrow(/no high effort/);
     expect(claude.pressed).not.toContain("s");
   });
-  it("stops at Claude Code's \"Switch model?\" with the screen that asks, pressing nothing in it", async () => {
+  it("answers Claude Code's \"Switch model?\" with Yes: choosing in the app was the answer", async () => {
     const claude = fakeClaude({ confirms: true });
-    await expect(switchClaudeModel(claude.term, "Opus 5.5", "max", timing)).resolves.toEqual({ effort: "max", asks: switchScreen("Opus 5.5") });
-    expect(claude.pressed).toEqual(["/model", "enter", "up", "right", "right", "s"]);
+    await expect(switchClaudeModel(claude.term, "Opus 5.5", "max", timing)).resolves.toEqual({ effort: "max" });
+    expect(claude.pressed).toEqual(["/model", "enter", "up", "right", "right", "s", "enter"]);
+  });
+  it("says so when \"Switch model?\" stays after Yes", async () => {
+    await expect(switchClaudeModel(fakeClaude({ confirms: true, staysAsking: true }).term, "Opus 5.5", "max", timing)).rejects.toThrow(/did not switch after asking/);
   });
   it("says so when the picker never opens, or Claude Code asks something else first", async () => {
     await expect(switchClaudeModel(fakeClaude({ opens: false }).term, "Opus 5.5", undefined, timing)).rejects.toThrow(/did not open/);
