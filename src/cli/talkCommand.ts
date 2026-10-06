@@ -93,10 +93,12 @@ export function rowLine(entry: TalkEntry, timeZone?: string): string {
         return `+ started ${title}: ${entry.text}`;
       case "which":
         return `? ${entry.text} ${(entry.choices ?? []).map((c, i) => `[${i + 1}] ${c.title}${c.status ? ` (${c.status})` : ""}`).join("  ")}`;
+      case "working":
+        return `… ${title} working on: ${entry.text}`;
       case "needsYou":
-        return `! ${title} needs you`;
+        return `! ${title} needs you${entry.text ? `: ${entry.text}` : ""}`;
       case "finished":
-        return `✓ ${title} finished`;
+        return `✓ ${title} finished${entry.text ? `: ${entry.text}` : ""}`;
       case "failed":
         return `✗ ${entry.text}`;
       default:

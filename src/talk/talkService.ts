@@ -2,8 +2,8 @@
  * TalkService: the daemon's side of typed Talk (PROTOCOL.md "Talk by text"). Keeps the day's thread, answers the
  * owner's words one turn at a time in the order they came, runs the chosen agent for each turn with Grenade's tools,
  * and adds the rows that follow: `you` from `talk.say`, `sent` / `started` / `which` from the tools, `it` from the
- * agent's answer, `failed` when there is none, and `needsYou` / `finished` from the status of the sessions the thread
- * sent to or started today (the push rule, `startedWaiting`; never the agent's words).
+ * agent's answer, `failed` when there is none, and the feed's `working` / `needsYou` / `finished` for every session of an
+ * agent with `activity` (`FeedWatcher`, rules in `talkFeed.ts`; never the agent's words).
  *
  * Emits `entry` for a new row, `busy` when the agent starts or stops, and `thread` when the day or the agent changes;
  * `Connection` passes them on to clients that sent `talk.thread`.
@@ -11,16 +11,16 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { Session, TalkEntry, TalkThreadFrame } from "@grenade/protocol";
+import type { ActivityEntry, Session, TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 import type { Logger } from "../log.js";
-import { eventOf, startedWaiting } from "../push/pushPolicy.js";
+import { FeedWatcher } from "./feedWatcher.js";
+import { lastRowsBySession } from "./talkFeed.js";
 import { failureSentence, isTalkAgentKind, noAgentSentence, type McpLaunch, type TalkAgentKind } from "./talkAgents.js";
 import { isTurnCall, newTurn, type TalkTurn } from "./talkGuard.js";
 import { ENV_PORT, ENV_SECRET, ENV_TURN } from "./talkMcp.js";
 import { TALK_INSTRUCTIONS, turnMessage } from "./talkPrompt.js";
 import { projectNames } from "./talkProjects.js";
 import type { TalkRun } from "./talkRunner.js";
-import { headingOf } from "./talkSessions.js";
 import { loadTalkSettings, saveTalkSettings, type TalkSettings } from "./talkSettings.js";
 import { TalkThread, type NewTalkEntry } from "./talkThread.js";
 import type { TalkTools } from "./talkTools.js";
@@ -42,8 +42,10 @@ export interface TalkServiceOptions {
   /** `talk.json`. */
   settingsPath: string;
   tools: TalkTools;
-  /** The sessions' changes, for `needsYou` and `finished`. */
-  registry: { list(): Session[]; on(event: "updated", cb: (s: Session) => void): unknown; off(event: "updated", cb: (s: Session) => void): unknown };
+  /** The sessions and their changes, for the feed. */
+  registry: { list(): Session[]; get(id: string): Session | undefined; on(event: "updated", cb: (s: Session) => void): unknown; off(event: "updated", cb: (s: Session) => void): unknown };
+  /** What the feed reads besides the registry: each session's words, what its open prompt asks, which agents have `activity`. */
+  feed: { entriesOf(id: string): ActivityEntry[]; askingOf(id: string): string | undefined; hasActivity(kind: string): boolean };
   /** The agents that can answer here, in `AGENTS` order. */
   agents: readonly TalkAgentKind[];
   agentName(kind: string): string;
@@ -68,40 +70,39 @@ export function continuing(settings: TalkSettings, date: string, agent: string):
   return c && c.date === date && c.agent === agent ? c.id : undefined;
 }
 
-/** The row a session's change is, for a session the thread is about, or null. The push rule: a session that started waiting. Pure. */
-export function sessionEventKind(previous: Session | undefined, next: Session): "needsYou" | "finished" | null {
-  if (!startedWaiting(previous, next)) return null;
-  return eventOf(next) === "answer" ? "needsYou" : "finished";
-}
-
-/** The sessions a thread sent to or started. Pure. */
-export function sessionsOf(entries: readonly TalkEntry[]): Set<string> {
-  return new Set(entries.filter((e) => (e.kind === "sent" || e.kind === "started") && e.session).map((e) => e.session!));
-}
-
 export class TalkService extends EventEmitter<TalkServiceEvents> {
   private readonly thread: TalkThread;
   private readonly now: () => Date;
   private readonly queue: string[] = [];
   private running = false;
   private turn: TalkTurn | null = null;
-  private readonly previous = new Map<string, Session>();
   private readonly dayTimer: NodeJS.Timeout;
-  private readonly onUpdated = (s: Session) => this.observe(s);
+  private readonly feed: FeedWatcher;
+  /** Each session's last row that says where its turns stand, for the feed's one-row-per-change rule. */
+  private lastRows: Map<string, TalkEntry>;
 
   constructor(private readonly o: TalkServiceOptions) {
     super();
     this.now = o.now ?? (() => new Date());
     this.thread = new TalkThread(o.dir, this.now);
-    for (const s of o.registry.list()) this.previous.set(s.id, s);
-    o.registry.on("updated", this.onUpdated);
+    this.lastRows = lastRowsBySession(this.thread.all());
+    this.feed = new FeedWatcher({
+      registry: o.registry,
+      ...o.feed,
+      lastRow: (id) => this.lastRows.get(id),
+      append: (row) => {
+        this.checkDay();
+        this.append(row);
+      },
+      now: () => this.now().getTime(),
+    });
     this.dayTimer = setInterval(() => this.checkDay(), DAY_CHECK_MS);
     this.dayTimer.unref();
   }
 
   stop(): void {
     clearInterval(this.dayTimer);
-    this.o.registry.off("updated", this.onUpdated);
+    this.feed.stop();
   }
 
   /** The agent that answers now, if any can. */
@@ -118,6 +119,11 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     this.checkDay();
     const agent = this.agent();
     return { type: "talk.thread", date: this.thread.date, entries: this.thread.entries(), busy: this.running, ...(agent ? { agent } : {}) };
+  }
+
+  /** A hook's prompt: the session starts a turn (the feed's `working`). */
+  noteAsked(sessionId: string, prompt: string): void {
+    this.feed.asked(sessionId, prompt);
   }
 
   /** The owner's words (`talk.say`). False when that id was said already: it is not said again. */
@@ -145,7 +151,10 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     const turn = this.turn;
     if (!turn || !isTurnCall(turn, turnId, secret)) return { ok: false, message: "This Talk turn is over." };
     const done = await this.o.tools.run(turn, name, args);
-    for (const row of done.rows) this.append(row);
+    for (const row of done.rows) {
+      if ((row.kind === "sent" || row.kind === "started") && row.session) this.feed.sentTo(row.session);
+      this.append(row);
+    }
     this.o.log.info(`Talk used ${name}`, { ok: !done.isError });
     return { ok: true, text: JSON.stringify(done.result), isError: done.isError };
   }
@@ -200,25 +209,16 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     }
   }
 
-  /** A session changed: a row when one the thread is about started to need the owner or finished. */
-  private observe(next: Session): void {
-    const previous = this.previous.get(next.id);
-    this.previous.set(next.id, next);
-    const kind = sessionEventKind(previous, next);
-    if (!kind) return;
-    this.checkDay();
-    if (!sessionsOf(this.thread.all()).has(next.id)) return;
-    this.append({ kind, text: "", session: next.id, title: headingOf(next) });
-  }
-
   private append(row: NewTalkEntry): void {
     const entry = this.thread.append(row);
+    if (entry.session && lastRowsBySession([entry]).size > 0) this.lastRows.set(entry.session, entry);
     this.emit("entry", entry);
   }
 
   /** A new day: a new thread, told to every client that watches. */
   private checkDay(): void {
     if (!this.thread.rollover()) return;
+    this.lastRows = lastRowsBySession(this.thread.all());
     const agent = this.agent();
     this.emit("thread", { type: "talk.thread", date: this.thread.date, entries: this.thread.entries(), busy: this.running, ...(agent ? { agent } : {}) });
   }

@@ -43,11 +43,14 @@ export type NewTalkEntry = Omit<TalkEntry, "id" | "at"> & { id?: string };
 
 export class TalkThread {
   private day: string;
-  private rows: TalkEntry[];
+  private rows: TalkEntry[] = [];
+  // The feed makes a day's file long: the ids and the last row number are kept, not scanned for on every row.
+  private ids = new Set<string>();
+  private lastNumber = 0;
 
   constructor(private readonly dir: string, private readonly now: () => Date = () => new Date()) {
     this.day = talkDate(now());
-    this.rows = this.load(this.day);
+    this.reset(this.load(this.day));
   }
 
   /** The day this thread is of. */
@@ -66,7 +69,7 @@ export class TalkThread {
   }
 
   has(id: string): boolean {
-    return this.rows.some((e) => e.id === id);
+    return this.ids.has(id);
   }
 
   /** Moves to a new day's thread when the calendar has turned. True when it did. */
@@ -74,7 +77,7 @@ export class TalkThread {
     const today = talkDate(this.now());
     if (today === this.day) return false;
     this.day = today;
-    this.rows = this.load(today);
+    this.reset(this.load(today));
     return true;
   }
 
@@ -82,14 +85,22 @@ export class TalkThread {
   append(row: NewTalkEntry): TalkEntry {
     const entry: TalkEntry = {
       ...row,
-      id: row.id ?? `t-${String(lastRowNumber(this.rows) + 1).padStart(4, "0")}`,
+      id: row.id ?? `t-${String(this.lastNumber + 1).padStart(4, "0")}`,
       at: this.now().toISOString(),
       text: row.text.length > TALK_TEXT_MAX ? `${row.text.slice(0, TALK_TEXT_MAX - 1)}…` : row.text,
     };
     this.ensureDir();
     appendFileSync(this.fileOf(this.day), `${JSON.stringify(entry)}\n`, { mode: 0o600 });
     this.rows.push(entry);
+    this.ids.add(entry.id);
+    this.lastNumber = Math.max(this.lastNumber, lastRowNumber([entry]));
     return entry;
+  }
+
+  private reset(rows: TalkEntry[]): void {
+    this.rows = rows;
+    this.ids = new Set(rows.map((e) => e.id));
+    this.lastNumber = lastRowNumber(rows);
   }
 
   private load(day: string): TalkEntry[] {

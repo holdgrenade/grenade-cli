@@ -391,6 +391,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         // Claude Code tells itself that a background task ended with a prompt of its own; the user asked nothing.
         if (!prompt.trimStart().startsWith("<task-notification>")) summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
+        talk?.noteAsked(id, prompt);
       },
       (id, path, event) => {
         // A resumed session names its copy from the first prompt on: remember it as Grenade's copy.
@@ -419,6 +420,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       onPrompt: (id, prompt) => {
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
+        talk?.noteAsked(id, prompt);
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
@@ -584,6 +586,15 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         }),
         registry,
+        // The feed (PROTOCOL.md "The feed"): every coding session's turns, from its own status and words.
+        feed: {
+          entriesOf: (id) => activity.entriesOf(id),
+          askingOf: (id) => {
+            const open = prompts.list().find((p) => p.sessionId === id);
+            return open ? promptText(open) : undefined;
+          },
+          hasActivity: (kind) => AGENTS.some((a) => a.kind === kind && "activity" in a && a.activity === true),
+        },
         agents: talkAgents,
         agentName: (kind) => AGENTS.find((a) => a.kind === kind)?.name ?? kind,
         run: opts.talk?.run ?? runTalkAgent,

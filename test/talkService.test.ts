@@ -8,7 +8,7 @@ import { DaemonFrame, type Session, type TalkEntry } from "@grenade/protocol";
 import { silentLogger } from "../src/log.js";
 import type { TalkAgentKind, TalkOutcome, TalkTurnSpec } from "../src/talk/talkAgents.js";
 import { ENV_SECRET, ENV_TURN } from "../src/talk/talkMcp.js";
-import { TalkService, answeringAgent, continuing, sessionEventKind, sessionsOf } from "../src/talk/talkService.js";
+import { TalkService, answeringAgent, continuing } from "../src/talk/talkService.js";
 import { TalkTools } from "../src/talk/talkTools.js";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
@@ -27,6 +27,9 @@ class FakeRegistry extends EventEmitter {
   sessions = new Map<string, Session>();
   list() {
     return [...this.sessions.values()];
+  }
+  get(id: string) {
+    return this.sessions.get(id);
   }
   update(s: Session) {
     this.sessions.set(s.id, s);
@@ -71,6 +74,7 @@ function setup(o: { agents?: TalkAgentKind[]; answer?: (t: Turn, svc: TalkServic
     settingsPath: join(home, "talk.json"),
     tools,
     registry,
+    feed: { entriesOf: () => [], askingOf: () => undefined, hasActivity: (k) => k !== "shell" },
     agents: o.agents ?? ["claude", "codex"],
     agentName: (k) => (k === "codex" ? "Codex" : "Claude Code"),
     async run(agent, spec, words, env) {
@@ -94,7 +98,7 @@ function setup(o: { agents?: TalkAgentKind[]; answer?: (t: Turn, svc: TalkServic
 }
 
 describe("talkService pure rules", () => {
-  it("chooses the agent, continues the day's conversation, and reads events as the push does", () => {
+  it("chooses the agent and continues the day's conversation", () => {
     expect(answeringAgent("codex", ["claude", "codex"])).toBe("codex");
     expect(answeringAgent("codex", ["claude"])).toBe("claude");
     expect(answeringAgent(undefined, [])).toBeUndefined();
@@ -102,12 +106,6 @@ describe("talkService pure rules", () => {
     expect(continuing(settings, "2026-10-05", "claude")).toBe("c1");
     expect(continuing(settings, "2026-10-06", "claude")).toBeUndefined();
     expect(continuing(settings, "2026-10-05", "codex")).toBeUndefined();
-    const working = session("gr-a", { status: "working" });
-    expect(sessionEventKind(working, session("gr-a", { status: "waiting", waitingFor: "done", statusSince: "2026-10-05T08:00:00.000Z" }))).toBe("finished");
-    expect(sessionEventKind(working, session("gr-a", { status: "waiting", waitingFor: "answer" }))).toBe("needsYou");
-    expect(sessionEventKind(working, session("gr-a", { status: "idle" }))).toBeNull();
-    const e = (kind: string, s?: string): TalkEntry => ({ id: kind, at: "2026-10-05T08:00:00.000Z", kind, text: "", ...(s ? { session: s, title: "T" } : {}) });
-    expect([...sessionsOf([e("sent", "gr-a"), e("started", "gr-b"), e("needsYou", "gr-c"), e("you")])]).toEqual(["gr-a", "gr-b"]);
   });
 });
 
@@ -216,7 +214,7 @@ describe("TalkService", () => {
     expect(turns[1]?.words).toContain("you answered: Done.");
   });
 
-  it("writes needsYou and finished for sessions the thread sent to, from their status", async () => {
+  it("writes no working row for a turn it sent, and a feed row for a session it never sent to", async () => {
     const { svc, registry, settled } = setup({
       async answer(t, s) {
         await s.tool(t.env[ENV_TURN], t.env[ENV_SECRET], "route_session", { intent: "relay", action: "prompt" });
@@ -224,17 +222,13 @@ describe("TalkService", () => {
         return { text: "Sent.", conversation: "c" };
       },
     });
-    registry.update(session("gr-other", { status: "waiting", waitingFor: "done" }));
+    registry.sessions.set("gr-other", session("gr-other", { title: "Other work" }));
     svc.say("a", "tell relay to go");
     await settled();
-    registry.update(session("gr-relay", { title: "Relay version bump", status: "working", statusSince: "2026-10-05T09:00:00.000Z" }));
-    registry.update(session("gr-relay", { title: "Relay version bump", status: "waiting", waitingFor: "answer", statusSince: "2026-10-05T09:01:00.000Z" }));
-    registry.update(session("gr-relay", { title: "Relay version bump", status: "waiting", waitingFor: "done", statusSince: "2026-10-05T09:02:00.000Z" }));
-    // The same waiting again is not a second row; a session the thread is not about is none.
-    registry.update(session("gr-relay", { title: "Relay version bump", status: "waiting", waitingFor: "done", statusSince: "2026-10-05T09:02:00.000Z", summary: "x" }));
-    registry.update(session("gr-other", { status: "waiting", waitingFor: "answer", statusSince: "2026-10-05T09:03:00.000Z" }));
-    expect(svc.frame().entries.map((e) => `${e.kind}${e.session ? `:${e.session}` : ""}`)).toEqual(["you", "sent:gr-relay", "it", "needsYou:gr-relay", "finished:gr-relay"]);
-    expect(svc.frame().entries.at(-1)).toMatchObject({ text: "", title: "Relay version bump" });
+    // The hook of the turn Talk sent, and one of a turn typed in another session.
+    svc.noteAsked("gr-relay", "go");
+    svc.noteAsked("gr-other", "Write the docs");
+    expect(svc.frame().entries.map((e) => `${e.kind}${e.session ? `:${e.session}` : ""}:${e.text}`)).toEqual(["you:tell relay to go", "sent:gr-relay:go", "it:Sent.", "working:gr-other:Write the docs"]);
     svc.stop();
   });
 });
