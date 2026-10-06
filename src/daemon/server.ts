@@ -85,6 +85,11 @@ import { SentInputs } from "./sentInputs.js";
 import { PlanLimits } from "../usage/planLimits.js";
 import { claudeStatusUsage, STATUS_LINE_PATH } from "../usage/claudeStatusLine.js";
 import { readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
+import { homedir } from "node:os";
+import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
+import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
+import { TalkService } from "../talk/talkService.js";
+import { TalkTools } from "../talk/talkTools.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -139,6 +144,13 @@ export interface DaemonOptions {
    * newer release itself, with the installer of that copy, unless `grenade update --auto off` (or `auto` here) says not.
    */
   updates?: { checkTap?: boolean; program?: string; restart?(installed: string): void; auto?: boolean };
+  /**
+   * Typed Talk (PROTOCOL.md "Talk by text"): where its day files and work folder are (default ~/.grenade/talk; with
+   * `tokensPath: null` and none given, this daemon answers no typed Talk), `talk.json`, the agents that can answer
+   * (default: those installed), how a turn runs (tests pass a fake) and the CLI whose `talk-mcp` the agent starts
+   * (default: the script this process runs).
+   */
+  talk?: { dir?: string; settingsPath?: string; agents?: TalkAgentKind[]; run?: TalkRun; cli?: string };
 }
 
 export interface RunningDaemon {
@@ -156,7 +168,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const e2eKey = loadOrCreateE2EKey(opts.e2eKeyPath ?? paths.e2eKey);
   // Mutated in place when the relay is turned on or off, so later pair replies and welcomes carry it.
   const publishedPath = opts.publishedPath ?? (opts.tokensPath === null ? undefined : paths.published);
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, agents: [...AGENTS] };
+  // Typed Talk: the agents installed here can answer it (PROTOCOL.md "Agents", `talk`).
+  const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
+  const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
+  const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -284,10 +300,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const marksPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "conversations.json") : paths.conversations;
   const marks = new ConversationMarks(log, marksPath);
   const held = () => heldConversations(registry.transcripts(), (id) => (registry.get(id)?.status ?? "gone") !== "gone");
-  const conversationIndex = new AllConversations([
-    new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }),
-    new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held }),
-  ]);
+  const talkWorkDir = talkDir ? join(talkDir, "work") : undefined;
+  const conversationIndex = new AllConversations(
+    [new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }), new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held })],
+    // Typed Talk's own conversations are the daemon's, not the owner's.
+    (cwd) => talkWorkDir !== undefined && (cwd === talkWorkDir || cwd.startsWith(`${talkWorkDir}/`)),
+  );
   // Switching a session's model (PROTOCOL.md "Models"). How it is done is the agent's own: Claude Code's picker.
   const switchingModel = new Set<string>();
   // The owner's keys for Talk and dictation, and the short-lived tokens clients get in their place.
@@ -544,6 +562,38 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   /** The prompts phones sent with an id, so one sent again after a dropped connection is typed once. */
   const sentInputs = new SentInputs();
 
+  // Typed Talk (PROTOCOL.md "Talk by text"): an agent on this computer with Grenade's tools, one turn at a time.
+  const talk = talkDir && talkWorkDir
+    ? new TalkService({
+        dir: talkDir,
+        workDir: talkWorkDir,
+        settingsPath: opts.talk?.settingsPath ?? paths.talkSettings,
+        tools: new TalkTools({
+          sessions: () => registry.list(),
+          screenLines: (id) => registry.screenOf(id)?.lines,
+          entriesOf: (id) => activity.entriesOf(id),
+          openPrompt: (id) => prompts.list().find((p) => p.sessionId === id),
+          agentName: (kind) => AGENTS.find((a) => a.kind === kind)?.name ?? kind,
+          hasActivity: (kind) => AGENTS.some((a) => a.kind === kind && "activity" in a && a.activity === true),
+          codingAgents: () => AGENTS.filter((a) => "activity" in a && a.activity === true).map((a) => a.kind),
+          conversationFolders: async () => (await conversationIndex.list(true)).map((c) => c.cwd),
+          home: homedir(),
+          create: (input) => registry.create(input),
+          type: (id, text) => registry.sendText(id, text, true),
+          now: () => Date.now(),
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        }),
+        registry,
+        agents: talkAgents,
+        agentName: (kind) => AGENTS.find((a) => a.kind === kind)?.name ?? kind,
+        run: opts.talk?.run ?? runTalkAgent,
+        mcp: { command: process.execPath, args: [opts.talk?.cli ?? process.argv[1] ?? join(import.meta.dirname, "..", "cli.js"), "talk-mcp"] },
+        controlPort,
+        log,
+        computer: computerWord(),
+      })
+    : undefined;
+
   /** One protocol connection, the same for a LAN socket and a relay pipe. */
   const makeConnection = (
     out: (frame: DaemonFrame) => void,
@@ -581,6 +631,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       ...(publisher ? { publish: publisher } : {}),
       limits: planLimits,
       conversations,
+      ...(talk ? { talk } : {}),
       openTerm(open) {
         const stream = new TermStream({
           ...open,
@@ -699,6 +750,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     },
     push,
     voice,
+    ...(talk ? { talk } : {}),
     ...(publisher ? { publish: publisher } : {}),
     terminal: {
       status: terminalStatus,
@@ -731,6 +783,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       poller.stop();
       relayLink?.stop();
       publisher?.stop();
+      talk?.stop();
       canvas.stop();
       push.stop();
       // Held hook requests would keep the HTTP server from closing.

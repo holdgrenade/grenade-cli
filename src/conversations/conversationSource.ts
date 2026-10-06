@@ -23,13 +23,14 @@ export interface ConversationSource {
 export const LEGACY_CONVERSATION_AGENT = "claude";
 
 export class AllConversations {
-  constructor(private readonly sources: readonly ConversationSource[]) {}
+  /** `hidden`: folders whose conversations are not listed (typed Talk's own work folder). */
+  constructor(private readonly sources: readonly ConversationSource[], private readonly hidden: (cwd: string) => boolean = () => false) {}
 
   /** Every source's conversations, newest first, at most CONVERSATIONS_MAX; `anyAgent: false` keeps the legacy agent's only. */
   async list(anyAgent: boolean): Promise<Conversation[]> {
     const sources = anyAgent ? this.sources : this.sources.filter((s) => s.agent === LEGACY_CONVERSATION_AGENT);
     const lists = await Promise.all(sources.map((s) => s.list()));
-    return lists.flat().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, CONVERSATIONS_MAX);
+    return lists.flat().filter((c) => !this.hidden(c.cwd)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, CONVERSATIONS_MAX);
   }
 
   async find(id: string): Promise<{ agent: AgentKind; path: string; cwd: string } | null> {

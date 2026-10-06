@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
+import { Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -76,6 +76,27 @@ class FakeActivity extends EventEmitter {
 }
 
 /** A daemon's voice keys: OpenAI takes any key but "bad", and a token is the key's first letters with a count. */
+/** Typed Talk as the daemon's TalkService answers it, without an agent: the frames are the protocol's fixtures. */
+class FakeTalk extends EventEmitter implements TalkPort {
+  said: string[] = [];
+  agent = "claude";
+  frame() {
+    return { type: "talk.thread" as const, date: "2026-10-05", entries: [], busy: false, agent: this.agent };
+  }
+  say(id: string, text: string) {
+    if (this.said.includes(id)) return false;
+    this.said.push(id);
+    this.emit("entry", { id, at: "2026-10-05T09:12:03.000Z", kind: "you", text });
+    return true;
+  }
+  setAgent(agent: string) {
+    if (agent !== "claude" && agent !== "codex") return false;
+    this.agent = agent;
+    this.emit("thread", this.frame());
+    return true;
+  }
+}
+
 class FakeVoice extends EventEmitter {
   keys = new Map<string, string>();
   minted = 0;
@@ -112,7 +133,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -138,6 +159,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.models ? { models: opts.models } : {}),
     ...(opts.voice ? { voice: opts.voice } : {}),
     ...(opts.canvas ? { canvas: opts.canvas } : {}),
+    ...(opts.talk ? { talk: opts.talk } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
@@ -280,7 +302,7 @@ describe("Connection", () => {
       async watch() { return { reply: listing, stop() {} }; },
     };
     const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [], async publishCanvas() { return []; }, async remove() { return []; } });
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, openTerm: () => term });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, talk: new FakeTalk(), openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
@@ -292,6 +314,43 @@ describe("Connection", () => {
       const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
       expect(errors, name).toEqual([]);
     }
+  });
+
+  it("passes typed Talk on to a client that asked for the thread, and refuses an agent that cannot answer", async () => {
+    const talk = new FakeTalk();
+    const { conn, out } = connect({ talk });
+    const other = connect({ talk });
+    await conn.handleMessage(fixture("client.hello.json"));
+    await other.conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    other.out.length = 0;
+    await conn.handleMessage(fixture("client.talk.thread.json"));
+    expect(out).toEqual([talk.frame()]);
+    // Words from anyone reach every client that watches; one that never asked hears nothing.
+    await other.conn.handleMessage(fixture("client.talk.say.json"));
+    expect(out[1]).toMatchObject({ type: "talk.entry", entry: { kind: "you", id: "6f1c2a9e-3b4d-4e5f-8a7b-1c2d3e4f5a6b" } });
+    expect(other.out).toEqual([]);
+    talk.emit("busy", true);
+    expect(out[2]).toEqual({ type: "talk.busy", busy: true });
+    // A choice of agent reaches the watchers through `thread`, and a sender that does not watch gets its answer.
+    await other.conn.handleMessage(fixture("client.talk.agent.json"));
+    expect(out[3]).toMatchObject({ type: "talk.thread", agent: "codex" });
+    expect(other.out).toEqual([{ type: "talk.thread", date: "2026-10-05", entries: [], busy: false, agent: "codex" }]);
+    await conn.handleMessage(JSON.stringify({ type: "talk.agent", agent: "shell" }));
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "bad_frame", ref: "talk.agent" });
+    // A closed connection hears nothing more.
+    conn.handleClose();
+    const before = out.length;
+    talk.emit("busy", false);
+    expect(out).toHaveLength(before);
+  });
+
+  it("answers the Talk frames with bad_frame when the daemon answers no typed Talk", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    for (const name of ["client.talk.thread.json", "client.talk.say.json", "client.talk.agent.json"]) await conn.handleMessage(fixture(name));
+    expect(out.map((f) => f.type === "error" && f.code === "bad_frame" && f.ref)).toEqual(["talk.thread", "talk.say", "talk.agent"]);
   });
 
   it("keeps a voice key and tells every client that asked; a refused key and a missing one are errors of their own", async () => {

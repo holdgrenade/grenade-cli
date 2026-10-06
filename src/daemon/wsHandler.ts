@@ -22,6 +22,7 @@ import { CanvasError, type CanvasReply } from "../canvas/canvasService.js";
 import { boardTooLarge } from "../canvas/boardListing.js";
 import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
 import { PublishError } from "../publish/publisher.js";
+import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -147,6 +148,21 @@ export interface PublishPort {
   off(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
 }
 
+/** Typed Talk, the day's thread answered by an agent on this computer (PROTOCOL.md "Talk by text"); `TalkService` in the daemon. */
+export interface TalkPort {
+  frame(): TalkThreadFrame;
+  /** The owner's words. False when that id was said already. */
+  say(id: string, text: string): boolean;
+  /** False when that agent cannot answer Talk here. */
+  setAgent(agent: string): boolean;
+  on(event: "entry", cb: (entry: TalkEntry) => void): unknown;
+  on(event: "busy", cb: (busy: boolean) => void): unknown;
+  on(event: "thread", cb: (frame: TalkThreadFrame) => void): unknown;
+  off(event: "entry", cb: (entry: TalkEntry) => void): unknown;
+  off(event: "busy", cb: (busy: boolean) => void): unknown;
+  off(event: "thread", cb: (frame: TalkThreadFrame) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -197,6 +213,8 @@ export interface ConnectionDeps {
   canvas?: CanvasPort;
   /** Canvases published to secret links. Absent means this daemon publishes none (no `publish: 1`) and answers their frames with `bad_frame`. */
   publish?: PublishPort;
+  /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
+  talk?: TalkPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -243,6 +261,11 @@ export class Connection {
   private watchesPublish = false;
   private readonly onPublished = (links: PublishedLink[]) => this.send({ type: "published", links });
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
+  /** This client sent `talk.thread`, so it hears of every new row, of the agent being busy and of a new day or agent. */
+  private watchesTalk = false;
+  private readonly onTalkEntry = (entry: TalkEntry) => this.send({ type: "talk.entry", entry });
+  private readonly onTalkBusy = (busy: boolean) => this.send({ type: "talk.busy", busy });
+  private readonly onTalkThread = (frame: TalkThreadFrame) => this.send(frame);
   private readonly onActivity = (f: ActivityFrame) => {
     if (!this.subscriptions.has(f.sessionId)) return;
     const entries = this.entriesFor(f.entries);
@@ -324,6 +347,7 @@ export class Connection {
       this.d.groups?.off("changed", this.onGroups);
       this.d.voice?.off("changed", this.onVoice);
       this.d.publish?.off("changed", this.onPublished);
+      this.stopWatchingTalk();
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -510,6 +534,10 @@ export class Connection {
       case "publish.canvas":
       case "publish.remove":
         return this.handlePublish(frame);
+      case "talk.thread":
+      case "talk.say":
+      case "talk.agent":
+        return this.handleTalk(frame);
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);
@@ -569,6 +597,36 @@ export class Connection {
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });
       }
     }
+  }
+
+  /** The typed Talk frames (PROTOCOL.md "Talk by text"). `talk.thread` makes this connection watch the thread. */
+  private handleTalk(frame: Extract<ClientFrame, { type: "talk.thread" | "talk.say" | "talk.agent" }>): void {
+    const talk = this.d.talk;
+    if (!talk) return this.fail("bad_frame", "this daemon answers no typed Talk", frame.type);
+    if (frame.type === "talk.thread") {
+      if (!this.watchesTalk) {
+        talk.on("entry", this.onTalkEntry);
+        talk.on("busy", this.onTalkBusy);
+        talk.on("thread", this.onTalkThread);
+        this.watchesTalk = true;
+      }
+      return this.send(talk.frame());
+    }
+    if (frame.type === "talk.say") {
+      talk.say(frame.id, frame.text);
+      return;
+    }
+    if (!talk.setAgent(frame.agent)) return this.fail("bad_frame", `${frame.agent} cannot answer Talk on this ${computerWord()}`, frame.type);
+    // Every connection that watches hears of it through `thread`; the sender gets its answer either way.
+    if (!this.watchesTalk) this.send(talk.frame());
+  }
+
+  private stopWatchingTalk(): void {
+    if (!this.watchesTalk) return;
+    this.d.talk?.off("entry", this.onTalkEntry);
+    this.d.talk?.off("busy", this.onTalkBusy);
+    this.d.talk?.off("thread", this.onTalkThread);
+    this.watchesTalk = false;
   }
 
   /** The publish frames (PROTOCOL.md "Publishing"): answered with every link and the request's `id`; a refusal is `bad_frame` with it. */

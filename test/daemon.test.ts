@@ -13,6 +13,8 @@ import { silentLogger } from "../src/log.js";
 import { accessHash } from "../src/relay/access.js";
 import { phoneStart, type SealedChannel } from "../src/relay/e2e.js";
 import type { Tmux } from "../src/tmux/tmux.js";
+import type { TalkRun } from "../src/talk/talkRunner.js";
+import { daemonToolCaller } from "../src/talk/talkMcp.js";
 
 const home = mkdtempSync(join(tmpdir(), "grenade-daemon-"));
 process.env["GRENADE_HOME"] = home;
@@ -60,7 +62,7 @@ afterEach(async () => {
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 let run = 0;
-async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?: Tmux; sessionsPath?: string; voiceFetch?: typeof fetch } = {}) {
+async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?: Tmux; sessionsPath?: string; voiceFetch?: typeof fetch; talkRun?: TalkRun } = {}) {
   const dir = join(home, `run-${++run}`);
   const relayPath = join(dir, "relay.json");
   const tokensPath = join(dir, "tokens.json");
@@ -79,6 +81,7 @@ async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?:
     attachmentsDir: join(dir, "attachments"),
     voiceKeysPath: join(dir, "voice-keys.json"),
     ...(opts.voiceFetch ? { voiceFetch: opts.voiceFetch } : {}),
+    talk: { dir: join(dir, "talk"), settingsPath: join(dir, "talk.json"), agents: ["claude"], ...(opts.talkRun ? { run: opts.talkRun } : {}) },
     ...(opts.allowPlainLan ? { allowPlainLan: true } : {}),
   });
   stops.push(() => d.stop());
@@ -488,5 +491,38 @@ describe("voice providers", () => {
     expect((await control("POST", "/voice/reload")).body.map((p) => (p as { key?: string }).key)).toEqual([undefined, undefined, undefined]);
     await until(() => voices(b).length === 3);
     expect(voices(b)[2]![0]).toEqual({ id: "openai", name: "OpenAI", uses: ["talk"] });
+  });
+});
+
+describe("typed Talk", () => {
+  it("runs a turn whose tools reach the daemon over loopback with the turn's secret, and only during the turn", async () => {
+    let leaked: Record<string, string> = {};
+    const answers: string[] = [];
+    const talkRun: TalkRun = async (_agent, _spec, _words, env) => {
+      leaked = env;
+      // What Grenade's MCP server does with the environment it is given.
+      const listed = await daemonToolCaller(env)("list_sessions", {});
+      answers.push(listed.text);
+      const forged = await daemonToolCaller({ ...env, GRENADE_TALK_SECRET: "nope" })("list_sessions", {});
+      answers.push(forged.text);
+      return { text: "Nothing to send to.", conversation: "c1" };
+    };
+    const { d, control } = await daemon({ talkRun });
+    expect(d.info.talk).toBe(1);
+    expect(d.info.agents.find((a) => a.kind === "claude")?.talk).toBe(true);
+    expect(d.info.agents.find((a) => a.kind === "codex")?.talk).toBeUndefined();
+    const said = await fetch(`http://127.0.0.1:${d.controlPort}/talk/say`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "anything running?" }) });
+    expect(said.status).toBe(200);
+    await until(() => answers.length === 2);
+    let thread: { entries: { kind: string; text: string }[]; busy: boolean } = { entries: [], busy: true };
+    for (let i = 0; i < 100 && (thread.busy || thread.entries.length < 2); i++) {
+      thread = (await control("GET", "/talk/thread")).body as unknown as typeof thread;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(JSON.parse(answers[0]!)).toMatchObject({ sessions: [], note: expect.stringContaining("data") });
+    expect(JSON.parse(answers[1]!)).toEqual({ error: "This Talk turn is over." });
+    expect(thread.entries.map((e) => `${e.kind}:${e.text}`)).toEqual(["you:anything running?", "it:Nothing to send to."]);
+    // The turn is over: its own secret no longer works.
+    expect(JSON.parse((await daemonToolCaller(leaked)("list_sessions", {})).text)).toEqual({ error: "This Talk turn is over." });
   });
 });

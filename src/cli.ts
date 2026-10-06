@@ -13,6 +13,7 @@ import { showPairing } from "./cli/pairCommand.js";
 import { registerPromptCommand } from "./cli/promptCommand.js";
 import { registerPushCommand } from "./cli/pushCommand.js";
 import { registerVoiceCommand } from "./cli/voiceCommand.js";
+import { registerTalkCommand } from "./cli/talkCommand.js";
 import { registerPublishCommand } from "./cli/publishCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
@@ -93,6 +94,7 @@ registerServiceCommand(program, { control, controlPort });
 registerSetupCommand(program, { control, controlPort });
 registerPushCommand(program, { control });
 registerVoiceCommand(program, { control });
+registerTalkCommand(program, { control, version: VERSION });
 registerPublishCommand(program, { control });
 registerPromptCommand(program, { control });
 registerUpdateCommand(program, { control });
@@ -304,7 +306,7 @@ interface DaemonStatus {
 }
 
 /** Commands after which no update line is printed: they say it themselves, or never return. */
-const NO_UPDATE_NOTICE = new Set(["daemon", "open", "update", "status"]);
+const NO_UPDATE_NOTICE = new Set(["daemon", "open", "update", "status", "talk-mcp"]);
 
 function routeName(route: "lan" | "relay"): string {
   return route === "lan" ? "Wi‑Fi" : "relay";

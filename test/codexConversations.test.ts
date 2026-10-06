@@ -109,6 +109,10 @@ describe("AllConversations", () => {
     expect((await all.list(true)).map((c) => c.id)).toEqual(["x1", "c1"]);
     expect((await all.list(false)).map((c) => c.id)).toEqual(["c1"]);
   });
+  it("leaves out the conversations of a hidden folder (typed Talk's own)", async () => {
+    const hidden = new AllConversations([source("claude", [row("c1", "claude", "2026-10-02T12:00:00.000Z"), { ...row("t1", "claude", "2026-10-02T14:00:00.000Z"), cwd: "/talk/work" }])], (cwd) => cwd === "/talk/work");
+    expect((await hidden.list(true)).map((c) => c.id)).toEqual(["c1"]);
+  });
   it("sends each id to the agent that has it", async () => {
     expect(await all.find("x1")).toEqual({ agent: "codex", path: "/codex/x1", cwd: "/w" });
     expect(await all.trashPaths("c1")).toEqual({ paths: ["/claude/c1"] });

@@ -29,10 +29,17 @@
  *   POST /prompts/test      { kind, session?, wait? } → { promptId, sessionId, sessionName, kind, phones }
  *                             (puts a test card on a session, PROTOCOL.md "Prompts"; `wait` is in seconds)
  *   GET  /prompts/test/:id  → PromptTestResult   (answers when the phone has, or the wait ran out)
+ *   GET  /talk/thread       → TalkThreadFrame   (today's typed Talk thread, PROTOCOL.md "Talk by text"; `grenade talk log`)
+ *   POST /talk/say          { text, id? } → { id, said }   (the owner's words, as a `talk.say`; `grenade talk`)
+ *   POST /talk/agent        { agent } → TalkThreadFrame | 400   (the agent that answers; `grenade talk agent`)
+ *   POST /talk/tool         { turn, secret, name, arguments } → { text, isError } | 403   (one call of Grenade's MCP server,
+ *                             `grenade talk-mcp`, for the running turn only)
  */
-import type { PublishedLink } from "@grenade/protocol";
+import type { PublishedLink, TalkThreadFrame } from "@grenade/protocol";
+import { randomUUID } from "node:crypto";
+import { isLoopback } from "./loopback.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { PromptKind, SessionCreateFrame, SessionGroupFrame, type DaemonInfo, type PromptFrame, type VoiceProviderInfo } from "@grenade/protocol";
+import { PromptKind, SessionCreateFrame, TALK_TEXT_MAX, SessionGroupFrame, type DaemonInfo, type PromptFrame, type VoiceProviderInfo } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import type { SessionRegistry } from "../sessions/registry.js";
 import type { RelayStatus } from "../relay/relayLink.js";
@@ -82,6 +89,13 @@ export interface ControlDeps {
     start(sessionId: string, kind: PromptKind, waitMs: number): PromptFrame;
     result(promptId: string): Promise<PromptTestResult> | undefined;
   };
+  /** Typed Talk (PROTOCOL.md "Talk by text"). Absent in tests that have none. */
+  talk?: {
+    frame(): TalkThreadFrame;
+    say(id: string, text: string): boolean;
+    setAgent(agent: string): boolean;
+    tool(turn: unknown, secret: unknown, name: string, args: Record<string, unknown>): Promise<{ ok: true; text: string; isError: boolean } | { ok: false; message: string }>;
+  };
   /** Inject a test activity entry. */
   activityTests?: {
     noteErrored(sessionId: string, message: string): void;
@@ -122,6 +136,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "POST" && url.pathname === "/push/test") return sendJson(res, 200, await d.push.test());
   if (method === "POST" && url.pathname === "/voice/reload") return sendJson(res, 200, d.voice?.reload() ?? []);
   if (method === "GET" && url.pathname === "/agents") return sendJson(res, 200, { agents: (await d.agents?.()) ?? [] });
+  if (url.pathname.startsWith("/talk/")) return talkRoute(d, req, res, method, url.pathname);
   if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   if (method === "POST" && url.pathname === "/activity/test") return injectActivityTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);
@@ -179,6 +194,35 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "DELETE" && device?.[1]) {
     const r = d.devices.unpair(decodeURIComponent(device[1]));
     return r ? sendJson(res, 200, { ok: true, ...r }) : sendJson(res, 404, { error: "unknown_device" });
+  }
+  sendJson(res, 404, { error: "not_found" });
+}
+
+/** The typed Talk routes: what `grenade talk` uses, and the MCP server's tool calls. */
+async function talkRoute(d: ControlDeps, req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<void> {
+  const talk = d.talk;
+  if (!talk) return sendJson(res, 404, { error: "not_found", message: "this daemon has no typed Talk" });
+  // Only processes on this computer: the control port binds to loopback, and the tool route says so twice.
+  if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
+  if (method === "GET" && path === "/talk/thread") return sendJson(res, 200, talk.frame());
+  const body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+  if (method === "POST" && path === "/talk/say") {
+    const text = typeof body["text"] === "string" ? body["text"].trim() : "";
+    if (!text || text.length > TALK_TEXT_MAX) return sendJson(res, 400, { error: "bad_request", message: `say something, at most ${TALK_TEXT_MAX} characters` });
+    const id = typeof body["id"] === "string" && body["id"] ? body["id"].slice(0, 64) : randomUUID();
+    return sendJson(res, 200, { id, said: talk.say(id, text) });
+  }
+  if (method === "POST" && path === "/talk/agent") {
+    const agent = typeof body["agent"] === "string" ? body["agent"] : "";
+    if (!talk.setAgent(agent)) return sendJson(res, 400, { error: "bad_request", message: `${agent || "that agent"} cannot answer Talk on this computer` });
+    return sendJson(res, 200, talk.frame());
+  }
+  if (method === "POST" && path === "/talk/tool") {
+    const name = typeof body["name"] === "string" ? body["name"] : "";
+    const args = typeof body["arguments"] === "object" && body["arguments"] !== null ? (body["arguments"] as Record<string, unknown>) : {};
+    const done = await talk.tool(body["turn"], body["secret"], name, args);
+    if (!done.ok) return sendJson(res, 403, { error: "forbidden", message: done.message });
+    return sendJson(res, 200, { text: done.text, isError: done.isError });
   }
   sendJson(res, 404, { error: "not_found" });
 }

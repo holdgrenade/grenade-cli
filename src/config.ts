@@ -29,6 +29,9 @@ export const paths = {
   conversations: join(GRENADE_DIR, "conversations.json"),
   voiceKeys: join(GRENADE_DIR, "voice-keys.json"),
   published: join(GRENADE_DIR, "published.json"),
+  // Typed Talk: the day files and the work folder agents run in, and which agent answers.
+  talk: join(GRENADE_DIR, "talk"),
+  talkSettings: join(GRENADE_DIR, "talk.json"),
   // Claude Code keeps its settings, transcripts and process files in CLAUDE_CONFIG_DIR when that is set.
   claudeDir: process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"),
   claudeSettings: join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "settings.json"),
