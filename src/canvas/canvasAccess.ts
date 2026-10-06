@@ -14,6 +14,16 @@ export function normalizeCwd(cwd: string, home: string): string | null {
   return posix.resolve(expanded);
 }
 
+/**
+ * The project a folder belongs to when it lies inside the project's `.grenade` (a session started in its canvas
+ * folder works on that project's canvas), else the folder itself. `/a/web/.grenade/canvas` → `/a/web`.
+ */
+export function projectOf(path: string): string {
+  const at = path.split("/").indexOf(".grenade");
+  if (at <= 1) return path;
+  return path.split("/").slice(0, at).join("/");
+}
+
 /** The longest folder every path starts with (whole names only), or null when they share nothing but `/`. */
 export function sharedFolder(paths: string[]): string | null {
   if (paths.length === 0) return null;
@@ -28,7 +38,8 @@ export function sharedFolder(paths: string[]): string | null {
 }
 
 /**
- * Every folder whose canvas may be served: each session's `cwd` (a `gone` one too), and for a group of several the
+ * Every folder whose canvas may be served: each session's `cwd` (a `gone` one too; for a `cwd` inside a project's
+ * `.grenade`, that project, `projectOf`), and for a group of several the
  * folder its members share (the Mac app's `Canvas.folder(for:)`; when they share only `/`, its first member's `cwd`,
  * which is in the set already).
  */
@@ -36,8 +47,11 @@ export function canvasCwds(sessions: Session[], home: string): Set<string> {
   const allowed = new Set<string>();
   const groups = new Map<string, string[]>();
   for (const s of sessions) {
-    const cwd = normalizeCwd(s.cwd, home);
-    if (!cwd) continue;
+    const own = normalizeCwd(s.cwd, home);
+    if (!own) continue;
+    allowed.add(own);
+    // A session inside a project's `.grenade` works on that project's canvas.
+    const cwd = projectOf(own);
     allowed.add(cwd);
     const key = s.group ?? s.id;
     groups.set(key, [...(groups.get(key) ?? []), cwd]);

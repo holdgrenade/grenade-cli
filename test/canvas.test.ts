@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computerWord } from "../src/platform/computer.js";
 import { CANVAS_BOARD_MAX_BYTES, CANVAS_BOARDS_MAX, type Session } from "@grenade/protocol";
-import { allowedCanvasCwd, canvasCwds, canvasFolderOf, normalizeCwd, sharedFolder } from "../src/canvas/canvasAccess.js";
+import { allowedCanvasCwd, canvasCwds, canvasFolderOf, normalizeCwd, projectOf, sharedFolder } from "../src/canvas/canvasAccess.js";
 import { boardsFrom, boardTooLarge, isBoardFile, listingKey } from "../src/canvas/boardListing.js";
 import { CanvasError, listCanvas, readBoard } from "../src/canvas/canvasFolder.js";
 import { CanvasWatcher, type Every } from "../src/canvas/canvasWatcher.js";
@@ -65,6 +65,20 @@ describe("which canvases are served", () => {
     // Climbing out of an allowed folder lands on one that is not.
     expect(allowedCanvasCwd("/Users/adam/notes/../../..", sessions, home)).toBeNull();
     expect(allowedCanvasCwd("/Users/adam/notes/../work/app/ios", sessions, home)).toBe("/Users/adam/work/app/ios");
+  });
+
+  it("a session started inside a project's .grenade works on that project's canvas", () => {
+    expect(projectOf("/Users/adam/web/.grenade/canvas")).toBe("/Users/adam/web");
+    expect(projectOf("/Users/adam/web/.grenade")).toBe("/Users/adam/web");
+    expect(projectOf("/Users/adam/web")).toBe("/Users/adam/web");
+    expect(projectOf("/.grenade/canvas")).toBe("/.grenade/canvas");
+    const inside = [session("gr-w", "/Users/adam/web/.grenade/canvas")];
+    expect(allowedCanvasCwd("/Users/adam/web", inside, home)).toBe("/Users/adam/web");
+    expect(allowedCanvasCwd("/Users/adam/web/.grenade/canvas", inside, home)).toBe("/Users/adam/web/.grenade/canvas");
+    expect(allowedCanvasCwd("/Users/adam", inside, home)).toBeNull();
+    // With a member in the project itself, the group still shares the project.
+    const mixed = [session("gr-a", "/Users/adam/web/app", "g"), session("gr-b", "/Users/adam/web/.grenade/canvas", "g")];
+    expect(allowedCanvasCwd("/Users/adam/web", mixed, home)).toBe("/Users/adam/web");
   });
 
   it("puts the canvas in .grenade/canvas", () => {
