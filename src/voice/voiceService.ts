@@ -30,7 +30,7 @@ export class VoiceService extends EventEmitter {
   constructor(private readonly o: VoiceServiceOptions) {
     super();
     this.providers = o.providers ?? VOICE_PROVIDERS;
-    this.keys = o.path ? loadVoiceKeys(o.path) : {};
+    this.keys = o.path ? this.known(loadVoiceKeys(o.path)) : {};
   }
 
   list(): VoiceProviderInfo[] {
@@ -75,7 +75,7 @@ export class VoiceService extends EventEmitter {
   /** `grenade voice` wrote voice-keys.json: read it again and tell the clients. */
   reload(): VoiceProviderInfo[] {
     if (this.o.path) {
-      const next = loadVoiceKeys(this.o.path);
+      const next = this.known(loadVoiceKeys(this.o.path));
       const changed = JSON.stringify(next) !== JSON.stringify(this.keys);
       this.keys = next;
       if (changed) this.emit("changed", this.frame());
@@ -87,6 +87,13 @@ export class VoiceService extends EventEmitter {
     this.keys = keys;
     if (this.o.path) saveVoiceKeys(this.o.path, keys);
     this.emit("changed", this.frame());
+  }
+
+  /** The keys of providers this daemon has. A key of one it no longer has (Wispr Flow's) is dropped from the file too. */
+  private known(keys: VoiceKeys): VoiceKeys {
+    const kept = Object.fromEntries(Object.entries(keys).filter(([id]) => this.providers.some((p) => p.id === id)));
+    if (this.o.path && Object.keys(kept).length !== Object.keys(keys).length) saveVoiceKeys(this.o.path, kept);
+    return kept;
   }
 
   private provider(id: string): VoiceProvider {

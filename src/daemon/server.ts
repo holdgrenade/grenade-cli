@@ -314,7 +314,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   );
   // Switching a session's model (PROTOCOL.md "Models"). How it is done is the agent's own: Claude Code's picker.
   const switchingModel = new Set<string>();
-  // The owner's keys for Talk and dictation, and the short-lived tokens clients get in their place.
+  // The owner's keys for Talk, and the short-lived tokens clients get in their place.
   const voice = new VoiceService({
     path: opts.voiceKeysPath ?? (opts.tokensPath === null ? undefined : paths.voiceKeys),
     daemonId: info.id,

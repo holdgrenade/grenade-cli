@@ -468,7 +468,7 @@ describe("voice providers", () => {
     const voices = (p: typeof a) => p.frames.flatMap((f) => (f.type === "voice" ? [f.providers] : []));
     b.send({ type: "voice" });
     await until(() => voices(b).length === 1);
-    expect(voices(b)[0]!.map((p) => [p.id, p.key])).toEqual([["openai", undefined], ["gemini", undefined], ["wispr-flow", undefined]]);
+    expect(voices(b)[0]!.map((p) => [p.id, p.key])).toEqual([["openai", undefined], ["gemini", undefined]]);
 
     a.send({ type: "voice.key", provider: "openai", key });
     await until(() => voices(a).length === 1 && voices(b).length === 2);
@@ -488,7 +488,7 @@ describe("voice providers", () => {
 
     // `grenade voice forget` writes the file and asks the daemon to read it again: both phones hear.
     writeFileSync(join(dir, "voice-keys.json"), "{}");
-    expect((await control("POST", "/voice/reload")).body.map((p) => (p as { key?: string }).key)).toEqual([undefined, undefined, undefined]);
+    expect((await control("POST", "/voice/reload")).body.map((p) => (p as { key?: string }).key)).toEqual([undefined, undefined]);
     await until(() => voices(b).length === 3);
     expect(voices(b)[2]![0]).toEqual({ id: "openai", name: "OpenAI", uses: ["talk"] });
   });

@@ -23,7 +23,7 @@ export interface VoiceCommandDeps {
 export function registerVoiceCommand(program: Command, d: VoiceCommandDeps): void {
   const voice = program
     .command("voice")
-    .description(`your API keys for Talk and dictation, kept on this ${computerWord()} and never on a phone`)
+    .description(`your API keys for Talk, kept on this ${computerWord()} and never on a phone`)
     .action(() => {
       for (const line of statusLines(VOICE_PROVIDERS, loadVoiceKeys(paths.voiceKeys))) console.log(line);
     });

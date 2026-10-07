@@ -13,7 +13,6 @@ import { cleanVoiceKey, maskVoiceKey, withoutKey } from "../src/voice/voiceKey.j
 import { loadVoiceKeys, saveVoiceKeys } from "../src/voice/voiceKeyStore.js";
 import { refusalWords, VoiceError, type TokenAsk } from "../src/voice/voiceProvider.js";
 import { VoiceService } from "../src/voice/voiceService.js";
-import { wisprFlow } from "../src/voice/wisprFlow.js";
 
 const now = new Date("2026-10-04T12:00:00.000Z");
 const ask = (use: string, model?: string): TokenAsk => ({ use, model, daemonId: "d_9f8e7d", now });
@@ -60,10 +59,11 @@ describe("a pasted key", () => {
 
 describe("the providers", () => {
   it("have ids of their own, and each a use", () => {
-    expect(VOICE_PROVIDERS.map((p) => p.id)).toEqual(["openai", "gemini", "wispr-flow"]);
+    expect(VOICE_PROVIDERS.map((p) => p.id)).toEqual(["openai", "gemini"]);
     expect(new Set(VOICE_PROVIDERS.map((p) => p.id)).size).toBe(VOICE_PROVIDERS.length);
     for (const p of VOICE_PROVIDERS) expect(p.uses.length, p.id).toBeGreaterThan(0);
-    expect(voiceProvider("wispr-flow")).toBe(wisprFlow);
+    expect(voiceProvider("gemini")).toBe(gemini);
+    expect(voiceProvider("wispr-flow")).toBeUndefined();
     expect(voiceProvider("nobody")).toBeUndefined();
     // What `voice` carries decodes, with and without a key.
     const service = new VoiceService({ daemonId: "d_1", log: recordingLogger().log });
@@ -91,17 +91,6 @@ describe("the providers", () => {
     expect(request.body).toEqual({ uses: 1, newSessionExpireTime: "2026-10-04T12:01:00.000Z", expireTime: "2026-10-04T12:30:00.000Z" });
     expect(gemini.readToken({ name: "auth_tokens/abc" }, ask("talk"))).toEqual({ token: "auth_tokens/abc", expiresAt: new Date("2026-10-04T12:01:00.000Z"), once: true });
     expect(gemini.readToken({}, ask("talk"))).toBeNull();
-  });
-
-  it("Wispr Flow: an access token for this daemon's id, good for sockets until it expires", () => {
-    expect(wisprFlow.tokenRequest("fl-1", ask("dictation"))).toEqual({
-      url: "https://platform-api.wisprflow.ai/api/v1/dash/generate_access_token",
-      headers: { Authorization: "Bearer fl-1" },
-      body: { client_id: "d_9f8e7d", duration_secs: 900 },
-    });
-    expect(wisprFlow.readToken({ access_token: "jwt", expires_in: 600 }, ask("dictation"))).toEqual({ token: "jwt", expiresAt: new Date("2026-10-04T12:10:00.000Z"), once: false });
-    expect(wisprFlow.readToken({ access_token: "jwt" }, ask("dictation"))?.expiresAt).toEqual(new Date("2026-10-04T12:15:00.000Z"));
-    expect(wisprFlow.readToken({ access_token: "" }, ask("dictation"))).toBeNull();
   });
 
   it("a refusal is read in the shapes providers use", () => {
@@ -135,7 +124,7 @@ describe("mintToken", () => {
   it("says who did not answer, who answered without words, and who sent no token", async () => {
     const down = (async () => { throw new Error(`connect failed with Authorization: Bearer ${KEY}`); }) as unknown as typeof fetch;
     expect(await mintToken(gemini, KEY, ask("talk"), { fetch: down }).catch((e: Error) => e.message)).toBe("Google did not answer.");
-    expect(await mintToken(wisprFlow, KEY, ask("dictation"), { fetch: fakeFetch(() => ({ status: 500, body: null })).fetch }).catch((e: Error) => e.message)).toBe("Wispr Flow answered 500.");
+    expect(await mintToken(gemini, KEY, ask("talk"), { fetch: fakeFetch(() => ({ status: 500, body: null })).fetch }).catch((e: Error) => e.message)).toBe("Google answered 500.");
     expect(await mintToken(openai, KEY, ask("talk"), { fetch: fakeFetch(() => ({ status: 200, body: {} })).fetch }).catch((e: Error) => e.message)).toBe("OpenAI sent no token.");
   });
 });
@@ -153,8 +142,8 @@ describe("voice-keys.json", () => {
     expect(statSync(open).mode & 0o777).toBe(0o600);
     writeFileSync(path, "not json");
     expect(loadVoiceKeys(path)).toEqual({});
-    writeFileSync(path, JSON.stringify({ openai: 7, gemini: "", "wispr-flow": "fl-1" }));
-    expect(loadVoiceKeys(path)).toEqual({ "wispr-flow": "fl-1" });
+    writeFileSync(path, JSON.stringify({ openai: 7, gemini: "", other: "o-1" }));
+    expect(loadVoiceKeys(path)).toEqual({ other: "o-1" });
   });
 });
 
@@ -171,7 +160,6 @@ describe("VoiceService", () => {
     expect(service.list()).toEqual([
       { id: "openai", name: "OpenAI", uses: ["talk"] },
       { id: "gemini", name: "Google", uses: ["talk"] },
-      { id: "wispr-flow", name: "Wispr Flow", uses: ["dictation"] },
     ]);
     expect(await service.setKey("openai", ` Bearer ${KEY} `)).toBe(true);
     // The check asks for no model: a key that may use one may use the others.
@@ -211,24 +199,36 @@ describe("VoiceService", () => {
     const heard: unknown[] = [];
     service.on("changed", (f) => heard.push(f));
     expect(await service.setKey("openai", null)).toBe(false);
-    saveVoiceKeys(path, { "wispr-flow": "fl-0123456789abcdef" });
-    expect(service.reload()[2]).toMatchObject({ id: "wispr-flow", key: "fl-…cdef" });
+    saveVoiceKeys(path, { gemini: "AIza0123456789abcdef" });
+    expect(service.reload()[1]).toMatchObject({ id: "gemini", key: "AIz…cdef" });
     expect(heard).toHaveLength(1);
     // Read again with nothing new: nobody is told.
     service.reload();
     expect(heard).toHaveLength(1);
-    expect(await service.setKey("wispr-flow", null)).toBe(true);
+    expect(await service.setKey("gemini", null)).toBe(true);
     expect(loadVoiceKeys(path)).toEqual({});
     expect(heard).toHaveLength(2);
+  });
+});
+
+describe("a provider that is gone", () => {
+  it("drops its kept key, from the file too (Wispr Flow's, after it closed its API)", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "grenade-voice-")), "voice-keys.json");
+    saveVoiceKeys(path, { openai: KEY, "wispr-flow": "fl-0123456789abcdef" });
+    const service = new VoiceService({ path, daemonId: "d_1", log: recordingLogger().log });
+    expect(service.list().map((p) => p.id)).toEqual(["openai", "gemini"]);
+    expect(loadVoiceKeys(path)).toEqual({ openai: KEY });
+    saveVoiceKeys(path, { openai: KEY, "wispr-flow": "fl-0123456789abcdef" });
+    service.reload();
+    expect(loadVoiceKeys(path)).toEqual({ openai: KEY });
   });
 });
 
 describe("grenade voice", () => {
   it("lists every provider with what it is for and whether a key is kept", () => {
     expect(statusLines(VOICE_PROVIDERS, { openai: KEY })).toEqual([
-      "openai      OpenAI · Talk · key sk-…ABCD",
-      "gemini      Google · Talk · no key",
-      "wispr-flow  Wispr Flow · dictation · no key",
+      "openai  OpenAI · Talk · key sk-…ABCD",
+      "gemini  Google · Talk · no key",
       "",
       "Keep a key with: grenade voice key <provider>",
     ]);

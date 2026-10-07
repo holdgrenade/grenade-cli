@@ -102,10 +102,10 @@ class FakeVoice extends EventEmitter {
   minted = 0;
   frame() {
     const provider = (id: string, name: string, use: string) => ({ id, name, uses: [use], ...(this.keys.has(id) ? { key: "sk-…ABCD" } : {}) });
-    return { type: "voice" as const, providers: [provider("openai", "OpenAI", "talk"), provider("wispr-flow", "Wispr Flow", "dictation")] };
+    return { type: "voice" as const, providers: [provider("openai", "OpenAI", "talk"), provider("a-later-one", "A later one", "dictation")] };
   }
   async setKey(provider: string, key: string | null) {
-    if (provider !== "openai" && provider !== "wispr-flow") throw new VoiceError("bad_frame", `no voice provider "${provider}"`);
+    if (provider !== "openai" && provider !== "a-later-one") throw new VoiceError("bad_frame", `no voice provider "${provider}"`);
     if (key === "bad") throw new VoiceError("provider_failed", "Incorrect API key provided.");
     if ((this.keys.get(provider) ?? null) === key) return false;
     if (key === null) this.keys.delete(provider);
@@ -364,7 +364,7 @@ describe("Connection", () => {
     // A client that never asked for `voice` still gets its answer, once; the other hears nothing.
     await conn.handleMessage(fixture("client.voice.key.json"));
     expect(out).toEqual([voice.frame()]);
-    expect(out[0]).toMatchObject({ providers: [{ id: "openai", key: "sk-…ABCD" }, { id: "wispr-flow" }] });
+    expect(out[0]).toMatchObject({ providers: [{ id: "openai", key: "sk-…ABCD" }, { id: "a-later-one" }] });
     expect(other.out).toEqual([]);
     // Once it asked, a change by anyone reaches it, and its own change is not sent twice.
     await other.conn.handleMessage(fixture("client.voice.json"));
@@ -372,7 +372,7 @@ describe("Connection", () => {
     expect(other.out).toHaveLength(2);
     await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "openai", key: null }));
     expect(other.out).toHaveLength(3);
-    await other.conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "wispr-flow", key: "fl-1" }));
+    await other.conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "a-later-one", key: "fl-1" }));
     expect(other.out).toHaveLength(4);
     // Forgetting a key that is not kept changes nothing and still answers.
     await other.conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "openai", key: null }));
@@ -398,10 +398,10 @@ describe("Connection", () => {
     await conn.handleMessage(fixture("client.voice.key.json"));
     await conn.handleMessage(fixture("client.voice.token.json"));
     expect(out[2]).toEqual({ type: "voice.token", id: "v_1", provider: "openai", use: "talk", token: "ek_1", expiresAt: "2026-10-04T12:01:00.000Z", once: true });
-    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "wispr-flow", key: "fl-1" }));
-    await conn.handleMessage(JSON.stringify({ type: "voice.token", id: "v_2", provider: "wispr-flow", use: "dictation" }));
+    await conn.handleMessage(JSON.stringify({ type: "voice.key", provider: "a-later-one", key: "fl-1" }));
+    await conn.handleMessage(JSON.stringify({ type: "voice.token", id: "v_2", provider: "a-later-one", use: "dictation" }));
     // A token that can be used again says nothing of `once`.
-    expect(out[4]).toEqual({ type: "voice.token", id: "v_2", provider: "wispr-flow", use: "dictation", token: "ek_2", expiresAt: "2026-10-04T12:01:00.000Z" });
+    expect(out[4]).toEqual({ type: "voice.token", id: "v_2", provider: "a-later-one", use: "dictation", token: "ek_2", expiresAt: "2026-10-04T12:01:00.000Z" });
   });
 
   it("a daemon with no voice keys answers their frames with a bad frame", async () => {
