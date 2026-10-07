@@ -3,7 +3,13 @@
  * each, and the `activity` frames that carry new ones to subscribed phones.
  */
 import { EventEmitter } from "node:events";
-import { ACTIVITY_KEEP, STOPPED_TEXT, activityText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
+import { ACTIVITY_KEEP, STOPPED_TEXT, activityText, typedPromptText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
+
+/**
+ * How many hook prompts may wait for the transcript's copy at once: prompts sent while the agent works each wait
+ * until Claude Code takes them into the turn.
+ */
+export const PENDING_KEEP = 8;
 
 /** The `text` of an `errored` entry when no message is available. */
 export const ERRORED_TEXT = "An error occurred.";
@@ -16,10 +22,11 @@ export interface ActivityEvents {
 interface Track {
   entries: ActivityEntry[];
   /**
-   * The prompt a `UserPromptSubmit` hook put in before the transcript recorded it. The transcript's copy of it is
-   * not sent again: the phone already shows the hook's entry, and showed it twice before this was so.
+   * The prompts `UserPromptSubmit` hooks put in before the transcript recorded them, oldest first. The transcript's
+   * copy of each is not sent again: the phone already shows the hook's entry, and showed it twice before this was so.
+   * Several wait when prompts are sent while the agent works.
    */
-  pending: ActivityEntry | null;
+  pending: ActivityEntry[];
   /** A `stopped` entry put in from the screen (`noteStopped`): the transcript's own, if it comes, is not sent again. */
   pendingStop: ActivityEntry | null;
 }
@@ -42,15 +49,14 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
       if (copy >= 0) entries = entries.filter((_, i) => i !== copy);
       if (entries.length === 0) return;
     }
-    const pending = t.pending;
-    const copy = pending ? entries.findIndex((e) => e.kind === "asked" && e.text === pending.text) : -1;
-    if (!pending || copy < 0) {
+    const copied = takeCopies(t, entries);
+    if (copied.length === 0) {
       t.entries = [...t.entries, ...entries].slice(-ACTIVITY_KEEP);
       this.emit("activity", { type: "activity", sessionId: id, entries });
       return;
     }
-    t.pending = null;
-    if (t.entries.at(-1) === pending && copy === 0) {
+    const lead = entries[0];
+    if (copied.length === 1 && t.entries.at(-1) === copied[0] && lead?.kind === "asked" && lead.text === copied[0]?.text) {
       // The usual case: the hook's entry is the newest one and the transcript's copy leads the batch, so the
       // hook's entry stays and only what follows the copy is new.
       const rest = entries.slice(1);
@@ -58,9 +64,10 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
       if (rest.length > 0) this.emit("activity", { type: "activity", sessionId: id, entries: rest });
       return;
     }
-    // The transcript has the prompt elsewhere (a read from the start after a restart, or lines the last read
-    // missed): take the transcript's order, and send it whole so the phone shows the same.
-    t.entries = [...t.entries.filter((e) => e !== pending), ...entries].slice(-ACTIVITY_KEEP);
+    // The transcript has a prompt elsewhere (a prompt sent while the agent worked, which it took into the turn later;
+    // a read from the start after a restart; lines the last read missed): take the transcript's order, and send it
+    // whole so the phone shows the same.
+    t.entries = [...t.entries.filter((e) => !copied.includes(e)), ...entries].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
   }
 
@@ -71,24 +78,24 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
    */
   replace(id: string, entries: ActivityEntry[]): void {
     const t = this.track(id);
-    const pending = t.pending;
-    const copy = pending ? entries.findIndex((e) => e.kind === "asked" && e.text === pending.text) : -1;
-    if (pending && copy >= 0) t.pending = null;
+    takeCopies(t, entries);
     t.pendingStop = null;
-    t.entries = (pending && copy < 0 ? [...entries, pending] : entries).slice(-ACTIVITY_KEEP);
+    t.entries = [...entries, ...t.pending].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
   }
 
   /** The prompt of a `UserPromptSubmit` hook: shown at once, before the transcript has it. */
   noteAsked(id: string, prompt: string, at: string): void {
-    const text = prompt.trim();
+    // Read as the transcript reads it (a pasted prompt without its tags), so its copy there is known as the same.
+    const text = typedPromptText(prompt);
     // A slash command, or something Claude Code wrote for the agent, is not the user talking.
-    if (!text || text.startsWith("/") || text.startsWith("<")) return;
+    if (!text || text.startsWith("/")) return;
     const entry: ActivityEntry = { kind: "asked", text: activityText(text), at };
     const t = this.track(id);
     // The same hook from two places (the launch flags and an older copy in settings.json) is one prompt.
-    if (t.pending && t.pending.text === entry.text && t.entries.at(-1) === t.pending) return;
-    t.pending = entry;
+    const last = t.entries.at(-1);
+    if (last && t.pending.includes(last) && last.text === entry.text) return;
+    t.pending = [...t.pending.filter((e) => t.entries.includes(e)), entry].slice(-PENDING_KEEP);
     t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
@@ -124,9 +131,24 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
   private track(id: string): Track {
     let t = this.tracks.get(id);
     if (!t) {
-      t = { entries: [], pending: null, pendingStop: null };
+      t = { entries: [], pending: [], pendingStop: null };
       this.tracks.set(id, t);
     }
     return t;
   }
+}
+
+/**
+ * The hook entries whose copies `entries` holds, each `asked` copy matched to the oldest waiting entry with its text;
+ * they wait no longer.
+ */
+function takeCopies(t: Track, entries: readonly ActivityEntry[]): ActivityEntry[] {
+  const copied: ActivityEntry[] = [];
+  for (const e of entries) {
+    if (e.kind !== "asked") continue;
+    const match = t.pending.find((p) => p.text === e.text && !copied.includes(p));
+    if (match) copied.push(match);
+  }
+  t.pending = t.pending.filter((p) => !copied.includes(p));
+  return copied;
 }

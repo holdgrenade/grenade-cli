@@ -39,6 +39,7 @@ describe("talkFeed rules", () => {
     expect(workingText("go", T0 - 5_000, T0)).toBeNull();
     expect(workingText("go", T0 - SENT_TURN_MS - 1, T0)).toBe("go");
     expect(workingText("   ", undefined, T0)).toBeNull();
+    expect(workingText('<pasted_content id="62cc">\nAdd topics\nfor the teams\n</pasted_content>', undefined, T0)).toBe("Add topics for the teams");
   });
 
   it("reads waiting as the push does: answer and stopped need the owner, done finished", () => {

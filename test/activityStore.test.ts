@@ -109,6 +109,61 @@ describe("ActivityStore", () => {
   });
 });
 
+/** What a client holds after these frames: a `full` one replaces, the others append (the apps' `ActivityLog`). */
+function shown(frames: ActivityFrame[]): string[] {
+  let held: ActivityEntry[] = [];
+  for (const f of frames) held = f.full ? f.entries : [...held, ...f.entries];
+  return held.map((e) => `${e.kind}:${e.text}`);
+}
+
+describe("prompts that are pasted or sent while the agent works", () => {
+  const pasted = '<pasted_content id="62cc">\nAdd topics\nfor the teams\n</pasted_content>';
+
+  it("shows a pasted prompt at once, without its tags, and its transcript copy is not shown again", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [said("Earlier.")]);
+    s.noteAsked("gr-a", pasted, at);
+    expect(frames.at(-1)?.entries).toEqual([asked("Add topics\nfor the teams")]);
+    // The transcript's copy, read by the protocol's rule, has the same text.
+    s.append("gr-a", [asked("Add topics\nfor the teams", "2026-09-30T14:02:11.000Z"), said("On it.")]);
+    expect(shown(frames)).toEqual(["said:Earlier.", "asked:Add topics\nfor the teams", "said:On it."]);
+    expect(s.entriesOf("gr-a").map((e) => e.text)).toEqual(["Earlier.", "Add topics\nfor the teams", "On it."]);
+  });
+
+  it("shows a prompt sent mid-turn once, where the transcript puts it", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [asked("fix it"), said("Looking.")]);
+    s.noteAsked("gr-a", "and the footer", at);
+    s.append("gr-a", [said("Found it.")]);
+    // Claude Code takes the prompt into the turn after the next tool call and writes it as a queued_command.
+    s.append("gr-a", [asked("and the footer"), said("Footer too.")]);
+    expect(shown(frames)).toEqual(["asked:fix it", "said:Looking.", "said:Found it.", "asked:and the footer", "said:Footer too."]);
+    expect(shown(frames)).toEqual(s.entriesOf("gr-a").map((e) => `${e.kind}:${e.text}`));
+  });
+
+  it("shows each of two prompts sent mid-turn once", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [asked("fix it")]);
+    s.noteAsked("gr-a", "one", at);
+    s.noteAsked("gr-a", pasted, at);
+    expect(shown(frames)).toEqual(["asked:fix it", "asked:one", "asked:Add topics\nfor the teams"]);
+    s.append("gr-a", [said("Working."), asked("one")]);
+    s.append("gr-a", [said("Still."), asked("Add topics\nfor the teams"), said("Both done.")]);
+    expect(shown(frames)).toEqual(["asked:fix it", "said:Working.", "asked:one", "said:Still.", "asked:Add topics\nfor the teams", "said:Both done."]);
+    expect(shown(frames)).toEqual(s.entriesOf("gr-a").map((e) => `${e.kind}:${e.text}`));
+  });
+
+  it("keeps a hook prompt the transcript has not written yet last when a resumed session switches to its copy", () => {
+    const { s, frames } = store();
+    s.noteAsked("gr-a", "one", at);
+    s.noteAsked("gr-a", "two", at);
+    s.replace("gr-a", [said("History."), asked("one")]);
+    expect(shown(frames)).toEqual(["said:History.", "asked:one", "asked:two"]);
+    s.append("gr-a", [asked("two"), said("Done.")]);
+    expect(shown(frames)).toEqual(["said:History.", "asked:one", "asked:two", "said:Done."]);
+  });
+});
+
 describe("a prompt hook that arrives twice", () => {
   it("is one asked entry, and a prompt typed again later is another", () => {
     const { s, frames } = store();

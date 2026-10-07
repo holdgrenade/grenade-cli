@@ -14,7 +14,7 @@
  * One row per real change: a status that flickers and comes back writes nothing, and a row that repeats the
  * session's last feed row is not written again.
  */
-import { TALK_FEED_TEXT_MAX, type ActivityEntry, type Session, type TalkEntry } from "@grenade/protocol";
+import { TALK_FEED_TEXT_MAX, typedPromptText, type ActivityEntry, type Session, type TalkEntry } from "@grenade/protocol";
 import { eventOf, startedWaiting } from "../push/pushPolicy.js";
 
 /** The feed's kinds. */
@@ -34,17 +34,20 @@ export function feedText(text: string): string {
   return line.length > TALK_FEED_TEXT_MAX ? `${line.slice(0, TALK_FEED_TEXT_MAX - 1)}…` : line;
 }
 
-/** Whether a hook's prompt is the owner's words, worth a `working` row: not a slash command, not text the agent wrote itself. */
+/**
+ * Whether a hook's prompt is the owner's words, worth a `working` row: not a slash command, not text the agent wrote
+ * itself. A pasted prompt (`<pasted_content …>`, what a prompt with a line break becomes) is the owner's.
+ */
 export function isOwnersPrompt(prompt: string): boolean {
-  const t = prompt.trimStart();
-  return t.length > 0 && !t.startsWith("/") && !t.startsWith("<");
+  const t = typedPromptText(prompt);
+  return t !== null && !t.startsWith("/");
 }
 
 /** The `working` row's text for a turn's prompt, or null when it makes none. */
 export function workingText(prompt: string, lastSentAt: number | undefined, now: number): string | null {
   if (!isOwnersPrompt(prompt)) return null;
   if (lastSentAt !== undefined && now - lastSentAt >= 0 && now - lastSentAt < SENT_TURN_MS) return null;
-  const text = feedText(prompt);
+  const text = feedText(typedPromptText(prompt) ?? "");
   return text || null;
 }
 
