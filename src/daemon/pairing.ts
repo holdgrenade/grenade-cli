@@ -51,6 +51,13 @@ export class PairingCodes {
     return "too_many_attempts";
   }
 
+  /** Throw the live code and secret away: a strike paused pairing (PROTOCOL.md "Pausing after wrong codes"). */
+  void(): void {
+    if (!this.code) return;
+    this.code = null;
+    this.changed();
+  }
+
   /** The secret a phone can still pair with, for the relay's access list. Null once it was used, voided or expired. */
   liveSecret(): string | null {
     const c = this.code;

@@ -236,19 +236,27 @@ describe("pairing on the local network", () => {
     ]);
   });
 
-  it("voids the offer after five wrong tries and closes the connection", async () => {
+  it("voids the offer after five wrong tries, closes the connection and pauses pairing", async () => {
     const { d, mint, control } = await daemon();
     const { offer } = await mint();
     const p = await lanPhone(offer, d.port);
+    const before = Date.now();
     for (let i = 0; i < 5; i++) p.send({ type: "pair", protocol: 1, secret: "x".repeat(22), client });
     await until(() => p.closed() !== null);
     expect(p.frames.map((f) => (f.type === "error" ? f.code : f.type))).toEqual(["invalid_code", "invalid_code", "invalid_code", "invalid_code", "too_many_attempts"]);
-    expect(await control("GET", "/pair-code")).toEqual({ state: "expired" });
+    const strike = p.frames[4] as { pausedUntil?: string };
+    const until1 = Date.parse(strike.pausedUntil ?? "");
+    expect(until1 - before).toBeGreaterThanOrEqual(59_000);
+    expect(until1 - before).toBeLessThanOrEqual(61_000);
+    expect(await control("GET", "/pair-code")).toMatchObject({ state: "paused" });
+    // No new code while paused, and nothing ends it early.
+    const refused = await fetch(`http://127.0.0.1:${d.controlPort}/pair-code`, { method: "POST" });
+    expect(refused.status).toBe(409);
 
     const late = await lanPhone(offer, d.port);
     late.send({ type: "pair", protocol: 1, secret: offer.secret, client });
     await until(() => late.frames.length >= 1);
-    expect(late.frames[0]).toMatchObject({ type: "error", code: "too_many_attempts" });
+    expect(late.frames[0]).toMatchObject({ type: "error", code: "too_many_attempts", pausedUntil: strike.pausedUntil });
   });
 
   it("refuses to pair outside the encrypted channel, and does not count it as a try", async () => {

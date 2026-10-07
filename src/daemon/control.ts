@@ -46,6 +46,7 @@ import type { RelayStatus } from "../relay/relayLink.js";
 import type { Device } from "./devices.js";
 import type { PairingCodes } from "./pairing.js";
 import type { PairingState } from "../pairing/pairingWatch.js";
+import type { PairingPause } from "./pairingPause.js";
 import type { PushStatus, TestPushResult } from "../push/pusher.js";
 import type { UpdateStatus } from "../update/versions.js";
 import type { TerminalStatus } from "../terminal/mirror.js";
@@ -61,6 +62,8 @@ export interface ControlDeps {
   /** The pairing offer's URL for a freshly minted secret. */
   offerUrl(secret: string): string;
   pairing: { minted(expiresAt: number): void; state(): PairingState };
+  /** PROTOCOL.md "Pausing after wrong codes": no code is made while paused. */
+  pause: Pick<PairingPause, "pausedUntil" | "status">;
   devices: {
     list(): Device[];
     unpair(id: string): { closed: number } | null;
@@ -117,7 +120,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = req.method ?? "GET";
   if (method === "GET" && url.pathname === "/status") {
-    return sendJson(res, 200, { ...d.daemon, uptimeMs: Date.now() - d.startedAt, sessions: d.registry.list().length, relayLink: d.relay.status(), update: d.updates.current() });
+    return sendJson(res, 200, { ...d.daemon, uptimeMs: Date.now() - d.startedAt, sessions: d.registry.list().length, relayLink: d.relay.status(), update: d.updates.current(), pairingPause: d.pause.status() });
   }
   if (method === "GET" && url.pathname === "/update") return sendJson(res, 200, d.updates.current());
   if (method === "POST" && url.pathname === "/update/check") return sendJson(res, 200, await d.updates.checkTap());
@@ -173,11 +176,16 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     return sendJson(res, 200, { ok: true });
   }
   if (method === "POST" && url.pathname === "/pair-code") {
+    const pausedUntil = d.pause.pausedUntil();
+    if (pausedUntil !== null) return sendJson(res, 409, { error: "paused", pausedUntil, message: "pairing is paused after too many wrong codes" });
     const minted = d.codes.mint();
     d.pairing.minted(minted.expiresAt);
     return sendJson(res, 200, { ...minted, typed: d.typedCode(minted.code), offer: d.offerUrl(minted.secret) });
   }
-  if (method === "GET" && url.pathname === "/pair-code") return sendJson(res, 200, d.pairing.state());
+  if (method === "GET" && url.pathname === "/pair-code") {
+    const pausedUntil = d.pause.pausedUntil();
+    return sendJson(res, 200, pausedUntil === null ? d.pairing.state() : { state: "paused", pausedUntil });
+  }
   if (method === "GET" && url.pathname === "/devices") return sendJson(res, 200, d.devices.list());
   if (method === "DELETE" && url.pathname === "/devices") return sendJson(res, 200, d.devices.unpairAll());
   if (method === "GET" && url.pathname === "/published") return sendJson(res, 200, d.publish?.list() ?? []);

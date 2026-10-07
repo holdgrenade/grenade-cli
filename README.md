@@ -58,6 +58,7 @@ grenade daemon           # or run it in the foreground yourself
 grenade new grenade --cwd ~/projects/grenade --agent claude
 grenade open grenade     # attach your terminal to it (Ctrl-b d to detach)
 grenade pair             # QR code for the phone, and a code to type (6 digits, then 4 that let the phone check it is talking to this Mac)
+                         # every 5th wrong code pauses pairing: 1 minute, then 10, then an hour, then a day; nothing ends a pause early
 grenade devices          # the phones paired with this Mac
 grenade unpair <phone>   # end a phone's pairing at once (or: grenade unpair --all)
 grenade ls

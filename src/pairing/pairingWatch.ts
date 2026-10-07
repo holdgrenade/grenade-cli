@@ -8,7 +8,9 @@ export type PairingState =
   | { state: "none" }
   | { state: "waiting"; expiresAt: number }
   | { state: "expired" }
-  | { state: "paired"; phone: string; platform: ClientInfo["platform"]; route: "lan" | "relay" };
+  | { state: "paired"; phone: string; platform: ClientInfo["platform"]; route: "lan" | "relay" }
+  /** Only from `GET /pair-code`, never held here: wrong codes paused pairing until then (epoch ms). */
+  | { state: "paused"; pausedUntil: number };
 
 export class PairingWatch {
   private current: PairingState = { state: "none" };

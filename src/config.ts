@@ -14,6 +14,7 @@ export const GRENADE_DIR = process.env["GRENADE_HOME"] ?? join(homedir(), ".gren
 export const paths = {
   dir: GRENADE_DIR,
   tokens: join(GRENADE_DIR, "tokens.json"),
+  pairingPause: join(GRENADE_DIR, "pairing-pause.json"),
   sessions: join(GRENADE_DIR, "sessions.json"),
   groups: join(GRENADE_DIR, "groups.json"),
   daemonId: join(GRENADE_DIR, "daemon-id"),

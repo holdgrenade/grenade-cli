@@ -58,6 +58,7 @@ import { closePromptsByHook, handlePromptHook } from "./promptHook.js";
 import { Connection, type ConversationsPort, type ModelsPort, type PairVerdict } from "./wsHandler.js";
 import { offerUrlFor } from "../pairing/offer.js";
 import { PairingWatch } from "../pairing/pairingWatch.js";
+import { PairingPause, pauseWords, type PairRoute } from "./pairingPause.js";
 import { createAttachmentStore } from "../attachments/attachmentStore.js";
 import { accessHash } from "../relay/access.js";
 import { loadOrCreateE2EKey } from "../relay/e2eKey.js";
@@ -99,6 +100,8 @@ export interface DaemonOptions {
   log?: Logger;
   tmux?: Tmux;
   tokensPath?: string | null;
+  /** Where the pairing pause keeps its count (PROTOCOL.md "Pausing after wrong codes"); none when `tokensPath` is null. */
+  pairingPausePath?: string;
   sessionsPath?: string | null;
   /** Claude Code's folder, where past conversations are read from (PROTOCOL.md "Conversations"). Default: paths.claudeDir. */
   claudeDir?: string;
@@ -185,6 +188,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
   const codes = new PairingCodes();
   const pairing = new PairingWatch();
+  // Beside tokens.json, so a test daemon with its own tokens keeps its own count.
+  const pausePath = opts.tokensPath === null ? undefined : (opts.pairingPausePath ?? (opts.tokensPath ? join(dirname(opts.tokensPath), "pairing-pause.json") : paths.pairingPause));
+  const pause = new PairingPause(pausePath);
   const registry = new SessionRegistry({
     tmux,
     log,
@@ -466,9 +472,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
     const body = PairRequest.safeParse(json);
     if (!body.success) return sendJson(res, 400, { error: "bad_request" });
-    const verdict = codes.verify(body.data.code);
-    if (verdict === "too_many_attempts") return sendJson(res, 429, { error: verdict });
-    if (verdict === "invalid_code") return sendJson(res, 400, { error: verdict });
+    const verdict = checkPair(body.data.code, "lan");
+    if (!verdict.ok) {
+      const pausedUntil = verdict.pausedUntil === undefined ? {} : { pausedUntil: new Date(verdict.pausedUntil).toISOString() };
+      return sendJson(res, verdict.code === "too_many_attempts" ? 429 : 400, { error: verdict.code, ...pausedUntil });
+    }
     const token = tokens.issue(body.data.client);
     pairing.paired(body.data.client, "lan");
     log.info(`Paired a new phone: ${body.data.client.name}`, { platform: body.data.client.platform });
@@ -477,13 +485,40 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   /** `pair` inside an encrypted channel, with the typed code or a pairing offer's secret. */
   function pairPhone(credential: string, client: ClientInfo, route: Route): PairVerdict {
-    const verdict = codes.verify(credential);
-    if (verdict === "too_many_attempts") pairing.voided();
-    if (verdict !== "ok") return { ok: false, code: verdict };
+    const verdict = checkPair(credential, route);
+    if (!verdict.ok) return verdict;
     const token = tokens.issue(client, { sealed: true });
     pairing.paired(client, route);
     log.info(`Paired a new phone: ${client.name}`, { platform: client.platform, route });
     return { ok: true, token };
+  }
+
+  /**
+   * One pairing try, from either route (PROTOCOL.md "Pausing after wrong codes"): refused while paused, uncounted;
+   * a wrong try while a code is live counts, and every fifth pauses pairing and throws the code away.
+   */
+  function checkPair(credential: string, route: PairRoute): { ok: true } | (PairVerdict & { ok: false }) {
+    const paused = pause.pausedUntil();
+    if (paused !== null) return { ok: false, code: "too_many_attempts", pausedUntil: paused, message: pausedSentence(paused) };
+    const live = codes.liveSecret() !== null;
+    const verdict = codes.verify(credential);
+    if (verdict === "ok") {
+      pause.succeeded();
+      return { ok: true };
+    }
+    const strike = live ? pause.wrong(route) : null;
+    if (strike) {
+      codes.void();
+      pairing.voided();
+      log.warn(`Pairing paused for ${pauseWords(strike.pausedUntil - strike.at)} after ${strike.tries} wrong codes`, { route, strike: strike.strike });
+      return { ok: false, code: "too_many_attempts", pausedUntil: strike.pausedUntil, message: pausedSentence(strike.pausedUntil) };
+    }
+    if (verdict === "too_many_attempts") pairing.voided();
+    return { ok: false, code: verdict };
+  }
+
+  function pausedSentence(until: number): string {
+    return `${info.name} has paused pairing after too many wrong codes. Try again in ${pauseWords(Math.max(until - Date.now(), 60_000))}, with a new code.`;
   }
 
   /** While a pairing offer is live the relay admits the phone that scanned it (PROTOCOL.md "Pairing offer (QR code)"). */
@@ -742,6 +777,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     typedCode: (code) => typedCode(code, e2eKey.publicKey),
     offerUrl: (secret) => offerUrlFor(info, secret, localIpv4(networkInterfaces()), port),
     pairing,
+    pause,
     devices,
     daemon: info,
     startedAt: Date.now(),

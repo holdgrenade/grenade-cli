@@ -35,7 +35,7 @@ export const PLAIN_REFUSED = `This ${computerWord()} only accepts encrypted conn
 export const PAIR_NEEDS_ENCRYPTION = "Pairing needs the encrypted connection. Update Grenade on your phone.";
 
 /** What became of a `pair`: a token for the phone, or why not. */
-export type PairVerdict = { ok: true; token: string } | { ok: false; code: "invalid_code" | "too_many_attempts" };
+export type PairVerdict = { ok: true; token: string } | { ok: false; code: "invalid_code" | "too_many_attempts"; pausedUntil?: number; message?: string };
 
 /** The slice of SessionRegistry a connection needs. Tests pass a fake. */
 export interface RegistryPort {
@@ -362,6 +362,11 @@ export class Connection {
     if (!this.d.sealed) return this.fail("unsupported_protocol", PAIR_NEEDS_ENCRYPTION, "pair");
     const verdict = this.d.pair?.(frame.secret ?? frame.code ?? "", frame.client, this.d.route) ?? { ok: false, code: "invalid_code" };
     if (!verdict.ok) {
+      if (verdict.pausedUntil !== undefined) {
+        const pausedUntil = new Date(verdict.pausedUntil).toISOString();
+        this.send({ type: "error", code: "too_many_attempts", message: verdict.message ?? "pairing is paused after too many wrong codes", ref: "pair", pausedUntil });
+        return this.d.close(CLOSE_UNAUTHORIZED, "too_many_attempts");
+      }
       const message = verdict.code === "invalid_code" ? "that code is wrong or has expired; run `grenade pair` again" : "too many tries; run `grenade pair` for a new code";
       return this.fail(verdict.code, message, "pair", verdict.code === "too_many_attempts");
     }

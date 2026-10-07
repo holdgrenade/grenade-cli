@@ -5,6 +5,7 @@ import { spacedCode } from "../daemon/pairCheck.js";
 import { pairScreen } from "../pairing/pairScreen.js";
 import type { RelayStatus } from "../relay/relayLink.js";
 import type { Control } from "./controlClient.js";
+import { pausedLines } from "../pairing/pausedLines.js";
 
 interface PairCode {
   code: string;
@@ -18,7 +19,12 @@ const POLL_MS = 1000;
 
 /** Returns true when a phone paired, false when the code ran out. With `wait: false` it returns true right after printing. */
 export async function showPairing(control: Control, o: { wait: boolean }): Promise<boolean> {
-  const status = await control<{ relayLink: RelayStatus }>("GET", "/status");
+  const status = await control<{ relayLink: RelayStatus; pairingPause?: { lastStrike: { at: number; route: "lan" | "relay" } | null } }>("GET", "/status");
+  const before = await control<PairingState>("GET", "/pair-code");
+  if (before.state === "paused") {
+    console.log(pausedLines(before.pausedUntil, Date.now(), status.pairingPause?.lastStrike ?? null).join("\n"));
+    return false;
+  }
   const minted = await control<PairCode>("POST", "/pair-code");
   if (!minted.offer) {
     console.log(`\n  Pairing code:  ${spacedCode(minted.typed ?? minted.code)}   (same Wi‑Fi only, runs out in 2 minutes)`);
@@ -43,6 +49,10 @@ export async function showPairing(control: Control, o: { wait: boolean }): Promi
     if (s.state === "paired") {
       console.log(`\n  Paired with ${s.phone} ${s.route === "relay" ? "through the relay" : "on the Wi‑Fi"}. See your phones with: grenade devices\n`);
       return true;
+    }
+    if (s.state === "paused") {
+      console.log(pausedLines(s.pausedUntil, Date.now(), null).join("\n"));
+      return false;
     }
     if (s.state !== "waiting") {
       console.log("\n  The code ran out before a phone paired. Run it again: grenade pair\n");
