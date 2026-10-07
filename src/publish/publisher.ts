@@ -8,6 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PUBLISHED_LINKS_MAX, type CanvasBoard, type PublishedLink, type PublishExpiry, type PublishScope, type ShareManifest } from "@grenade/protocol";
 import type { CanvasListing } from "../canvas/canvasFolder.js";
+import type { CanvasPick } from "../canvas/canvasService.js";
 import type { Logger } from "../log.js";
 import { boardsInScope, isExpired, linksOf, newSecrets, referencedAssets, titleOf, tokenForLog, withExpiry, type PublishRecord } from "./publishPlan.js";
 import type { AssetFile } from "./publishFolder.js";
@@ -26,8 +27,10 @@ export interface PublisherDeps {
   /** published.json. */
   path: string;
   client: ShareClient;
-  /** The canvas folder of `cwd`; throws (a `CanvasError`) for a folder no session works in. */
-  folderOf(cwd: string): string;
+  /** The canvas folder a pick names; throws (a `CanvasError`) for one that is not served. */
+  folderOf(pick: CanvasPick): string;
+  /** What a group's canvas is called now (`canvasNameOf`), for a link's title. */
+  nameOf(folder: string, canvas: string): Promise<string>;
   listCanvas(folder: string): Promise<CanvasListing>;
   watchCanvas(folder: string, current: CanvasListing, onChange: () => void): () => void;
   readBoard(folder: string, file: string): Promise<{ html: string }>;
@@ -91,15 +94,22 @@ export class Publisher extends EventEmitter {
     for (const r of this.records) await this.follow(r.token);
   }
 
-  /** Publishes the canvas of `cwd`, or changes its link's scope or expiry; `newLink` gives it a new address. */
-  async publishCanvas(cwd: string, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean): Promise<PublishedLink[]> {
+  /**
+   * Publishes a canvas, or changes its link's scope or expiry; `newLink` gives it a new address; `token` points that
+   * link at this canvas instead of its own (a canvas moved to another group keeps its address).
+   */
+  async publishCanvas(pick: CanvasPick, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean, moveToken?: string): Promise<PublishedLink[]> {
     let folder: string;
     try {
-      folder = this.d.folderOf(cwd);
+      folder = this.d.folderOf(pick);
     } catch (e) {
       throw new PublishError(e instanceof Error ? e.message : String(e));
     }
+    const { cwd } = pick;
+    const which = pick.group !== undefined && pick.canvas !== undefined ? { group: pick.group, canvas: pick.canvas } : {};
+    const title = pick.canvas !== undefined ? await this.d.nameOf(folder, pick.canvas) : titleOf(cwd);
     const now = this.now();
+    if (moveToken !== undefined) return this.repoint(moveToken, { cwd, folder, title, ...which }, scope, expiry, newLink === true, now);
     const existing = this.records.find((r) => r.folder === folder);
     if (existing && !newLink) {
       let next: PublishRecord = { ...existing, scope };
@@ -117,13 +127,40 @@ export class Publisher extends EventEmitter {
     const { token, key } = newSecrets(this.random);
     const at = now.toISOString();
     const record = withExpiry(
-      { token, key, kind: "canvas", cwd, folder, title: titleOf(cwd), scope, expiry: "never", created: at, updated: at, boards: 0, state: "uploading" },
+      { token, key, kind: "canvas", cwd, folder, ...which, title, scope, expiry: "never", created: at, updated: at, boards: 0, state: "uploading" },
       expiry ?? existing?.expiry ?? "never",
       now,
     );
     this.records.push(record);
     this.save();
     this.d.log.info("Published a canvas", { folder, link: tokenForLog(token), scope });
+    await this.follow(token);
+    this.schedule(token, 0);
+    this.changed();
+    return this.list();
+  }
+
+  /** Points the link `token` at another canvas (one that moved), keeping its address; uploads from there at once. */
+  private async repoint(
+    token: string,
+    to: { cwd: string; folder: string; title: string; group?: string; canvas?: string },
+    scope: PublishScope,
+    expiry: PublishExpiry | undefined,
+    newLink: boolean,
+    now: Date,
+  ): Promise<PublishedLink[]> {
+    if (newLink) throw new PublishError("A link is either moved or made new, not both.");
+    const record = this.records.find((r) => r.token === token);
+    if (!record) throw new PublishError("That link is not one of this computer's.");
+    if (this.records.some((r) => r.token !== token && r.folder === to.folder)) throw new PublishError("That canvas has a link of its own already.");
+    const { group: _g, canvas: _c, ...rest } = record;
+    let next: PublishRecord = { ...rest, ...to, scope };
+    if (expiry !== undefined && (expiry !== record.expiry || isExpired(record, now))) next = withExpiry(next, expiry, now);
+    if (next.state === "expired" && !isExpired(next, now)) next = { ...next, state: "uploading" };
+    this.unfollow(token);
+    this.replace(next);
+    this.save();
+    this.d.log.info("Moved a published canvas", { folder: to.folder, link: tokenForLog(token) });
     await this.follow(token);
     this.schedule(token, 0);
     this.changed();

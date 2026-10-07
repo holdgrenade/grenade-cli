@@ -73,7 +73,7 @@ import { startPush } from "../push/startPush.js";
 import { VoiceService } from "../voice/voiceService.js";
 import { CanvasService } from "../canvas/canvasService.js";
 import { CanvasWatcher } from "../canvas/canvasWatcher.js";
-import { listCanvas, readBoard } from "../canvas/canvasFolder.js";
+import { canvasInfoOf, listCanvas, readBoard } from "../canvas/canvasFolder.js";
 import { Publisher } from "../publish/publisher.js";
 import { ShareClient, type Fetch } from "../publish/shareClient.js";
 import { assetFiles, readAsset } from "../publish/publishFolder.js";
@@ -172,7 +172,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -323,7 +323,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     ? new Publisher({
         path: publishedPath,
         client: new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch),
-        folderOf: (cwd) => canvas.folderOf(cwd),
+        folderOf: (pick) => canvas.folderOf(pick),
+        nameOf: async (folder, id) => (await canvasInfoOf(folder, id)).name,
         listCanvas: (folder) => listCanvas(folder),
         watchCanvas: (folder, current, onChange) => canvasWatcher.watch(folder, current, () => onChange()),
         readBoard: (folder, file) => readBoard(folder, file, computerWord()),

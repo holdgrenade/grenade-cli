@@ -1,7 +1,7 @@
 /** published.json: the links this daemon published, each with its key, readable by this user only (PROTOCOL.md "Publishing"). */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { PublishExpiry, PublishScope, ShareKey, ShareToken } from "@grenade/protocol";
+import { CanvasGroup, CanvasId, PublishExpiry, PublishScope, ShareKey, ShareToken } from "@grenade/protocol";
 import type { PublishRecord } from "./publishPlan.js";
 
 function isRecord(r: unknown): r is PublishRecord {
@@ -13,6 +13,8 @@ function isRecord(r: unknown): r is PublishRecord {
     o.kind === "canvas" &&
     typeof o.cwd === "string" &&
     typeof o.folder === "string" &&
+    (o.group === undefined || CanvasGroup.safeParse(o.group).success) &&
+    (o.canvas === undefined || CanvasId.safeParse(o.canvas).success) &&
     typeof o.title === "string" &&
     PublishScope.safeParse(o.scope).success &&
     PublishExpiry.safeParse(o.expiry).success &&

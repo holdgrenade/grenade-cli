@@ -151,3 +151,36 @@ describe("canvas on a connection", () => {
     expect(ticks).toHaveLength(0);
   });
 });
+
+describe("a group's canvases on a connection", () => {
+  it("lists them, serves and watches one by its group and canvas, and keeps that watch apart from the folder's", async () => {
+    const canvas2 = join(folder, "gr-a", "canvas-2");
+    await mkdir(canvas2, { recursive: true });
+    await writeFile(join(canvas2, "R1A · Welcome.html"), "<title>Onboarding flow</title>");
+    const { send, out } = connect();
+    await send(JSON.parse(hello));
+    out.length = 0;
+    await send({ type: "canvases", id: "c_1", cwd: project, group: "gr-a" });
+    expect(out[0]).toMatchObject({ type: "canvases", id: "c_1", group: "gr-a", folder: join(folder, "gr-a"), canvases: [{ canvas: "canvas-2", name: "Onboarding flow", boards: 1 }] });
+    expect(DaemonFrame.safeParse(out[0]).success).toBe(true);
+
+    await send({ type: "canvas.subscribe", id: "c_2", cwd: project, group: "gr-a", canvas: "canvas-2" });
+    expect(out[1]).toMatchObject({ type: "canvas", id: "c_2", group: "gr-a", canvas: "canvas-2", name: "Onboarding flow", folder: canvas2 });
+    expect(DaemonFrame.safeParse(out[1]).success).toBe(true);
+    await send({ type: "canvas.subscribe", id: "c_3", cwd: project });
+    expect(out[2]).toMatchObject({ type: "canvas", id: "c_3", folder });
+
+    await writeFile(join(canvas2, "R1B · Sign in.html"), "<h1>Sign in</h1>");
+    for (const tick of ticks) tick();
+    await new Promise((r) => setTimeout(r, 50));
+    const changed = out.slice(3).filter((f) => f.type === "canvas");
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({ group: "gr-a", canvas: "canvas-2", name: "Onboarding flow" });
+    expect((changed[0] as { boards: unknown[] }).boards).toHaveLength(2);
+
+    await send({ type: "canvas.board", id: "c_4", cwd: project, group: "gr-a", canvas: "canvas-2", file: "R1B · Sign in.html" });
+    expect(out.at(-1)).toMatchObject({ type: "canvas.board", id: "c_4", group: "gr-a", canvas: "canvas-2", html: "<h1>Sign in</h1>" });
+    await send({ type: "canvas", id: "c_5", cwd: project, group: "g-nobody", canvas: "canvas-1" });
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "bad_frame", ref: "canvas", id: "c_5" });
+  });
+});

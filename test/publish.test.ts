@@ -105,6 +105,8 @@ describe("the publisher", () => {
   let dir: string;
   let cwd: string;
   let folder: string;
+  /** A group's canvas, `canvas-2` (a canvas moved to that group). */
+  let moved: string;
   let host: FakeHost;
   let timers: { fn: () => void; ms: number }[];
   let watchers: (() => void)[];
@@ -114,7 +116,9 @@ describe("the publisher", () => {
     dir = await mkdtemp(join(tmpdir(), "grenade-publish-"));
     cwd = join(dir, "project");
     folder = join(cwd, ".grenade", "canvas");
-    await mkdir(folder, { recursive: true });
+    moved = join(folder, "g-9f3c", "canvas-2");
+    await mkdir(moved, { recursive: true });
+    await writeFile(join(moved, "R1A · Welcome.html"), "<title>Onboarding flow</title><h1>Welcome</h1>");
     await writeFile(join(folder, "R1A · Hello.html"), '<meta name="board" content="800x600"><img src="logo.svg">');
     await writeFile(join(folder, "R2A · Cards.html"), "<h1>Cards</h1>");
     await writeFile(join(folder, "R2B · Table.html"), "<h1>Table</h1>");
@@ -130,10 +134,11 @@ describe("the publisher", () => {
     new Publisher({
       path: join(dir, "published.json"),
       client: new ShareClient("https://share.test", host.fetch),
-      folderOf: (c) => {
+      folderOf: ({ cwd: c, canvas }) => {
         if (!allowed || c !== cwd) throw new Error(`No session works in ${c}.`);
-        return folder;
+        return canvas === "canvas-2" ? moved : folder;
       },
+      nameOf: async (_f, canvas) => (canvas === "canvas-2" ? "Onboarding flow" : canvas),
       listCanvas: (f) => listCanvas(f),
       watchCanvas: (_f, _current, onChange) => {
         watchers.push(onChange);
@@ -167,7 +172,7 @@ describe("the publisher", () => {
 
   it("publishes the newest revision with the files its boards name, and keeps the key to itself", async () => {
     const p = make();
-    const links = await p.publishCanvas(cwd, "newest");
+    const links = await p.publishCanvas({ cwd: cwd }, "newest");
     expect(links[0]!.state).toBe("uploading");
     await settle(p);
     const link = p.list()[0]!;
@@ -183,7 +188,7 @@ describe("the publisher", () => {
 
   it("all revisions carry a picture a board names, never a file none names", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "all");
+    await p.publishCanvas({ cwd: cwd }, "all");
     await settle(p);
     const hosted = host.links.get(p.list()[0]!.token)!;
     expect(hosted.manifest!.boards).toHaveLength(3);
@@ -193,7 +198,7 @@ describe("the publisher", () => {
 
   it("a saved board goes up alone, once the folder has held still", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     host.requests = [];
     await writeFile(join(folder, "R2A · Cards.html"), "<h1>Cards, again</h1>");
@@ -206,7 +211,7 @@ describe("the publisher", () => {
 
   it("a new revision moves a newest link on to it", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     await writeFile(join(folder, "R3A · Next.html"), "<h1>Next</h1>");
     watchers.forEach((w) => w());
@@ -217,7 +222,7 @@ describe("the publisher", () => {
 
   it("an unchanged canvas sends nothing", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     host.requests = [];
     watchers.forEach((w) => w());
@@ -227,27 +232,42 @@ describe("the publisher", () => {
 
   it("publishing again changes the scope of the same link; a new link changes its address", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     const first = p.list()[0]!.token;
-    await p.publishCanvas(cwd, "all", "7d");
+    await p.publishCanvas({ cwd: cwd }, "all", "7d");
     await settle(p);
     expect(p.list()).toHaveLength(1);
     expect(p.list()[0]).toMatchObject({ token: first, scope: "all", expiry: "7d", expires: "2026-10-12T12:00:00.000Z", boards: 3 });
-    await p.publishCanvas(cwd, "all", undefined, true);
+    await p.publishCanvas({ cwd: cwd }, "all", undefined, true);
     await settle(p);
     expect(p.list()[0]!.token).not.toBe(first);
     expect(p.list()[0]!.expiry).toBe("7d");
     expect(host.links.has(first)).toBe(false);
   });
 
+  it("publishes a group's canvas under its name, and moves a link to a canvas that moved, keeping its address", async () => {
+    const p = make();
+    await p.publishCanvas({ cwd }, "newest");
+    await settle(p);
+    const token = p.list()[0]!.token;
+    await p.publishCanvas({ cwd, group: "g-9f3c", canvas: "canvas-2" }, "all", undefined, false, token);
+    await settle(p);
+    expect(p.list()).toHaveLength(1);
+    expect(p.list()[0]).toMatchObject({ token, folder: moved, group: "g-9f3c", canvas: "canvas-2", title: "Onboarding flow", scope: "all", boards: 1 });
+    expect(host.links.get(token)!.manifest!.boards.map((b) => b.file)).toEqual(["R1A · Welcome.html"]);
+    expect(loadPublished(join(dir, "published.json"))[0]).toMatchObject({ group: "g-9f3c", canvas: "canvas-2" });
+    await expect(p.publishCanvas({ cwd }, "all", undefined, false, "nope0000nope0000")).rejects.toThrow(/not one of this computer's/);
+    await expect(p.publishCanvas({ cwd }, "all", undefined, true, token)).rejects.toThrow(PublishError);
+  });
+
   it("refuses a folder no session works in", async () => {
-    await expect(make(false).publishCanvas("/etc", "all")).rejects.toThrow(PublishError);
+    await expect(make(false).publishCanvas({ cwd: "/etc" }, "all")).rejects.toThrow(PublishError);
   });
 
   it("unpublishing takes the page down and forgets the link; a host that cannot be reached keeps it", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     const token = p.list()[0]!.token;
     host.down = true;
@@ -262,7 +282,7 @@ describe("the publisher", () => {
   it("a host that does not answer fails the link and tries again a minute later", async () => {
     const p = make();
     host.down = true;
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     expect(p.list()[0]).toMatchObject({ state: "failed", error: "The share host did not answer. Trying again in a minute." });
     expect(timers.map((t) => t.ms)).toContain(PUBLISH_RETRY_MS);
@@ -276,14 +296,14 @@ describe("the publisher", () => {
     const p = make();
     const seen: string[] = [];
     p.on("changed", (links: { state: string }[]) => seen.push(links[0]?.state ?? "none"));
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     expect(seen).toEqual(["uploading", "live"]);
   });
 
   it("picks its links up again after a restart", async () => {
     const p = make();
-    await p.publishCanvas(cwd, "newest");
+    await p.publishCanvas({ cwd: cwd }, "newest");
     await settle(p);
     p.stop();
     const again = make();

@@ -13,6 +13,9 @@ export interface PublishRecord {
   kind: "canvas";
   cwd: string;
   folder: string;
+  /** Which group's canvas, when it was published as one. */
+  group?: string;
+  canvas?: string;
   title: string;
   scope: PublishScope;
   expiry: PublishExpiry;
@@ -78,6 +81,7 @@ export function linkOf(record: PublishRecord, host: string): PublishedLink {
     kind: record.kind,
     cwd: record.cwd,
     folder: record.folder,
+    ...(record.group !== undefined && record.canvas !== undefined ? { group: record.group, canvas: record.canvas } : {}),
     title: record.title,
     url: shareUrlFor(host, record.token),
     scope: record.scope,

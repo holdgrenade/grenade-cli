@@ -1,11 +1,12 @@
 /**
- * Reads a canvas folder (PROTOCOL.md "Canvas"): the boards it holds and one board's file. Never writes, never follows a
- * symbolic link: `.grenade` and `.grenade/canvas` must be real folders, a board a regular file opened with O_NOFOLLOW.
+ * Reads a canvas folder (PROTOCOL.md "Canvas"): the boards it holds and one board's file, and a group's canvases. Never
+ * writes, never follows a symbolic link: every folder from `.grenade` down (`.grenade/canvas`, a group's folder, a
+ * canvas's) must be a real folder, a board a regular file opened with O_NOFOLLOW.
  */
 import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { CANVAS_BOARD_MAX_BYTES, type CanvasBoard } from "@grenade/protocol";
+import { CANVAS_BOARD_MAX_BYTES, CANVAS_SHARED, CANVASES_MAX, canvasNameOf, canvasNumberOf, type CanvasBoard, type CanvasInfo } from "@grenade/protocol";
 import { boardsFrom, boardTooLarge, isBoardFile, type BoardFile } from "./boardListing.js";
 
 /** How much of a board is read for the size it asks for, as the Mac app does. */
@@ -34,9 +35,16 @@ async function realFolder(path: string): Promise<boolean> {
   return true;
 }
 
-/** The canvas folder and the `.grenade` above it are real folders (false: not there yet). */
+/** The folder and each one above it up to `.grenade` are real folders (false: one is not there yet). */
 async function canvasThere(folder: string): Promise<boolean> {
-  return (await realFolder(dirname(folder))) && (await realFolder(folder));
+  const parts = folder.split("/");
+  const at = parts.lastIndexOf(".grenade");
+  // A folder with no `.grenade` in it: only it and the one above it, as for `.grenade/canvas`.
+  const from = at > 0 ? at + 1 : parts.length - 1;
+  for (let end = from; end <= parts.length; end++) {
+    if (!(await realFolder(parts.slice(0, end).join("/") || dirname(folder)))) return false;
+  }
+  return true;
 }
 
 /** Reads up to `max` bytes of a regular file without following a link; null when it is not one. */
@@ -89,6 +97,54 @@ export async function listCanvas(folder: string, heads: HeadCache = new Map()): 
   for (const key of heads.keys()) if (!seen.has(key)) heads.delete(key);
   const { boards, truncated } = boardsFrom(files);
   return { boards, ...(truncated ? { truncated: true as const } : {}) };
+}
+
+/** The first 8 KiB of a board, as UTF-8 (what its `<title>` and size are read from); "" when it cannot be read. */
+export async function readHead(folder: string, file: string): Promise<string> {
+  if (!isBoardFile(file)) return "";
+  const board = await openBoard(join(folder, file));
+  if (!board) return "";
+  try {
+    return (await board.read(HEAD_BYTES)).toString("utf8");
+  } finally {
+    await board.close();
+  }
+}
+
+/** What `canvases` says of one canvas: its name (`canvasNameOf`), how many boards, when the newest was saved. */
+export async function canvasInfoOf(folder: string, canvas: string): Promise<CanvasInfo> {
+  const { boards } = await listCanvas(folder);
+  const first = boards[0];
+  const head = first ? await readHead(folder, first.file) : "";
+  const modified = boards.reduce<string | undefined>((latest, b) => (!latest || b.modified > latest ? b.modified : latest), undefined);
+  return {
+    canvas,
+    name: canvasNameOf(canvas, first ? { file: first.file, head } : undefined),
+    boards: boards.length,
+    ...(modified ? { modified } : {}),
+  };
+}
+
+/**
+ * A group's canvases (PROTOCOL.md "Canvas", "Several canvases"): each real folder `canvas-<n>` directly in `groupFolder`,
+ * by number, then `shared` (the boards directly in `sharedFolder`, `.grenade/canvas`) while it has a board. A group's
+ * folder that is not there yet has none.
+ */
+export async function listCanvases(groupFolder: string, sharedFolder: string): Promise<CanvasInfo[]> {
+  const canvases: CanvasInfo[] = [];
+  if (await canvasThere(groupFolder)) {
+    const entries = await readdir(groupFolder, { withFileTypes: true });
+    // `isDirectory()` is false for a link, so a link is never a canvas.
+    const ids = entries
+      .filter((e) => e.isDirectory() && canvasNumberOf(e.name) !== null)
+      .map((e) => e.name)
+      .sort((a, b) => canvasNumberOf(a)! - canvasNumberOf(b)!)
+      .slice(0, CANVASES_MAX - 1);
+    for (const id of ids) canvases.push(await canvasInfoOf(join(groupFolder, id), id));
+  }
+  const shared = await canvasInfoOf(sharedFolder, CANVAS_SHARED).catch(() => null);
+  if (shared && shared.boards > 0) canvases.push(shared);
+  return canvases;
 }
 
 /** One board's file as UTF-8 text. `CanvasError` when it is not a board here, or too large. */

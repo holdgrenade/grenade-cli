@@ -12,7 +12,7 @@ const link: PublishedLink = { token: "k7Fq2xN9pWm4Lq0Z", kind: "canvas", cwd: "/
 class FakePublisher extends EventEmitter implements PublishPort {
   links: PublishedLink[] = [];
   list() { return this.links; }
-  async publishCanvas(cwd: string) {
+  async publishCanvas({ cwd }: { cwd: string }) {
     if (cwd !== "/p") throw new PublishError(`No session works in ${cwd}.`);
     this.links = [link];
     this.emit("changed", this.links);

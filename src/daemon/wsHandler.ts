@@ -17,8 +17,8 @@ import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.j
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
 import type { PlanLimit, VoiceFrame } from "@grenade/protocol";
 import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
-import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame } from "@grenade/protocol";
-import { CanvasError, type CanvasReply } from "../canvas/canvasService.js";
+import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame, type CanvasInfo } from "@grenade/protocol";
+import { CanvasError, type CanvasPick, type CanvasReply } from "../canvas/canvasService.js";
 import { boardTooLarge } from "../canvas/boardListing.js";
 import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
 import { PublishError } from "../publish/publisher.js";
@@ -134,15 +134,16 @@ export interface VoicePort {
 
 /** A group's design canvas (PROTOCOL.md "Canvas"); `CanvasService` in the daemon. Each call rejects with `CanvasError` for a folder or a board it does not serve. */
 export interface CanvasPort {
-  list(cwd: string): Promise<CanvasReply>;
-  board(cwd: string, file: string): Promise<{ html: string; modified: string; bytes: number }>;
-  watch(cwd: string, onChange: (reply: CanvasReply) => void): Promise<{ reply: CanvasReply; stop: () => void }>;
+  canvases(cwd: string, group: string): Promise<{ folder: string; canvases: CanvasInfo[] }>;
+  list(pick: CanvasPick): Promise<CanvasReply>;
+  board(pick: CanvasPick, file: string): Promise<{ html: string; modified: string; bytes: number }>;
+  watch(pick: CanvasPick, onChange: (reply: CanvasReply) => void): Promise<{ reply: CanvasReply; stop: () => void }>;
 }
 
 /** Canvases published to secret links (PROTOCOL.md "Publishing"); `Publisher` in the daemon. Changes reject with `PublishError`. */
 export interface PublishPort {
   list(): PublishedLink[];
-  publishCanvas(cwd: string, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean): Promise<PublishedLink[]>;
+  publishCanvas(pick: CanvasPick, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean, token?: string): Promise<PublishedLink[]>;
   remove(token: string): Promise<PublishedLink[]>;
   on(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
   off(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
@@ -241,7 +242,7 @@ export class Connection {
   /** Live terminals this client has open, by session. */
   private readonly terms = new Map<string, TermHandle>();
   private stopWatchingPush: (() => void) | undefined;
-  /** Canvases this client watches, by `cwd` as it sent it (PROTOCOL.md "Canvas", "Watching"). */
+  /** Canvases this client watches, by `cwd`, `group` and `canvas` as it sent them (`watchKey`; PROTOCOL.md "Canvas", "Watching"). */
   private readonly canvasWatches = new Map<string, () => void>();
   private helloTimer: unknown;
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
@@ -309,7 +310,7 @@ export class Connection {
       await this.dispatch(frame);
     } catch (e) {
       // An `input` (or a canvas request) with an id gets its id back, so the phone knows which one did not arrive.
-      const id = frame.type === "input" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
+      const id = frame.type === "input" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -525,6 +526,7 @@ export class Connection {
           throw e;
         }
       }
+      case "canvases":
       case "canvas":
       case "canvas.subscribe":
       case "canvas.unsubscribe":
@@ -638,7 +640,7 @@ export class Connection {
     try {
       const links =
         frame.type === "publish.list" ? publish.list()
-        : frame.type === "publish.canvas" ? await publish.publishCanvas(frame.cwd, frame.scope, frame.expiry, frame.newLink === true)
+        : frame.type === "publish.canvas" ? await publish.publishCanvas(pickOf(frame), frame.scope, frame.expiry, frame.newLink === true, frame.token)
         : await publish.remove(frame.token);
       this.send({ type: "published", id: frame.id, links });
     } catch (e) {
@@ -648,32 +650,40 @@ export class Connection {
   }
 
   /** The canvas frames (PROTOCOL.md "Canvas"): a refused folder, a missing or too large board is `bad_frame` with the request's `id`. */
-  private async handleCanvas(frame: Extract<ClientFrame, { type: "canvas" | "canvas.subscribe" | "canvas.unsubscribe" | "canvas.board" }>): Promise<void> {
+  private async handleCanvas(frame: Extract<ClientFrame, { type: "canvases" | "canvas" | "canvas.subscribe" | "canvas.unsubscribe" | "canvas.board" }>): Promise<void> {
     if (frame.type === "canvas.unsubscribe") {
-      this.canvasWatches.get(frame.cwd)?.();
-      this.canvasWatches.delete(frame.cwd);
+      const key = watchKey(pickOf(frame));
+      this.canvasWatches.get(key)?.();
+      this.canvasWatches.delete(key);
       return;
     }
     const canvas = this.d.canvas;
     if (!canvas) return this.fail("bad_frame", "this daemon serves no canvas", frame.type, false, frame.id);
     const { cwd, id } = frame;
-    const framed = (reply: CanvasReply, withId: boolean): CanvasFrame => ({ type: "canvas", ...(withId ? { id } : {}), cwd, ...reply });
     try {
-      if (frame.type === "canvas") return this.send(framed(await canvas.list(cwd), true));
+      if (frame.type === "canvases") {
+        const { folder, canvases } = await canvas.canvases(cwd, frame.group);
+        return this.send({ type: "canvases", id, cwd, group: frame.group, folder, canvases });
+      }
+      const pick = pickOf(frame);
+      const sent = { ...(pick.group !== undefined ? { group: pick.group } : {}), ...(pick.canvas !== undefined ? { canvas: pick.canvas } : {}) };
+      const framed = (reply: CanvasReply, withId: boolean): CanvasFrame => ({ type: "canvas", ...(withId ? { id } : {}), cwd, ...sent, ...reply });
+      if (frame.type === "canvas") return this.send(framed(await canvas.list(pick), true));
       if (frame.type === "canvas.subscribe") {
-        const again = this.canvasWatches.get(cwd);
+        const key = watchKey(pick);
+        const again = this.canvasWatches.get(key);
         if (!again && this.canvasWatches.size >= CANVAS_SUBSCRIPTIONS_MAX) {
           return this.fail("bad_frame", `A connection watches at most ${CANVAS_SUBSCRIPTIONS_MAX} canvases; unsubscribe from one first.`, frame.type, false, id);
         }
-        const { reply, stop } = await canvas.watch(cwd, (changed) => this.send(framed(changed, false)));
+        const { reply, stop } = await canvas.watch(pick, (changed) => this.send(framed(changed, false)));
         // The connection ended while the folder was read.
         if (!this.authed) return stop();
         again?.();
-        this.canvasWatches.set(cwd, stop);
+        this.canvasWatches.set(key, stop);
         return this.send(framed(reply, true));
       }
-      const board = await canvas.board(cwd, frame.file);
-      const reply = { type: "canvas.board" as const, id, cwd, file: frame.file, ...board };
+      const board = await canvas.board(pick, frame.file);
+      const reply = { type: "canvas.board" as const, id, cwd, ...sent, file: frame.file, ...board };
       const tooLarge = boardTooLarge(frame.file, board.bytes, Buffer.byteLength(JSON.stringify(reply)), computerWord());
       if (tooLarge) return this.fail("bad_frame", tooLarge, frame.type, false, id);
       return this.send(reply);
@@ -729,4 +739,14 @@ function framedFor(client: ClientInfo, frame: DaemonFrame): DaemonFrame {
   if (frame.type === "session.updated") return { ...frame, session: sessionFor(client, frame.session) };
   if (frame.type === "sessions") return { ...frame, sessions: frame.sessions.map((s) => sessionFor(client, s)) };
   return frame;
+}
+
+/** Which canvas a frame means: its `cwd`, and its `group` and `canvas` when it has them. */
+function pickOf(frame: { cwd: string; group?: string | undefined; canvas?: string | undefined }): CanvasPick {
+  return { cwd: frame.cwd, ...(frame.group !== undefined ? { group: frame.group } : {}), ...(frame.canvas !== undefined ? { canvas: frame.canvas } : {}) };
+}
+
+/** What a connection keeps a watch by: `cwd`, `group` and `canvas` together. */
+function watchKey(pick: CanvasPick): string {
+  return `${pick.cwd}\n${pick.group ?? ""}\n${pick.canvas ?? ""}`;
 }

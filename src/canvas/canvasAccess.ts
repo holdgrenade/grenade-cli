@@ -4,7 +4,7 @@
  * Pure.
  */
 import { posix } from "node:path";
-import { CANVAS_FOLDER, type Session } from "@grenade/protocol";
+import { CANVAS_FOLDER, CANVAS_SHARED, type Session } from "@grenade/protocol";
 import { expandHome } from "../folders/listFolders.js";
 
 /** `cwd` as one path: `~` expanded, `.`, `..` and a trailing `/` resolved. Null for a path that is neither absolute nor `~`. */
@@ -72,4 +72,19 @@ export function allowedCanvasCwd(cwd: string, sessions: Session[], home: string)
 /** The canvas folder of a (normalized) `cwd`. */
 export function canvasFolderOf(cwd: string): string {
   return posix.join(cwd, CANVAS_FOLDER);
+}
+
+/** A group's folder under a (normalized) `cwd`, where its canvases are: `<cwd>/.grenade/canvas/<group>`. */
+export function groupFolderOf(cwd: string, group: string): string {
+  return posix.join(cwd, CANVAS_FOLDER, group);
+}
+
+/** One of a group's canvases under a (normalized) `cwd`: `<cwd>/.grenade/canvas/<group>/canvas-2`; `shared` is `<cwd>/.grenade/canvas`. */
+export function groupCanvasFolderOf(cwd: string, group: string, canvas: string): string {
+  return canvas === CANVAS_SHARED ? canvasFolderOf(cwd) : posix.join(groupFolderOf(cwd, group), canvas);
+}
+
+/** Whether `group` is the group of a session the daemon lists (a `gone` one too): `group`, or `id` for a group of one. */
+export function isListedGroup(group: string, sessions: Session[]): boolean {
+  return sessions.some((s) => (s.group ?? s.id) === group);
 }

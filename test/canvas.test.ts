@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computerWord } from "../src/platform/computer.js";
 import { CANVAS_BOARD_MAX_BYTES, CANVAS_BOARDS_MAX, type Session } from "@grenade/protocol";
-import { allowedCanvasCwd, canvasCwds, canvasFolderOf, normalizeCwd, projectOf, sharedFolder } from "../src/canvas/canvasAccess.js";
+import { allowedCanvasCwd, canvasCwds, canvasFolderOf, groupCanvasFolderOf, groupFolderOf, isListedGroup, normalizeCwd, projectOf, sharedFolder } from "../src/canvas/canvasAccess.js";
 import { boardsFrom, boardTooLarge, isBoardFile, listingKey } from "../src/canvas/boardListing.js";
-import { CanvasError, listCanvas, readBoard } from "../src/canvas/canvasFolder.js";
+import { CanvasError, listCanvas, listCanvases, readBoard } from "../src/canvas/canvasFolder.js";
 import { CanvasWatcher, type Every } from "../src/canvas/canvasWatcher.js";
 import { CanvasService } from "../src/canvas/canvasService.js";
 
@@ -239,8 +239,78 @@ describe("watching a canvas", () => {
 describe("CanvasService", () => {
   it("refuses a cwd no session uses before it reads anything", async () => {
     const service = new CanvasService(() => [session("gr-a", "/Users/adam/app")], new CanvasWatcher(() => () => {}), "/Users/adam");
-    await expect(service.list("/etc")).rejects.toThrow(`No session on this ${computerWord()} works in /etc, so it has no canvas to show.`);
-    await expect(service.board("/Users/adam", "x.html")).rejects.toBeInstanceOf(CanvasError);
-    await expect(service.watch("/Users/adam/app/..", () => {})).rejects.toBeInstanceOf(CanvasError);
+    await expect(service.list({ cwd: "/etc" })).rejects.toThrow(`No session on this ${computerWord()} works in /etc, so it has no canvas to show.`);
+    await expect(service.board({ cwd: "/Users/adam" }, "x.html")).rejects.toBeInstanceOf(CanvasError);
+    await expect(service.watch({ cwd: "/Users/adam/app/.." }, () => {})).rejects.toBeInstanceOf(CanvasError);
+  });
+});
+
+describe("a group's canvases", () => {
+  let root: string;
+  let project: string;
+  let group: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "grenade-canvases-"));
+    project = join(root, "web");
+    group = join(project, ".grenade", "canvas", "g-1a2b");
+    await mkdir(join(group, "canvas-1"), { recursive: true });
+    await mkdir(join(group, "canvas-2"), { recursive: true });
+    await mkdir(join(group, "canvas-10"), { recursive: true });
+    await mkdir(join(group, "drafts"), { recursive: true });
+    await writeFile(join(group, "canvas-1", "R1A · Plans.html"), "<title>Pricing page</title>");
+    await writeFile(join(group, "canvas-1", "R1B · Table.html"), "<title>Something else</title>");
+    await writeFile(join(group, "canvas-2", "R1A · Welcome.html"), "<h1>No title</h1>");
+    await writeFile(join(project, ".grenade", "canvas", "Moodboard.html"), "<title>Old boards</title>");
+  });
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  it("names the folders a group's canvases are in", () => {
+    expect(groupFolderOf("/a/web", "g-1")).toBe("/a/web/.grenade/canvas/g-1");
+    expect(groupCanvasFolderOf("/a/web", "g-1", "canvas-2")).toBe("/a/web/.grenade/canvas/g-1/canvas-2");
+    expect(groupCanvasFolderOf("/a/web", "g-1", "shared")).toBe("/a/web/.grenade/canvas");
+    expect(isListedGroup("g-1", [session("gr-a", "/a/web", "g-1")])).toBe(true);
+    expect(isListedGroup("gr-b", [session("gr-b", "/a/web")])).toBe(true);
+    expect(isListedGroup("g-2", [session("gr-a", "/a/web", "g-1")])).toBe(false);
+  });
+
+  it("lists canvas-<n> folders by number, each named by its first board, then the shared one", async () => {
+    const canvases = await listCanvases(group, join(project, ".grenade", "canvas"));
+    expect(canvases.map((c) => [c.canvas, c.name, c.boards])).toEqual([
+      ["canvas-1", "Pricing page", 2],
+      ["canvas-2", "Welcome", 1],
+      ["canvas-10", "Canvas 10", 0],
+      ["shared", "Old boards", 1],
+    ]);
+    expect(canvases[2]!.modified).toBeUndefined();
+    expect(canvases[0]!.modified).toMatch(/^\d{4}-/);
+  });
+
+  it("has none before the group's folder is made, and leaves a linked canvas out", async () => {
+    expect(await listCanvases(join(project, ".grenade", "canvas", "g-none"), join(root, "nothing", ".grenade", "canvas"))).toEqual([]);
+    await symlink(join(group, "canvas-1"), join(group, "canvas-3"));
+    expect((await listCanvases(group, join(root, "nothing", ".grenade", "canvas"))).map((c) => c.canvas)).toEqual(["canvas-1", "canvas-2", "canvas-10"]);
+  });
+
+  it("serves a listed group's canvas, under its name, and refuses one half asked or of a group nobody is in", async () => {
+    const service = new CanvasService(() => [session("gr-a", project, "g-1a2b")], new CanvasWatcher(() => () => {}), root);
+    const reply = await service.list({ cwd: project, group: "g-1a2b", canvas: "canvas-1" });
+    expect(reply).toMatchObject({ folder: join(group, "canvas-1"), name: "Pricing page" });
+    expect(reply.boards.map((b) => b.file)).toEqual(["R1A · Plans.html", "R1B · Table.html"]);
+    expect((await service.board({ cwd: project, group: "g-1a2b", canvas: "canvas-2" }, "R1A · Welcome.html")).html).toBe("<h1>No title</h1>");
+    expect(await service.list({ cwd: project, group: "g-1a2b", canvas: "canvas-4" })).toMatchObject({ missing: true, name: "Canvas 4" });
+    const { canvases } = await service.canvases(project, "g-1a2b");
+    expect(canvases.map((c) => c.canvas)).toEqual(["canvas-1", "canvas-2", "canvas-10", "shared"]);
+    await expect(service.list({ cwd: project, group: "g-other", canvas: "canvas-1" })).rejects.toThrow(/in that group/);
+    await expect(service.list({ cwd: project, group: "g-1a2b" })).rejects.toBeInstanceOf(CanvasError);
+    await expect(service.canvases("/etc", "g-1a2b")).rejects.toBeInstanceOf(CanvasError);
+  });
+
+  it("refuses a group's folder that is a link", async () => {
+    const elsewhere = join(root, "elsewhere");
+    await mkdir(join(elsewhere, "canvas-1"), { recursive: true });
+    await symlink(elsewhere, join(project, ".grenade", "canvas", "g-link"));
+    await expect(listCanvases(join(project, ".grenade", "canvas", "g-link"), join(project, ".grenade", "canvas"))).rejects.toBeInstanceOf(CanvasError);
+    await expect(listCanvas(join(project, ".grenade", "canvas", "g-link", "canvas-1"))).rejects.toBeInstanceOf(CanvasError);
   });
 });
