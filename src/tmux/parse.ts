@@ -189,7 +189,7 @@ export function keyToTmux(key: KeyName): string {
  * that Enter a newline, so a typed prompt sat unsent; a bracketed paste says what it is, and the Enter after it sends.
  */
 export function inputCommand(target: string, text: string, paste = false): string[] {
-  if (!paste && !/[\r\n]/.test(text)) return ["send-keys", "-t", target, "-l", "--", text];
+  if (!goesInAsPaste(text, paste)) return ["send-keys", "-t", target, "-l", "--", text];
   const lines = text.replace(/\r\n?/g, "\n");
   return [
     "set-buffer", "-b", INPUT_BUFFER, "--", lines, ";",
@@ -198,6 +198,11 @@ export function inputCommand(target: string, text: string, paste = false): strin
 }
 
 const INPUT_BUFFER = "grenade-input";
+
+/** Whether `inputCommand` pastes `text` rather than typing it. */
+export function goesInAsPaste(text: string, paste = false): boolean {
+  return paste || /[\r\n]/.test(text);
+}
 
 /** What an agent starts with: Grenade's hooks (`claudeHookFlags`, `codexHookFlags`), already quoted for the shell. */
 export interface AgentFlags {
