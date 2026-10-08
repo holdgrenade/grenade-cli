@@ -235,6 +235,22 @@ describe("the pairing code", () => {
   });
 });
 
+describe("a web page", () => {
+  it("cannot reach the control API or POST /pair, even from this Mac; an extension and the CLI can", async () => {
+    const { d, base } = await daemon();
+    const page = { origin: "https://evil.example" };
+    const mint = (headers: Record<string, string>) => fetch(`http://127.0.0.1:${d.controlPort}/pair-code`, { method: "POST", headers });
+    expect((await mint(page)).status).toBe(403);
+    expect((await mint({ origin: "http://localhost:4321" })).status).toBe(403);
+    expect((await fetch(`http://127.0.0.1:${d.controlPort}/status`, { headers: page })).status).toBe(403);
+    expect((await fetch(`${base}/pair`, { method: "POST", headers: { ...page, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
+    expect((await fetch(`${base}/hooks/claude`, { method: "POST", headers: page, body: "{}" })).status).toBe(403);
+    expect((await mint({ origin: "chrome-extension://abcdefghijklmnop" })).status).toBe(200);
+    expect((await mint({})).status).toBe(200);
+    expect((await fetch(`${base}/health`, { headers: page })).status).toBe(200);
+  });
+});
+
 describe("pairing with a typed code", () => {
   it("travels sealed, and the phone it pairs is encrypted from the start", async () => {
     const { d, control, key } = await daemon();
@@ -249,6 +265,21 @@ describe("pairing with a typed code", () => {
     await until(() => p.frames.length >= 4);
     expect(p.types()).toEqual(["paired", "welcome", "sessions", "groups"]);
     expect((await control("GET", "/devices")).body).toMatchObject([{ name: "Test phone", connected: ["lan"], sealed: true }]);
+  });
+
+  it("pairs the Chrome extension, which says platform chrome", async () => {
+    const { d, control, key } = await daemon();
+    const code = (await control("POST", "/pair-code")).body["code"] as string;
+    const p = await phone(d.port, key, true);
+    const chrome = { name: "Chrome on Test Mac", platform: "chrome" as const, version: "0.1.0" };
+    p.send({ type: "pair", protocol: 1, code, client: chrome });
+    await until(() => p.frames.length >= 1);
+    const paired = p.frames[0] as { type: string; token: string };
+    expect(paired).toMatchObject({ type: "paired" });
+    p.send({ type: "hello", protocol: 1, token: paired.token, client: chrome });
+    await until(() => p.frames.length >= 2);
+    expect(p.frames[1]).toMatchObject({ type: "welcome" });
+    expect((await control("GET", "/devices")).body).toMatchObject([{ name: "Chrome on Test Mac", platform: "chrome" }]);
   });
 
   it("is refused in plain, and the code is still good afterwards", async () => {

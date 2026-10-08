@@ -4,3 +4,13 @@ export function isLoopback(address: string | undefined): boolean {
   const a = address.startsWith("::ffff:") ? address.slice(7) : address;
   return a === "::1" || a === "127.0.0.1" || a.startsWith("127.");
 }
+
+/**
+ * Whether a request came from a web page: browsers send an `Origin` on every cross-site request, and a page's is
+ * `http:` or `https:`. The CLI, the apps and the hooks send none; the Chrome extension's is `chrome-extension:`.
+ * A page must never drive the daemon, even from this Mac's own browser. Pure.
+ */
+export function fromWebPage(origin: string | string[] | undefined): boolean {
+  const value = Array.isArray(origin) ? origin[0] : origin;
+  return value !== undefined && /^https?:/i.test(value.trim());
+}
