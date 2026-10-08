@@ -304,3 +304,26 @@ function shown(s: SessionState): SessionPlan {
 function tildePath(path: string, home: string): string {
   return path.startsWith(home + sep) ? "~" + path.slice(home.length) : path;
 }
+
+/**
+ * Tells `onChange` whenever the file at `path` is saved (its time or size changed), looking every 400 ms: what a
+ * published plan follows (PROTOCOL.md "Publishing", plans). Returns how to stop.
+ */
+export function watchPlanFile(path: string, onChange: () => void, every: Every = realEvery): () => void {
+  let last: string | undefined;
+  let busy = false;
+  return every(() => {
+    if (busy) return;
+    busy = true;
+    lstat(path)
+      .then((info) => `${info.mtimeMs}\n${info.size}`)
+      .catch(() => "gone")
+      .then((key) => {
+        if (last !== undefined && key !== last) onChange();
+        last = key;
+      })
+      .finally(() => {
+        busy = false;
+      });
+  }, PLAN_POLL_MS);
+}

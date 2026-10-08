@@ -27,7 +27,7 @@ import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
-import { AGENTS } from "../agents/agentCatalog.js";
+import { AGENTS, agentInfo } from "../agents/agentCatalog.js";
 import { CodexConversations } from "../conversations/codexConversations.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
 import { AllConversations } from "../conversations/conversationSource.js";
@@ -91,7 +91,7 @@ import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
 import { TalkService } from "../talk/talkService.js";
 import { TalkTools } from "../talk/talkTools.js";
-import { PlanTracker } from "../plans/planTracker.js";
+import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -348,6 +348,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         readBoard: (folder, file) => readBoard(folder, file, computerWord()),
         assetFiles,
         readAsset,
+        planOf: (sessionId) => {
+          const session = registry.get(sessionId);
+          const path = plans.pathOf(sessionId);
+          return session && path && agentInfo(session.agent)?.plans ? { path, cwd: session.cwd } : undefined;
+        },
+        readPlan: async (path) => {
+          const file = await diskPlanFiles.read(path);
+          return file ? Buffer.from(file.text, "utf8") : null;
+        },
+        watchPlan: (path, onChange) => watchPlanFile(path, onChange),
         log,
       })
     : undefined;

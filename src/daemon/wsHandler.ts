@@ -146,6 +146,8 @@ export interface CanvasPort {
 export interface PublishPort {
   list(): PublishedLink[];
   publishCanvas(pick: CanvasPick, scope: PublishScope, expiry?: PublishExpiry, newLink?: boolean, token?: string): Promise<PublishedLink[]>;
+  /** A session's plan (PROTOCOL.md "Plans"). */
+  publishPlan(sessionId: string, expiry?: PublishExpiry, newLink?: boolean): Promise<PublishedLink[]>;
   remove(token: string): Promise<PublishedLink[]>;
   on(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
   off(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
@@ -558,6 +560,7 @@ export class Connection {
         return this.handleCanvas(frame);
       case "publish.list":
       case "publish.canvas":
+      case "publish.plan":
       case "publish.remove":
         return this.handlePublish(frame);
       case "talk.thread":
@@ -704,7 +707,7 @@ export class Connection {
   }
 
   /** The publish frames (PROTOCOL.md "Publishing"): answered with every link and the request's `id`; a refusal is `bad_frame` with it. */
-  private async handlePublish(frame: Extract<ClientFrame, { type: "publish.list" | "publish.canvas" | "publish.remove" }>): Promise<void> {
+  private async handlePublish(frame: Extract<ClientFrame, { type: "publish.list" | "publish.canvas" | "publish.plan" | "publish.remove" }>): Promise<void> {
     const publish = this.d.publish;
     if (!publish) return this.fail("bad_frame", "this daemon publishes nothing", frame.type, false, frame.id);
     if (!this.watchesPublish) publish.on("changed", this.onPublished);
@@ -713,6 +716,7 @@ export class Connection {
       const links =
         frame.type === "publish.list" ? publish.list()
         : frame.type === "publish.canvas" ? await publish.publishCanvas(pickOf(frame), frame.scope, frame.expiry, frame.newLink === true, frame.token)
+        : frame.type === "publish.plan" ? await publish.publishPlan(frame.sessionId, frame.expiry, frame.newLink === true)
         : await publish.remove(frame.token);
       this.send({ type: "published", id: frame.id, links });
     } catch (e) {

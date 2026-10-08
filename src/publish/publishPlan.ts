@@ -10,9 +10,13 @@ import { expiresAt, shareUrlFor, type CanvasBoard, type PublishedLink, type Publ
 export interface PublishRecord {
   token: string;
   key: string;
-  kind: "canvas";
+  kind: "canvas" | "plan";
   cwd: string;
+  /** The canvas folder; for a plan, the plan file's folder. */
   folder: string;
+  /** A plan's session, and its plan file's name (PROTOCOL.md "Plans"). */
+  sessionId?: string;
+  file?: string;
   /** Which group's canvas, when it was published as one. */
   group?: string;
   canvas?: string;
@@ -52,6 +56,17 @@ export function referencedAssets(htmls: string[], names: string[]): string[] {
   });
 }
 
+/** A plan's title: its first heading without its marks (and without a leading "Plan:"), else the file's name. */
+export function planTitleOf(text: string, file: string): string {
+  for (const line of text.split("\n")) {
+    const m = /^#{1,6} +(.+?)\s*#*\s*$/.exec(line.trim());
+    if (!m) continue;
+    const heading = m[1]!.replace(/^Plan(:| —| -) +/, "").trim() || m[1]!.trim();
+    return heading.slice(0, 200);
+  }
+  return file.replace(/\.md$/i, "").slice(0, 200) || "Plan";
+}
+
 /** A page's title: the name of the folder whose canvas it is. */
 export function titleOf(cwd: string): string {
   return basename(cwd.replace(/\/+$/, "")) || cwd;
@@ -82,8 +97,9 @@ export function linkOf(record: PublishRecord, host: string): PublishedLink {
     cwd: record.cwd,
     folder: record.folder,
     ...(record.group !== undefined && record.canvas !== undefined ? { group: record.group, canvas: record.canvas } : {}),
+    ...(record.sessionId !== undefined && record.file !== undefined ? { sessionId: record.sessionId, file: record.file } : {}),
     title: record.title,
-    url: shareUrlFor(host, record.token),
+    url: shareUrlFor(host, record.token, record.kind),
     scope: record.scope,
     expiry: record.expiry,
     ...(record.expires ? { expires: record.expires } : {}),

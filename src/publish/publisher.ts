@@ -6,11 +6,12 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { PUBLISHED_LINKS_MAX, type CanvasBoard, type PublishedLink, type PublishExpiry, type PublishScope, type ShareManifest } from "@grenade/protocol";
+import { basename, dirname, join } from "node:path";
+import { PUBLISHED_LINKS_MAX, SHARE_PLAN_FILE, type CanvasBoard, type PublishedLink, type PublishExpiry, type PublishScope, type ShareManifest } from "@grenade/protocol";
 import type { CanvasListing } from "../canvas/canvasFolder.js";
 import type { CanvasPick } from "../canvas/canvasService.js";
 import type { Logger } from "../log.js";
-import { boardsInScope, isExpired, linksOf, newSecrets, referencedAssets, titleOf, tokenForLog, withExpiry, type PublishRecord } from "./publishPlan.js";
+import { boardsInScope, isExpired, linksOf, newSecrets, planTitleOf, referencedAssets, titleOf, tokenForLog, withExpiry, type PublishRecord } from "./publishPlan.js";
 import type { AssetFile } from "./publishFolder.js";
 import { loadPublished, savePublished } from "./publishStore.js";
 import type { ShareClient } from "./shareClient.js";
@@ -36,6 +37,12 @@ export interface PublisherDeps {
   readBoard(folder: string, file: string): Promise<{ html: string }>;
   assetFiles(folder: string): Promise<AssetFile[]>;
   readAsset(folder: string, name: string): Promise<Buffer | null>;
+  /** A session's plan file and its folder (PROTOCOL.md "Plans"), or undefined when it has none or its agent has no plans. */
+  planOf?(sessionId: string): { path: string; cwd: string } | undefined;
+  /** A plan file's text, or null when it is not a regular file. */
+  readPlan?(path: string): Promise<Buffer | null>;
+  /** Tells `onChange` whenever the file at `path` is saved. Returns how to stop. */
+  watchPlan?(path: string, onChange: () => void): () => void;
   log: Logger;
   now?: () => Date;
   random?: (n: number) => Buffer;
@@ -140,6 +147,48 @@ export class Publisher extends EventEmitter {
     return this.list();
   }
 
+  /**
+   * Publishes a session's plan, always its newest version (PROTOCOL.md "Plans"), or changes its link's expiry;
+   * `newLink` gives it a new address.
+   */
+  async publishPlan(sessionId: string, expiry?: PublishExpiry, newLink?: boolean): Promise<PublishedLink[]> {
+    const plan = this.d.planOf?.(sessionId);
+    if (!plan) throw new PublishError("This session has no plan to publish yet.");
+    const now = this.now();
+    const existing = this.records.find((r) => r.kind === "plan" && r.sessionId === sessionId);
+    if (existing && !newLink) {
+      let next: PublishRecord = { ...existing, folder: dirname(plan.path), file: basename(plan.path) };
+      if (expiry !== undefined && (expiry !== existing.expiry || isExpired(existing, now))) next = withExpiry(next, expiry, now);
+      if (next.state === "expired" && !isExpired(next, now)) next = { ...next, state: "uploading" };
+      const moved = next.file !== existing.file || next.folder !== existing.folder;
+      this.replace(next);
+      this.save();
+      if (moved) this.unfollow(next.token);
+      await this.follow(next.token);
+      this.schedule(next.token, 0);
+      this.changed();
+      return this.list();
+    }
+    if (!existing && this.records.length >= PUBLISHED_LINKS_MAX) throw new PublishError(`A computer keeps at most ${PUBLISHED_LINKS_MAX} links. Unpublish one first.`);
+    if (existing) await this.takeDown(existing);
+    const { token, key } = newSecrets(this.random);
+    const at = now.toISOString();
+    const text = (await this.d.readPlan?.(plan.path))?.toString("utf8") ?? "";
+    const record = withExpiry(
+      { token, key, kind: "plan", cwd: plan.cwd, folder: dirname(plan.path), sessionId, file: basename(plan.path),
+        title: planTitleOf(text, basename(plan.path)), scope: "newest", expiry: "never", created: at, updated: at, boards: 0, state: "uploading" },
+      expiry ?? existing?.expiry ?? "never",
+      now,
+    );
+    this.records.push(record);
+    this.save();
+    this.d.log.info("Published a plan", { session: sessionId, link: tokenForLog(token) });
+    await this.follow(token);
+    this.schedule(token, 0);
+    this.changed();
+    return this.list();
+  }
+
   /** Points the link `token` at another canvas (one that moved), keeping its address; uploads from there at once. */
   private async repoint(
     token: string,
@@ -218,6 +267,12 @@ export class Publisher extends EventEmitter {
     const live: Live = { again: false, cache: new Map(), files: new Map() };
     this.live.set(token, live);
     if (isExpired(record, this.now())) return;
+    if (record.kind === "plan") {
+      const stop = this.d.watchPlan?.(planPathOf(record), () => this.schedule(token, PUBLISH_SETTLE_MS));
+      if (stop) live.stopWatch = stop;
+      this.schedule(token, 0);
+      return;
+    }
     try {
       const listing = await this.d.listCanvas(record.folder);
       if (this.live.get(token) !== live) return;
@@ -328,8 +383,26 @@ export class Publisher extends EventEmitter {
     }
   }
 
+  /** What a plan's page shows now: its file's text, as `plan.md`, under its first heading. */
+  private async planManifestOf(record: PublishRecord, live: Live): Promise<ShareManifest> {
+    const bytes = await this.d.readPlan?.(planPathOf(record));
+    if (!bytes) throw new PublishError("The plan file is not there any more.");
+    const title = planTitleOf(bytes.toString("utf8"), record.file ?? SHARE_PLAN_FILE);
+    if (title !== record.title) this.update(record.token, { title });
+    live.files = new Map([[SHARE_PLAN_FILE, bytes]]);
+    return {
+      kind: "plan",
+      title,
+      scope: "newest",
+      ...(record.expires ? { expires: record.expires } : {}),
+      boards: [],
+      assets: [{ file: SHARE_PLAN_FILE, bytes: bytes.length, sha256: sha256(bytes) }],
+    };
+  }
+
   /** What the page should show now: the boards of the scope, read, and the files they name. */
   private async manifestOf(record: PublishRecord, live: Live): Promise<ShareManifest> {
+    if (record.kind === "plan") return this.planManifestOf(record, live);
     const cache = new Map<string, { bytes: Buffer; sha256: string }>();
     const files = new Map<string, Buffer>();
     const readOnce = async (key: string, read: () => Promise<Buffer | null>) => {
@@ -379,4 +452,9 @@ export class Publisher extends EventEmitter {
     live.files = files;
     return { title: record.title, scope: record.scope, ...(record.expires ? { expires: record.expires } : {}), boards, assets };
   }
+}
+
+/** Where a plan link's file lies. */
+function planPathOf(record: PublishRecord): string {
+  return join(record.folder, record.file ?? SHARE_PLAN_FILE);
 }

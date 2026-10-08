@@ -332,3 +332,68 @@ describe("the share client", () => {
     await expect(new ShareClient("https://share.test", fetcher).remove("k7Fq2xN9pWm4Lq0Z", "a".repeat(43))).resolves.toBeUndefined();
   });
 });
+
+describe("publishing a plan", () => {
+  it("goes up as plan.md at /p/, named by its heading, and follows each save", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "grenade-publish-plan-"));
+    const planPath = join(dir, "velvety-knitting-shell.md");
+    await writeFile(planPath, "# Plan: Ship the plan tab\n\n- One\n");
+    const host = new FakeHost();
+    let timers: { fn: () => void; ms: number }[] = [];
+    let saved: (() => void) | undefined;
+    const p = new Publisher({
+      path: join(dir, "published.json"),
+      client: new ShareClient("https://share.test", host.fetch),
+      folderOf: () => { throw new Error("no canvas"); },
+      nameOf: async () => "",
+      listCanvas: (f) => listCanvas(f),
+      watchCanvas: () => () => {},
+      readBoard: (f, file) => readBoard(f, file),
+      assetFiles,
+      readAsset,
+      planOf: (id) => (id === "gr-a" ? { path: planPath, cwd: "/w" } : undefined),
+      readPlan: async (path) => readFile(path).catch(() => null),
+      watchPlan: (_path, onChange) => {
+        saved = onChange;
+        return () => {};
+      },
+      log: createLogger({ level: "error" }),
+      now: () => new Date("2026-10-08T12:00:00.000Z"),
+      setTimer: (fn, ms) => {
+        const t = { fn, ms };
+        timers.push(t);
+        return t;
+      },
+      clearTimer: (t) => {
+        timers = timers.filter((x) => x !== t);
+      },
+    });
+    const settle = async () => {
+      for (let round = 0; round < 10; round++) {
+        const due = timers.filter((t) => t.ms <= PUBLISH_SETTLE_MS);
+        if (due.length === 0) return;
+        timers = timers.filter((t) => !due.includes(t));
+        for (const t of due) t.fn();
+        await p.idle();
+      }
+    };
+    await expect(p.publishPlan("gr-b")).rejects.toThrow("no plan to publish");
+    await p.publishPlan("gr-a", "7d");
+    await settle();
+    const link = p.list()[0]!;
+    expect(link).toMatchObject({ kind: "plan", sessionId: "gr-a", file: "velvety-knitting-shell.md", title: "Ship the plan tab", state: "live", boards: 0, expiry: "7d" });
+    expect(link.url).toBe(`https://share.test/p/${link.token}`);
+    const hosted = host.links.get(link.token)!;
+    expect(hosted.manifest).toMatchObject({ kind: "plan", boards: [], assets: [{ file: "plan.md" }] });
+    expect(hosted.files.get("plan.md")).toBe("# Plan: Ship the plan tab\n\n- One\n");
+    await writeFile(planPath, "# Ship the plan tab, with Publish\n\n- One\n- Two\n");
+    saved!();
+    await settle();
+    expect(host.links.get(link.token)!.files.get("plan.md")).toContain("- Two");
+    expect(p.list()[0]!.title).toBe("Ship the plan tab, with Publish");
+    // Published again, it keeps its link.
+    await p.publishPlan("gr-a");
+    expect(p.list()).toHaveLength(1);
+    await rm(dir, { recursive: true, force: true });
+  });
+});

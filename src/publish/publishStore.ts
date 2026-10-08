@@ -10,7 +10,7 @@ function isRecord(r: unknown): r is PublishRecord {
   return (
     ShareToken.safeParse(o.token).success &&
     ShareKey.safeParse(o.key).success &&
-    o.kind === "canvas" &&
+    (o.kind === "canvas" || (o.kind === "plan" && typeof o.sessionId === "string" && typeof o.file === "string")) &&
     typeof o.cwd === "string" &&
     typeof o.folder === "string" &&
     (o.group === undefined || CanvasGroup.safeParse(o.group).success) &&
