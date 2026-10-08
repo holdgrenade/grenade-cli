@@ -25,6 +25,7 @@ import { PublishError } from "../publish/publisher.js";
 import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 import { PLAN_SUBSCRIPTIONS_MAX, type PlanFrame } from "@grenade/protocol";
 import { PlanWriteError } from "../plans/planTracker.js";
+import { PlanModeError } from "../plans/claudePlanMode.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -177,6 +178,8 @@ export interface PlansPort {
   textOf(sessionId: string): Promise<string | undefined>;
   /** The plan file's path when the user changed it since the agent last wrote it, once. */
   takeEditedPath(sessionId: string): string | undefined;
+  /** Switches the session's agent into plan mode. Rejects with `PlanModeError` when it did not switch. */
+  enterPlanMode?(sessionId: string): Promise<void>;
 }
 
 export interface ConnectionDeps {
@@ -571,6 +574,23 @@ export class Connection {
       case "plan.unsubscribe":
       case "plan.write":
         return this.handlePlan(frame);
+      case "session.mode": {
+        const session = r.get(frame.sessionId);
+        if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
+        const enter = this.d.plans?.enterPlanMode;
+        if (!enter || !agentInfo(session.agent)?.plans) return this.fail("bad_frame", "this session's agent has no plan mode", frame.type);
+        if (this.d.prompts?.list().some((p) => p.sessionId === session.id)) return this.fail("bad_frame", "Answer what Claude is asking first.", frame.type);
+        try {
+          await enter(session.id);
+        } catch (e) {
+          if (e instanceof PlanModeError) return this.fail("bad_frame", e.message, frame.type);
+          throw e;
+        }
+        // Every client hears of it through `updated`; this one gets its answer even when nothing changed.
+        const after = r.get(session.id);
+        if (after) this.send({ type: "session.updated", session: after });
+        return;
+      }
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);

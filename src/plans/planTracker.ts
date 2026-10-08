@@ -156,6 +156,11 @@ export class PlanTracker extends EventEmitter<PlanTrackerEvents> {
     });
   }
 
+  /** The session's agent was switched into plan mode (`session.mode`): it plans, before the next hook says so. */
+  enteredPlanMode(sessionId: string): void {
+    this.change(sessionId, (s) => ({ ...s, planning: true }));
+  }
+
   /** The session stopped working without a hook saying so (an interrupt): its turn is over. */
   turnOver(sessionId: string): void {
     if (this.sessions.get(sessionId)?.writing) this.change(sessionId, (s) => ({ ...s, writing: false, wroteThisTurn: false }));

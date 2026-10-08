@@ -92,6 +92,7 @@ import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.j
 import { TalkService } from "../talk/talkService.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
+import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -710,7 +711,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       voice,
       canvas,
       ...(publisher ? { publish: publisher } : {}),
-      plans,
+      plans: Object.assign(plans, {
+        async enterPlanMode(sessionId: string) {
+          // Straight to tmux, as a model switch is: a key, not a prompt.
+          await enterClaudePlanMode({
+            lines: async () => (await tmux.capture(sessionId)).lines,
+            type: (text) => tmux.sendText(sessionId, text, false),
+            key: (key) => tmux.sendKey(sessionId, key),
+          });
+          plans.enteredPlanMode(sessionId);
+        },
+      }),
       limits: planLimits,
       conversations,
       ...(talk ? { talk } : {}),

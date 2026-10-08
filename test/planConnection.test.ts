@@ -77,6 +77,22 @@ describe("plans on a connection", () => {
     expect(of("plan").at(-1)).toMatchObject({ id: "w-2", text: "# Mine\n", by: "user", writing: false });
   });
 
+  it("switches a session into plan mode, refusing while it asks something", async () => {
+    const { plans, send, of, ask } = setup();
+    let entered = 0;
+    Object.assign(plans, { enterPlanMode: async (id: string) => { entered++; plans.enteredPlanMode(id); } });
+    await send(JSON.parse(hello));
+    await send({ type: "session.mode", sessionId: "gr-a", mode: "plan" });
+    expect(entered).toBe(1);
+    expect(of("session.updated")).toHaveLength(1);
+    await send({ type: "session.mode", sessionId: "gr-s", mode: "plan" });
+    expect(of("error").at(-1)).toMatchObject({ ref: "session.mode" });
+    ask();
+    await send({ type: "session.mode", sessionId: "gr-a", mode: "plan" });
+    expect(of("error").at(-1)).toMatchObject({ ref: "session.mode", message: "Answer what Claude is asking first." });
+    expect(entered).toBe(1);
+  });
+
   it("refuses the plan frames for an agent without plans", async () => {
     const { send, of } = setup();
     await send(JSON.parse(hello));

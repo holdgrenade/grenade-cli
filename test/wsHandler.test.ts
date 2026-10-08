@@ -304,7 +304,7 @@ describe("Connection", () => {
     };
     const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [], async publishCanvas() { return []; }, async remove() { return []; } });
     const planFrame = { type: "plan" as const, sessionId: session.id, file: "plan.md", folder: "/p", text: "", modified: "2026-10-08T16:20:04.000Z", by: "user" as const, writing: false };
-    const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined };
+    const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined, async enterPlanMode() {} };
     const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, plans, talk: new FakeTalk(), openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
