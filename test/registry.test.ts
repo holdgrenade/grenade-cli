@@ -460,3 +460,35 @@ describe("SessionRegistry.updateScreen", () => {
     expect(seen).toEqual(["$", "done"]);
   });
 });
+
+describe("SessionRegistry plans", () => {
+  it("adds the note once to a prompt sent, never to typing that does not submit", async () => {
+    const t = fakeTmux();
+    const typed: string[] = [];
+    t.tmux.sendText = async (_id, text) => { typed.push(text); };
+    const r = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: () => true });
+    const s = await r.create({ name: "a", cwd: "/Users/me", agent: "claude" });
+    let note: string | undefined = "(I edited the plan.)";
+    r.noteOnSubmit = () => {
+      const n = note;
+      note = undefined;
+      return n;
+    };
+    await r.sendText(s.id, "half a thought", false);
+    await r.sendText(s.id, "Shorter please", true);
+    await r.sendText(s.id, "And again", true);
+    expect(typed).toEqual(["half a thought", "Shorter please (I edited the plan.)", "And again"]);
+  });
+
+  it("shows the plan on the session and saves its file", async () => {
+    const t = fakeTmux();
+    const r = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: () => true });
+    const s = await r.create({ name: "a", cwd: "/Users/me", agent: "claude" });
+    const seen: unknown[] = [];
+    r.on("updated", (u) => seen.push(u.plan));
+    r.setPlan(s.id, { file: "p.md", planning: true, writing: true }, "/Users/me/.claude/plans/p.md");
+    r.setPlan(s.id, { file: "p.md", planning: true, writing: true }, "/Users/me/.claude/plans/p.md");
+    expect(seen).toEqual([{ file: "p.md", planning: true, writing: true }]);
+    expect(r.planPaths()).toEqual([{ id: s.id, path: "/Users/me/.claude/plans/p.md" }]);
+  });
+});

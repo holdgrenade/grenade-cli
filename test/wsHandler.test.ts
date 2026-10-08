@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
+import { type PlansPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -133,7 +133,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; plans?: PlansPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -161,6 +161,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.canvas ? { canvas: opts.canvas } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
+    ...(opts.plans ? { plans: opts.plans } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
@@ -302,7 +303,9 @@ describe("Connection", () => {
       async watch() { return { reply: listing, stop() {} }; },
     };
     const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [], async publishCanvas() { return []; }, async remove() { return []; } });
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, talk: new FakeTalk(), openTerm: () => term });
+    const planFrame = { type: "plan" as const, sessionId: session.id, file: "plan.md", folder: "/p", text: "", modified: "2026-10-08T16:20:04.000Z", by: "user" as const, writing: false };
+    const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined };
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, plans, talk: new FakeTalk(), openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];

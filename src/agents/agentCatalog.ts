@@ -19,7 +19,7 @@ const CLAUDE_MODELS = [
 ];
 
 export const AGENTS = [
-  { kind: "claude", name: "Claude Code", activity: true, conversations: true, models: CLAUDE_MODELS },
+  { kind: "claude", name: "Claude Code", activity: true, conversations: true, models: CLAUDE_MODELS, plans: true },
   { kind: "codex", name: "Codex", activity: true, conversations: true },
   { kind: "shell", name: "Shell" },
 ] as const satisfies readonly AgentInfo[];

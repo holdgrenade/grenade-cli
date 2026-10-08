@@ -91,6 +91,7 @@ import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
 import { TalkService } from "../talk/talkService.js";
 import { TalkTools } from "../talk/talkTools.js";
+import { PlanTracker } from "../plans/planTracker.js";
 
 export interface DaemonOptions {
   port?: number;
@@ -175,7 +176,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -198,6 +199,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   });
   const summarizer = startSummarizer(registry, log, opts.summaries ?? process.env["GRENADE_SUMMARIES"] !== "off");
   await registry.adopt();
+  // What each session's agent does with its plan, and its plan file (PROTOCOL.md "Plans").
+  const plans = new PlanTracker(undefined, opts.claudeDir ?? paths.claudeDir);
+  plans.on("plan", (id, plan) => registry.setPlan(id, plan, plans.pathOf(id)));
+  for (const { id, path } of registry.planPaths()) plans.restore(id, path);
+  // The user edited a plan since its agent last wrote it: the next thing they say tells the agent.
+  registry.noteOnSubmit = (id) => plans.takeEditedNote(id);
+  // An interrupt ends a turn without a hook.
+  registry.on("updated", (s) => {
+    if (s.status !== "working") plans.turnOver(s.id);
+  });
+  registry.on("removed", (id) => plans.forget(id));
   // Saved beside sessions.json, so a test daemon with its own sessions file keeps its own order too.
   const groupsPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "groups.json") : paths.groups;
   const groupOrder = new GroupOrderStore(registry, log, groupsPath);
@@ -387,8 +399,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     },
   };
 
-  /** One hook event of a session: status, summary input, model, activity and the text of a push. */
-  const applyClaudeHook = (session: string | null, body: string) =>
+  /** One hook event of a session: its plan, status, summary input, model, activity and the text of a push. */
+  const applyClaudeHook = (session: string | null, body: string) => {
+    if (session) notePlanHook(session, body);
+    return applyClaudeStatusHook(session, body);
+  };
+  const notePlanHook = (session: string, body: string) => {
+    try {
+      const payload: unknown = JSON.parse(body || "{}");
+      if (typeof payload === "object" && payload !== null && registry.get(session)) plans.hook(session, payload);
+    } catch {
+      // Not JSON: the status hook answers that.
+    }
+  };
+  const applyClaudeStatusHook = (session: string | null, body: string) =>
     handleClaudeHook(
       registry,
       session,
@@ -676,6 +700,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       voice,
       canvas,
       ...(publisher ? { publish: publisher } : {}),
+      plans,
       limits: planLimits,
       conversations,
       ...(talk ? { talk } : {}),

@@ -23,6 +23,8 @@ import { boardTooLarge } from "../canvas/boardListing.js";
 import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
 import { PublishError } from "../publish/publisher.js";
 import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
+import { PLAN_SUBSCRIPTIONS_MAX, type PlanFrame } from "@grenade/protocol";
+import { PlanWriteError } from "../plans/planTracker.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -164,6 +166,17 @@ export interface TalkPort {
   off(event: "thread", cb: (frame: TalkThreadFrame) => void): unknown;
 }
 
+/** Sessions' plans (PROTOCOL.md "Plans"); `PlanTracker` in the daemon. */
+export interface PlansPort {
+  follow(sessionId: string, send: (frame: PlanFrame) => void): () => void;
+  /** Rejects with `PlanWriteError` while the agent writes the plan, or when there is no file. */
+  write(sessionId: string, text: string): Promise<PlanFrame>;
+  /** The plan file's text now, for a plan approved with the user's edits. */
+  textOf(sessionId: string): Promise<string | undefined>;
+  /** The plan file's path when the user changed it since the agent last wrote it, once. */
+  takeEditedPath(sessionId: string): string | undefined;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -214,6 +227,8 @@ export interface ConnectionDeps {
   canvas?: CanvasPort;
   /** Canvases published to secret links. Absent means this daemon publishes none (no `publish: 1`) and answers their frames with `bad_frame`. */
   publish?: PublishPort;
+  /** Sessions' plans. Absent means this daemon shows none (no `plans: 1`) and answers their frames with `bad_frame`. */
+  plans?: PlansPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
   talk?: TalkPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
@@ -244,6 +259,8 @@ export class Connection {
   private stopWatchingPush: (() => void) | undefined;
   /** Canvases this client watches, by `cwd`, `group` and `canvas` as it sent them (`watchKey`; PROTOCOL.md "Canvas", "Watching"). */
   private readonly canvasWatches = new Map<string, () => void>();
+  /** The plans this connection follows, by session. */
+  private readonly planFollows = new Map<string, () => void>();
   private helloTimer: unknown;
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
   private readonly onRemoved = (id: string) => {
@@ -338,6 +355,8 @@ export class Connection {
     for (const id of [...this.terms.keys()]) this.closeTerm(id);
     for (const stop of this.canvasWatches.values()) stop();
     this.canvasWatches.clear();
+    for (const stop of this.planFollows.values()) stop();
+    this.planFollows.clear();
     if (this.authed) {
       this.d.registry.off("updated", this.onUpdated);
       this.d.registry.off("removed", this.onRemoved);
@@ -545,6 +564,10 @@ export class Connection {
       case "talk.say":
       case "talk.agent":
         return this.handleTalk(frame);
+      case "plan.subscribe":
+      case "plan.unsubscribe":
+      case "plan.write":
+        return this.handlePlan(frame);
       case "session.group": {
         // The registry emits session.updated when the group or order changes; a no-op move still gets an answer.
         const before = r.get(frame.sessionId);
@@ -589,7 +612,7 @@ export class Connection {
       case "board.unregister":
         return this.send((this.token && this.d.board?.unregister(this.token)) || NO_BOARD);
       case "prompt.answer": {
-        const outcome = this.d.prompts?.answer(frame.sessionId, frame.promptId, frame) ?? "elsewhere";
+        const outcome = this.d.prompts?.answer(frame.sessionId, frame.promptId, await this.decisionFor(frame)) ?? "elsewhere";
         if (typeof outcome === "object") return this.fail("bad_frame", outcome.error, frame.type);
         // A used answer reaches every client through the store. This one came too late.
         if (outcome === "elsewhere") this.send({ type: "prompt.closed", sessionId: frame.sessionId, promptId: frame.promptId, reason: "elsewhere" });
@@ -603,6 +626,50 @@ export class Connection {
         this.d.log.info("Saved an attachment from the phone", { session: frame.sessionId, path: saved.path, bytes: saved.bytes });
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });
       }
+    }
+  }
+
+  /**
+   * A plan is approved as its file holds it now, the user's edits included, and one sent back says the user edited it
+   * (PROTOCOL.md "Plans"). Any other answer is the frame as it came.
+   */
+  private async decisionFor(frame: Extract<ClientFrame, { type: "prompt.answer" }>): Promise<PromptDecision> {
+    const plans = this.d.plans;
+    const open = this.d.prompts?.list().find((p) => p.promptId === frame.promptId && p.sessionId === frame.sessionId);
+    if (!plans || open?.kind !== "plan") return frame;
+    if (frame.allow) return { ...frame, planText: await plans.textOf(frame.sessionId) };
+    return { ...frame, planEdited: plans.takeEditedPath(frame.sessionId) };
+  }
+
+  /** The plan frames (PROTOCOL.md "Plans"). */
+  private async handlePlan(frame: Extract<ClientFrame, { type: "plan.subscribe" | "plan.unsubscribe" | "plan.write" }>): Promise<void> {
+    const plans = this.d.plans;
+    const id = frame.type === "plan.write" ? frame.id : undefined;
+    if (!plans) return this.fail("bad_frame", "this daemon shows no plans", frame.type, false, id);
+    const session = this.d.registry.get(frame.sessionId);
+    if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type, false, id);
+    if (!agentInfo(session.agent)?.plans) return this.fail("bad_frame", "this session's agent has no plans", frame.type, false, id);
+    switch (frame.type) {
+      case "plan.unsubscribe":
+        this.planFollows.get(frame.sessionId)?.();
+        this.planFollows.delete(frame.sessionId);
+        return;
+      case "plan.subscribe": {
+        if (this.planFollows.has(frame.sessionId)) return;
+        if (this.planFollows.size >= PLAN_SUBSCRIPTIONS_MAX) return this.fail("bad_frame", `A connection follows at most ${PLAN_SUBSCRIPTIONS_MAX} plans; unsubscribe from one first.`, frame.type);
+        this.planFollows.set(frame.sessionId, plans.follow(frame.sessionId, (plan) => this.send(plan)));
+        return;
+      }
+      case "plan.write":
+        try {
+          const written = await plans.write(frame.sessionId, frame.text);
+          // The others hear of it through their follow; this one gets its id back.
+          if (frame.id !== undefined || !this.planFollows.has(frame.sessionId)) this.send({ ...written, ...(frame.id !== undefined ? { id: frame.id } : {}) });
+        } catch (e) {
+          if (e instanceof PlanWriteError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
+          throw e;
+        }
+        return;
     }
   }
 

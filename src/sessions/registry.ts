@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionContext, SessionStatus, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionContext, SessionPlan, SessionStatus, WaitingFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
@@ -63,6 +63,8 @@ interface Record_ {
   shownHeld: readonly HeldTask[];
   /** When a hook saw a background task start, by the agent's id for it. */
   backgroundStarts: Map<string, string>;
+  /** The plan file's path (PROTOCOL.md "Plans"); saved, so a restarted daemon still shows the plan. */
+  planPath: string | undefined;
 }
 
 interface PersistedSession {
@@ -86,6 +88,8 @@ interface PersistedSession {
   background?: readonly HeldTask[] | undefined;
   resumedFrom?: string | undefined;
   resumedAt?: string | undefined;
+  /** The plan file's path, once the agent has written one. */
+  planPath?: string | undefined;
 }
 
 export class SessionExistsError extends Error {}
@@ -317,10 +321,40 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   // ---- input ---------------------------------------------------------------
 
+  /**
+   * What to add after a prompt the user sends a session, once (PROTOCOL.md "Plans": the user edited its plan). Set by
+   * the daemon; nothing by default.
+   */
+  noteOnSubmit: ((id: string) => string | undefined) | undefined;
+
   async sendText(id: string, text: string, submit: boolean): Promise<void> {
     const r = this.require(id);
+    const note = submit && text.trim() ? this.noteOnSubmit?.(id) : undefined;
     // Codex takes typed text followed by Enter for a paste and keeps the Enter as a newline (`inputCommand`).
-    await this.tmux.sendText(id, text, submit, r.session.agent === "codex");
+    await this.tmux.sendText(id, note ? `${text} ${note}` : text, submit, r.session.agent === "codex");
+  }
+
+  /**
+   * The session's plan (PROTOCOL.md "Plans"), from the daemon's `PlanTracker`, and its file's path, saved. Undefined
+   * takes it off.
+   */
+  setPlan(id: string, plan: SessionPlan | undefined, path: string | undefined): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    if (r.planPath !== path) {
+      r.planPath = path;
+      this.persist();
+    }
+    const now = r.session.plan;
+    if (now?.file === plan?.file && now?.planning === plan?.planning && now?.writing === plan?.writing) return;
+    const { plan: _was, ...rest } = r.session;
+    r.session = plan ? { ...rest, plan } : rest;
+    this.emit("updated", r.session);
+  }
+
+  /** The saved plan files of the sessions, for the daemon's `PlanTracker` after a restart. */
+  planPaths(): { id: string; path: string }[] {
+    return [...this.records.values()].flatMap((r) => (r.planPath ? [{ id: r.session.id, path: r.planPath }] : []));
   }
 
   async sendKey(id: string, key: KeyName): Promise<void> {
@@ -639,7 +673,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map() });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map(), planPath: meta.planPath });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -701,7 +735,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt, planPath }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}) }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");
