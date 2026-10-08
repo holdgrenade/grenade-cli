@@ -51,7 +51,7 @@ import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
-import { isLoopback } from "./loopback.js";
+import { fromWebPage, isLoopback } from "./loopback.js";
 import { typedCode } from "./pairCheck.js";
 import { CODE_TTL_MS, DEVICE_IDLE_MS, PairingCodes, TokenStore, type TokenRecord } from "./pairing.js";
 import { closePromptsByHook, handlePromptHook } from "./promptHook.js";
@@ -227,6 +227,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
       if (req.method === "GET" && url.pathname === "/health") return sendJson(res, 200, { ok: true, ...info });
+      // Everything else on this port is for the apps, the hooks and the CLI, never for a web page (`fromWebPage`).
+      if (fromWebPage(req.headers.origin)) return sendJson(res, 403, { error: "forbidden" });
       if (req.method === "POST" && url.pathname === "/pair") return handlePair(await readBody(req), res);
       if (req.method === "POST" && url.pathname === "/hooks/claude") {
         // Hooks come from Claude Code on this Mac. The port listens on every interface, so say so.

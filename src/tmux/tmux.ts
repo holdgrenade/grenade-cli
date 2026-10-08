@@ -8,6 +8,7 @@ import {
   buildHistory,
   buildScreen,
   historyRange,
+  goesInAsPaste,
   inputCommand,
   keyToTmux,
   parsePaneGeometry,
@@ -18,6 +19,7 @@ import {
   type PaneGeometry,
   type Screen,
 } from "./parse.js";
+import { waitForSettle } from "./pasteSettle.js";
 import { parsePidList, parsePsTable, processTree } from "./processes.js";
 import { scopeUnavailable, scopeUnit, scopedCommand } from "./serverScope.js";
 import { parseWindowWidths, type WindowWidth } from "../sessions/widthFloor.js";
@@ -64,6 +66,8 @@ export interface TmuxOptions {
   /** The daemon is the systemd service: a tmux server it starts goes into a scope of its own (`serverScope.ts`). */
   serverScope?: boolean;
 }
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function createTmux(opts: TmuxOptions = {}): Tmux {
   const bin = opts.bin ?? process.env["TMUX_BIN"] ?? "tmux";
@@ -173,7 +177,11 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       ]);
     },
     async sendText(id, text, submit, paste) {
+      // After a paste, Enter waits until the agent has taken it in (`pasteSettle.ts`), or Claude Code can lose it.
+      const settle = submit && text.length > 0 && goesInAsPaste(text, paste);
+      const before = settle ? await run(["capture-pane", "-p", "-t", pane(id)]) : "";
       if (text.length > 0) await run(inputCommand(pane(id), text, paste));
+      if (settle) await waitForSettle(before, () => run(["capture-pane", "-p", "-t", pane(id)]), sleep);
       if (submit) await run(["send-keys", "-t", pane(id), "Enter"]);
     },
     async sendKey(id, key) {
