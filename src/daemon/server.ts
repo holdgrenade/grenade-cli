@@ -77,6 +77,8 @@ import { CanvasWatcher } from "../canvas/canvasWatcher.js";
 import { canvasInfoOf, listCanvas, readBoard } from "../canvas/canvasFolder.js";
 import { Publisher } from "../publish/publisher.js";
 import { ShareClient, type Fetch } from "../publish/shareClient.js";
+import { CommentService } from "../publish/comments.js";
+import { OwnerName } from "../publish/owner.js";
 import { assetFiles, readAsset } from "../publish/publishFolder.js";
 import { OFFICIAL_SHARE_URL } from "@grenade/protocol";
 import { PromptStore } from "../prompts/promptStore.js";
@@ -177,7 +179,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, ...(publishedPath ? { publish: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -340,10 +342,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const canvasWatcher = new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) }));
   const canvas = new CanvasService(() => registry.list(), canvasWatcher);
   // Canvases published to secret links (PROTOCOL.md "Publishing"): the daemon keeps each page up to date as boards are saved.
+  // Comments on those links (PROTOCOL.md "Comments"), pulled from the share host, and the owner's name the pages show.
+  const shareClient = new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch);
+  const owner = publishedPath ? new OwnerName(join(dirname(publishedPath), "owner.json")) : undefined;
+  let comments: CommentService | undefined;
   const publisher = publishedPath
     ? new Publisher({
         path: publishedPath,
-        client: new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch),
+        client: shareClient,
+        ownerName: () => owner?.name ?? "",
+        commentsOf: (token) => comments?.summary(token),
         folderOf: (pick) => canvas.folderOf(pick),
         nameOf: async (folder, id) => (await canvasInfoOf(folder, id)).name,
         listCanvas: (folder) => listCanvas(folder),
@@ -364,6 +372,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         log,
       })
     : undefined;
+  if (publisher && publishedPath) {
+    const service = new CommentService({
+      dir: join(dirname(publishedPath), "comments"),
+      client: shareClient,
+      links: () => publisher.commentLinks(),
+      ownerName: () => owner?.name ?? "",
+      log,
+    });
+    comments = service;
+    service.on("changed", () => publisher.touch());
+    owner?.on("changed", () => publisher.refreshAll());
+  }
   const models: ModelsPort = {
     async switch(session, model, effort) {
       if (switchingModel.has(session.id)) throw new ModelSwitchError("A model switch is already under way in this session.");
@@ -713,6 +733,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       voice,
       canvas,
       ...(publisher ? { publish: publisher } : {}),
+      ...(comments ? { comments } : {}),
+      ...(owner ? { owner } : {}),
       plans: Object.assign(plans, {
         async enterPlanMode(sessionId: string) {
           // Straight to tmux, as a model switch is: a key, not a prompt.
@@ -866,6 +888,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   log.info("Pair a phone with: grenade pair");
   updates.start();
   void publisher?.start();
+  comments?.start();
 
   return {
     info,
@@ -879,6 +902,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       poller.stop();
       relayLink?.stop();
       publisher?.stop();
+      comments?.stop();
       talk?.stop();
       canvas.stop();
       push.stop();

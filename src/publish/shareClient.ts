@@ -3,7 +3,7 @@
  * taking a link down. Every call has a time limit and rejects with `ShareHostError`, whose message is a sentence for
  * the user.
  */
-import { ShareError, ShareManifestReply, type ShareManifest } from "@grenade/protocol";
+import { ShareCommentPostReply, ShareCommentsReply, ShareError, ShareManifestReply, type ShareCommentEvent, type ShareCommentPost, type ShareManifest } from "@grenade/protocol";
 
 export class ShareHostError extends Error {
   constructor(
@@ -62,6 +62,22 @@ export class ShareClient {
 
   async putFile(token: string, key: string, file: string, bytes: Uint8Array): Promise<void> {
     await this.call("PUT", `/v1/c/${token}/f/${encodeURIComponent(file)}`, key, bytes, "application/octet-stream");
+  }
+
+  /** A link's comment events after `after` (PROTOCOL.md "Comments"), oldest first, and the newest cursor. */
+  async getComments(token: string, key: string, after?: string): Promise<{ events: ShareCommentEvent[]; cursor?: string }> {
+    const response = await this.call("GET", `/c/${token}/comments${after ? `?after=${encodeURIComponent(after)}` : ""}`, key);
+    const parsed = ShareCommentsReply.safeParse(await response.json().catch(() => null));
+    if (!parsed.success) throw new ShareHostError("The share host answered something unexpected.", response.status);
+    return parsed.data.cursor !== undefined ? { events: parsed.data.events, cursor: parsed.data.cursor } : { events: parsed.data.events };
+  }
+
+  /** Posts the owner's event (a reply, a resolve, a reopen, a delete); resolves with the event as the host kept it. */
+  async postComment(token: string, key: string, post: ShareCommentPost): Promise<ShareCommentEvent> {
+    const response = await this.call("POST", `/v1/c/${token}/comments`, key, JSON.stringify(post), "application/json");
+    const parsed = ShareCommentPostReply.safeParse(await response.json().catch(() => null));
+    if (!parsed.success) throw new ShareHostError("The share host answered something unexpected.", response.status);
+    return parsed.data.event;
   }
 
   /** Takes a link down. A link the host does not have (404) is down already. */

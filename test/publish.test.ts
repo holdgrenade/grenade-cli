@@ -357,6 +357,8 @@ describe("publishing a plan", () => {
         saved = onChange;
         return () => {};
       },
+      ownerName: () => "Mike Dick",
+      commentsOf: () => ({ open: 2, unread: 1 }),
       log: createLogger({ level: "error" }),
       now: () => new Date("2026-10-08T12:00:00.000Z"),
       setTimer: (fn, ms) => {
@@ -384,7 +386,8 @@ describe("publishing a plan", () => {
     expect(link).toMatchObject({ kind: "plan", sessionId: "gr-a", file: "velvety-knitting-shell.md", title: "Ship the plan tab", state: "live", boards: 0, expiry: "7d" });
     expect(link.url).toBe(`https://share.test/p/${link.token}`);
     const hosted = host.links.get(link.token)!;
-    expect(hosted.manifest).toMatchObject({ kind: "plan", boards: [], assets: [{ file: "plan.md" }] });
+    expect(hosted.manifest).toMatchObject({ kind: "plan", owner: "Mike Dick", boards: [], assets: [{ file: "plan.md" }] });
+    expect(link.comments).toEqual({ open: 2, unread: 1 });
     expect(hosted.files.get("plan.md")).toBe("# Plan: Ship the plan tab\n\n- One\n");
     await writeFile(planPath, "# Ship the plan tab, with Publish\n\n- One\n- Two\n");
     saved!();

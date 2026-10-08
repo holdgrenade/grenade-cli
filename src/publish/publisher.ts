@@ -43,6 +43,10 @@ export interface PublisherDeps {
   readPlan?(path: string): Promise<Buffer | null>;
   /** Tells `onChange` whenever the file at `path` is saved. Returns how to stop. */
   watchPlan?(path: string, onChange: () => void): () => void;
+  /** The owner's name ("" for none), put in every manifest as who shared it (PROTOCOL.md "Comments"). */
+  ownerName?: () => string;
+  /** A link's comments, open and unread, for `PublishedLink.comments`. */
+  commentsOf?: (token: string) => { open: number; unread: number } | undefined;
   log: Logger;
   now?: () => Date;
   random?: (n: number) => Buffer;
@@ -93,7 +97,29 @@ export class Publisher extends EventEmitter {
 
   /** Every link, newest first, as a client sees them. */
   list(): PublishedLink[] {
-    return linksOf(this.records, this.host);
+    const links = linksOf(this.records, this.host);
+    const commentsOf = this.d.commentsOf;
+    if (!commentsOf) return links;
+    return links.map((l) => {
+      const comments = commentsOf(l.token);
+      return comments ? { ...l, comments } : l;
+    });
+  }
+
+  /** Every link with its key, and whether the host still serves it (PROTOCOL.md "Comments"). */
+  commentLinks(): { token: string; key: string; live: boolean }[] {
+    const now = this.now();
+    return this.records.map((r) => ({ token: r.token, key: r.key, live: !isExpired(r, now) }));
+  }
+
+  /** Tells clients the links changed (their comments did). */
+  touch(): void {
+    this.changed();
+  }
+
+  /** Sends every page again (the owner's name changed). */
+  refreshAll(): void {
+    for (const token of this.live.keys()) this.schedule(token, 0);
   }
 
   /** Starts keeping every stored link up to date. */
@@ -390,9 +416,11 @@ export class Publisher extends EventEmitter {
     const title = planTitleOf(bytes.toString("utf8"), record.file ?? SHARE_PLAN_FILE);
     if (title !== record.title) this.update(record.token, { title });
     live.files = new Map([[SHARE_PLAN_FILE, bytes]]);
+    const owner = this.d.ownerName?.() ?? "";
     return {
       kind: "plan",
       title,
+      ...(owner ? { owner } : {}),
       scope: "newest",
       ...(record.expires ? { expires: record.expires } : {}),
       boards: [],
@@ -450,7 +478,8 @@ export class Publisher extends EventEmitter {
     // Only what this manifest uses stays cached.
     live.cache = cache;
     live.files = files;
-    return { title: record.title, scope: record.scope, ...(record.expires ? { expires: record.expires } : {}), boards, assets };
+    const owner = this.d.ownerName?.() ?? "";
+    return { title: record.title, ...(owner ? { owner } : {}), scope: record.scope, ...(record.expires ? { expires: record.expires } : {}), boards, assets };
   }
 }
 

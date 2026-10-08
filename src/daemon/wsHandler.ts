@@ -22,6 +22,8 @@ import { CanvasError, type CanvasPick, type CanvasReply } from "../canvas/canvas
 import { boardTooLarge } from "../canvas/boardListing.js";
 import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
 import { PublishError } from "../publish/publisher.js";
+import type { CommentsFrame } from "@grenade/protocol";
+import { CommentError } from "../publish/comments.js";
 import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 import { PLAN_SUBSCRIPTIONS_MAX, type PlanFrame } from "@grenade/protocol";
 import { PlanWriteError } from "../plans/planTracker.js";
@@ -154,6 +156,25 @@ export interface PublishPort {
   off(event: "changed", cb: (links: PublishedLink[]) => void): unknown;
 }
 
+/** Comments on published links (PROTOCOL.md "Comments"); `CommentService` in the daemon. Changes reject with `CommentError`. */
+export interface CommentsPort {
+  frame(token: string, id?: string): CommentsFrame;
+  watch(token: string): () => void;
+  reply(token: string, thread: string, text: string): Promise<CommentsFrame>;
+  resolve(token: string, thread: string, resolved: boolean): Promise<CommentsFrame>;
+  seen(token: string, thread: string): void;
+  on(event: "changed", cb: (frame: CommentsFrame) => void): unknown;
+  off(event: "changed", cb: (frame: CommentsFrame) => void): unknown;
+}
+
+/** The owner's name (PROTOCOL.md "Comments"); `OwnerName` in the daemon. */
+export interface OwnerPort {
+  readonly name: string;
+  set(name: string): string;
+  on(event: "changed", cb: (name: string) => void): unknown;
+  off(event: "changed", cb: (name: string) => void): unknown;
+}
+
 /** Typed Talk, the day's thread answered by an agent on this computer (PROTOCOL.md "Talk by text"); `TalkService` in the daemon. */
 export interface TalkPort {
   frame(): TalkThreadFrame;
@@ -232,6 +253,10 @@ export interface ConnectionDeps {
   canvas?: CanvasPort;
   /** Canvases published to secret links. Absent means this daemon publishes none (no `publish: 1`) and answers their frames with `bad_frame`. */
   publish?: PublishPort;
+  /** Comments on published links. Absent means this daemon pulls none (no `comments: 1`) and answers their frames with `bad_frame`. */
+  comments?: CommentsPort;
+  /** The owner's name. Absent with `comments`. */
+  owner?: OwnerPort;
   /** Sessions' plans. Absent means this daemon shows none (no `plans: 1`) and answers their frames with `bad_frame`. */
   plans?: PlansPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
@@ -283,6 +308,14 @@ export class Connection {
   /** This client sent a publish frame once, so it hears of every change to a link (PROTOCOL.md "Publishing"). */
   private watchesPublish = false;
   private readonly onPublished = (links: PublishedLink[]) => this.send({ type: "published", links });
+  /** The links whose comments this client follows (PROTOCOL.md "Comments"), each with how to stop. */
+  private readonly commentWatches = new Map<string, () => void>();
+  private readonly onComments = (f: CommentsFrame) => {
+    if (this.commentWatches.has(f.token)) this.send(f);
+  };
+  /** This client asked for the owner's name once, so it hears of every change. */
+  private watchesOwner = false;
+  private readonly onOwner = (name: string) => this.send({ type: "owner", name });
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   /** This client sent `talk.thread`, so it hears of every new row, of the agent being busy and of a new day or agent. */
   private watchesTalk = false;
@@ -332,7 +365,7 @@ export class Connection {
       await this.dispatch(frame);
     } catch (e) {
       // An `input` (or a canvas request, or an `attachment`) with an id gets its id back, so the phone knows which one did not arrive.
-      const id = frame.type === "input" || frame.type === "attachment" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
+      const id = frame.type === "input" || frame.type === "attachment" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -372,6 +405,11 @@ export class Connection {
       this.d.groups?.off("changed", this.onGroups);
       this.d.voice?.off("changed", this.onVoice);
       this.d.publish?.off("changed", this.onPublished);
+      for (const stop of this.commentWatches.values()) stop();
+      if (this.commentWatches.size > 0) this.d.comments?.off("changed", this.onComments);
+      this.commentWatches.clear();
+      if (this.watchesOwner) this.d.owner?.off("changed", this.onOwner);
+      this.watchesOwner = false;
       this.stopWatchingTalk();
       this.authed = false;
       this.stopWatchingPush?.();
@@ -566,6 +604,13 @@ export class Connection {
       case "publish.plan":
       case "publish.remove":
         return this.handlePublish(frame);
+      case "comments.list":
+      case "comment.reply":
+      case "comment.resolve":
+      case "comment.seen":
+        return this.handleComments(frame);
+      case "owner.name":
+        return this.handleOwner(frame);
       case "talk.thread":
       case "talk.say":
       case "talk.agent":
@@ -743,6 +788,43 @@ export class Connection {
       if (e instanceof PublishError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
       throw e;
     }
+  }
+
+  /** The comment frames (PROTOCOL.md "Comments"): answered with the link's threads and the request's `id`; a refusal is `bad_frame` with it. */
+  private async handleComments(frame: Extract<ClientFrame, { type: "comments.list" | "comment.reply" | "comment.resolve" | "comment.seen" }>): Promise<void> {
+    const comments = this.d.comments;
+    const id = frame.type === "comment.seen" ? undefined : frame.id;
+    if (!comments) return this.fail("bad_frame", "this daemon pulls no comments", frame.type, false, id);
+    const known = this.d.publish?.list().some((l) => l.token === frame.token) ?? false;
+    if (!known && frame.type !== "comment.seen") return this.fail("bad_frame", "That link is not one of this computer's.", frame.type, false, id);
+    if (frame.type === "comment.seen") return comments.seen(frame.token, frame.thread);
+    if (!this.commentWatches.has(frame.token)) {
+      if (this.commentWatches.size === 0) comments.on("changed", this.onComments);
+      this.commentWatches.set(frame.token, comments.watch(frame.token));
+    }
+    try {
+      const reply =
+        frame.type === "comments.list" ? comments.frame(frame.token, frame.id)
+        : frame.type === "comment.reply" ? { ...(await comments.reply(frame.token, frame.thread, frame.text)), id: frame.id }
+        : { ...(await comments.resolve(frame.token, frame.thread, frame.resolved)), id: frame.id };
+      this.send(reply);
+    } catch (e) {
+      if (e instanceof CommentError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
+      throw e;
+    }
+  }
+
+  /** `owner.name`: asks for the owner's name, or sets it; answered with `owner` and the request's `id`. */
+  private handleOwner(frame: Extract<ClientFrame, { type: "owner.name" }>): void {
+    const owner = this.d.owner;
+    if (!owner) return this.fail("bad_frame", "this daemon keeps no owner's name", frame.type, false, frame.id);
+    if (!this.watchesOwner) owner.on("changed", this.onOwner);
+    this.watchesOwner = true;
+    // The answer goes before the change everyone hears of, so the asker hears its own name once, with its id.
+    owner.off("changed", this.onOwner);
+    const name = frame.name === undefined ? owner.name : owner.set(frame.name);
+    owner.on("changed", this.onOwner);
+    this.send({ type: "owner", id: frame.id, name });
   }
 
   /** The canvas frames (PROTOCOL.md "Canvas"): a refused folder, a missing or too large board is `bad_frame` with the request's `id`. */

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { type PlansPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort } from "../src/daemon/wsHandler.js";
+import { type PlansPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -133,7 +133,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; plans?: PlansPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -161,6 +161,8 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.canvas ? { canvas: opts.canvas } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
+    ...(opts.comments ? { comments: opts.comments } : {}),
+    ...(opts.owner ? { owner: opts.owner } : {}),
     ...(opts.plans ? { plans: opts.plans } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
@@ -302,10 +304,14 @@ describe("Connection", () => {
       async board() { return { html: "<html></html>", modified: "2026-10-04T10:02:11.000Z", bytes: 13 }; },
       async watch() { return { reply: listing, stop() {} }; },
     };
-    const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [], async publishCanvas() { return []; }, async remove() { return []; } });
+    const commented = { token: "k7Fq2xN9pWm4Lq0Z", kind: "canvas", cwd: "/p", folder: "/p/.grenade/canvas", title: "p", url: "https://share.test/c/k7Fq2xN9pWm4Lq0Z", scope: "newest", expiry: "never", boards: 0, created: "2026-10-05T00:00:00.000Z", updated: "2026-10-05T00:00:00.000Z", state: "live" } as const;
+    const publish: PublishPort = Object.assign(new EventEmitter(), { list: () => [commented], async publishCanvas() { return []; }, async remove() { return []; } });
+    const commentsFrame = (token: string) => ({ type: "comments" as const, token, threads: [] });
+    const comments: CommentsPort = Object.assign(new EventEmitter(), { frame: commentsFrame, watch: () => () => {}, async reply(t: string) { return commentsFrame(t); }, async resolve(t: string) { return commentsFrame(t); }, seen() {} });
+    const owner: OwnerPort = Object.assign(new EventEmitter(), { name: "Mike", set: (n: string) => n });
     const planFrame = { type: "plan" as const, sessionId: session.id, file: "plan.md", folder: "/p", text: "", modified: "2026-10-08T16:20:04.000Z", by: "user" as const, writing: false };
     const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined, async enterPlanMode() {} };
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, plans, talk: new FakeTalk(), openTerm: () => term });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, talk: new FakeTalk(), openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
