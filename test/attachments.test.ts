@@ -44,4 +44,12 @@ describe("attachmentStore", () => {
     expect(readFileSync(first.path, "utf8")).toBe("one");
     expect(readFileSync(second.path, "utf8")).toBe("two");
   });
+
+  it("gives uploads written at once, under the same name, a file each", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-att-"));
+    const store = createAttachmentStore(dir, () => at);
+    const saved = await Promise.all(["a", "b", "c"].map((body) => store.save("gr-app", "image", "image/png", Buffer.from(body))));
+    expect(new Set(saved.map((s) => s.path)).size).toBe(3);
+    expect(saved.map((s) => readFileSync(s.path, "utf8")).sort()).toEqual(["a", "b", "c"]);
+  });
 });

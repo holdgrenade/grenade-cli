@@ -475,7 +475,7 @@ describe("Connection", () => {
     await conn.handleMessage(fixture("client.hello.json"));
     await conn.handleMessage(JSON.stringify({ type: "attachment", id: "a", sessionId: "gr-zzz", name: "x.png", mime: "image/png", data: "AA==" }));
     expect(saved).toEqual([]);
-    expect(out.at(-1)).toMatchObject({ type: "error", code: "unknown_session", ref: "attachment" });
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "unknown_session", ref: "attachment", id: "a" });
   });
 
   it("answers history with the registry's rows", async () => {

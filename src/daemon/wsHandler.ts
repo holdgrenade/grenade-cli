@@ -309,8 +309,8 @@ export class Connection {
     try {
       await this.dispatch(frame);
     } catch (e) {
-      // An `input` (or a canvas request) with an id gets its id back, so the phone knows which one did not arrive.
-      const id = frame.type === "input" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
+      // An `input` (or a canvas request, or an `attachment`) with an id gets its id back, so the phone knows which one did not arrive.
+      const id = frame.type === "input" || frame.type === "attachment" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -598,7 +598,7 @@ export class Connection {
       case "attachment": {
         this.requireSession(frame.sessionId);
         const data = Buffer.from(frame.data, "base64");
-        if (data.length > ATTACHMENT_MAX_BYTES) return this.fail("bad_frame", `attachment is larger than ${ATTACHMENT_MAX_BYTES} bytes`, frame.type);
+        if (data.length > ATTACHMENT_MAX_BYTES) return this.fail("bad_frame", `attachment is larger than ${ATTACHMENT_MAX_BYTES} bytes`, frame.type, false, frame.id);
         const saved = await this.d.attachments.save(frame.sessionId, frame.name, frame.mime, data);
         this.d.log.info("Saved an attachment from the phone", { session: frame.sessionId, path: saved.path, bytes: saved.bytes });
         return this.send({ type: "attachment.saved", id: frame.id, sessionId: frame.sessionId, path: saved.path, bytes: saved.bytes });

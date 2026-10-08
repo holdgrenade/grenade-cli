@@ -1,6 +1,5 @@
 /** Writes uploaded attachments under <dir>/<sessionId>/ and hands back where they went. */
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { attachmentFileName } from "./attachmentName.js";
 
@@ -19,19 +18,24 @@ export function createAttachmentStore(dir: string, now: () => Date = () => new D
     async save(sessionId, name, mime, data) {
       const folder = join(dir, sessionId);
       await mkdir(folder, { recursive: true });
-      const path = unusedPath(folder, attachmentFileName(name, mime, now()));
-      await writeFile(path, data, { flag: "wx" });
-      return { path, bytes: data.length };
+      const fileName = attachmentFileName(name, mime, now());
+      // Two uploads in the same second get `-2`, `-3`… before the extension. `wx` claims the name, so uploads
+      // written at once (several images dropped together, all called "image") never pick the same one.
+      for (let n = 1; ; n++) {
+        const path = join(folder, numbered(fileName, n));
+        try {
+          await writeFile(path, data, { flag: "wx" });
+          return { path, bytes: data.length };
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        }
+      }
     },
   };
 }
 
-/** Two uploads in the same second get `-2`, `-3`… before the extension. */
-function unusedPath(folder: string, fileName: string): string {
+function numbered(fileName: string, n: number): string {
+  if (n === 1) return fileName;
   const dot = fileName.lastIndexOf(".");
-  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
-  const ext = dot > 0 ? fileName.slice(dot) : "";
-  let candidate = join(folder, fileName);
-  for (let n = 2; existsSync(candidate); n++) candidate = join(folder, `${stem}-${n}${ext}`);
-  return candidate;
+  return dot > 0 ? `${fileName.slice(0, dot)}-${n}${fileName.slice(dot)}` : `${fileName}-${n}`;
 }
