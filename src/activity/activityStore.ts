@@ -123,6 +123,13 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
 
+  /** A push of the session's branch, or one that failed (PROTOCOL.md "Changes", "The push card"): a card at once. */
+  notePush(id: string, entry: ActivityEntry): void {
+    const t = this.track(id);
+    t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
+    this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
+  }
+
   /** The session is gone. */
   forget(id: string): void {
     this.tracks.delete(id);

@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionContext, SessionPlan, SessionStatus, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionChanges, SessionContext, SessionPlan, SessionStatus, WaitingFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
@@ -65,6 +65,8 @@ interface Record_ {
   backgroundStarts: Map<string, string>;
   /** The plan file's path (PROTOCOL.md "Plans"); saved, so a restarted daemon still shows the plan. */
   planPath: string | undefined;
+  /** The commit checked out when the session was first read in git (PROTOCOL.md "Changes"): its commits are those after. Saved. */
+  gitBase: string | undefined;
 }
 
 interface PersistedSession {
@@ -90,6 +92,8 @@ interface PersistedSession {
   resumedAt?: string | undefined;
   /** The plan file's path, once the agent has written one. */
   planPath?: string | undefined;
+  /** The commit checked out when the session was first read in git. */
+  gitBase?: string | undefined;
 }
 
 export class SessionExistsError extends Error {}
@@ -204,6 +208,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         background: meta?.background,
         resumedFrom: meta?.resumedFrom,
         resumedAt: meta?.resumedAt,
+        gitBase: meta?.gitBase,
       });
       // Sessions started by an older daemon lack mouse mode and the blank fill; set them like `newSession` does.
       this.tmux.applySessionOptions(id).catch((e) => this.log.debug("Could not set tmux session options", { session: id, error: e }));
@@ -628,6 +633,28 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     return changed;
   }
 
+  /** Where the session's work stands in git (PROTOCOL.md "Changes"); undefined outside a repository. Not saved. */
+  setChanges(id: string, changes: SessionChanges | undefined): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    if (JSON.stringify(r.session.changes) === JSON.stringify(changes)) return;
+    const { changes: _was, ...rest } = r.session;
+    r.session = changes ? { ...rest, changes } : rest;
+    this.emit("updated", r.session);
+  }
+
+  /** The commit the session's git history counts from (PROTOCOL.md "Changes"), once it was read. */
+  gitBaseOf(id: string): string | undefined {
+    return this.records.get(id)?.gitBase;
+  }
+
+  setGitBase(id: string, head: string): void {
+    const r = this.records.get(id);
+    if (!r || r.gitBase === head) return;
+    r.gitBase = head;
+    this.persist();
+  }
+
   /** The transcript a hook named. Not part of the session phones see; only saved. */
   setTranscript(id: string, path: string): void {
     const r = this.records.get(id);
@@ -673,7 +700,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map(), planPath: meta.planPath });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map(), planPath: meta.planPath, gitBase: meta.gitBase });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -735,7 +762,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt, planPath }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}) }));
+      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

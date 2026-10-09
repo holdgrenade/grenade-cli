@@ -94,6 +94,7 @@ import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.j
 import { TalkService } from "../talk/talkService.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
+import { ChangesTracker } from "../changes/changesTracker.js";
 import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
 
 /** The largest message a socket on :7788 takes, the relay's cap too: a sealed 2 MiB attachment is about 3.75 MB. */
@@ -182,7 +183,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -253,7 +254,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }
       if (req.method === "POST" && url.pathname === "/hooks/codex") {
         if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
-        const r = applyCodexHook(url.searchParams.get("session"), await readBody(req));
+        const codexSession = url.searchParams.get("session");
+        if (codexSession && registry.get(codexSession)) changes.noteHook(codexSession);
+        const r = applyCodexHook(codexSession, await readBody(req));
         return sendJson(res, r.status, r.body);
       }
       if (req.method === "POST" && url.pathname === PROMPT_HOOK_PATH) {
@@ -269,6 +272,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   // What the agent said and was asked, read from the transcript on every hook (PROTOCOL.md "Activity").
   const activity = new ActivityStore();
+  // Where each session's work stands in git, and its pushes (PROTOCOL.md "Changes").
+  const changes = new ChangesTracker({ registry, activity, log });
+  changes.start();
+  registry.on("created", (s) => void changes.refresh(s.id));
+  registry.on("removed", (id) => changes.forget(id));
   const transcripts = new TranscriptReader();
   /**
    * Reads a session's transcript: new activity into the store, a moved working directory and a new title into the
@@ -438,6 +446,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   /** One hook event of a session: its plan, status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) => {
     if (session) notePlanHook(session, body);
+    if (session && registry.get(session)) changes.noteHook(session);
     return applyClaudeStatusHook(session, body);
   };
   const notePlanHook = (session: string, body: string) => {
@@ -712,6 +721,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       attachments,
       sentInputs,
       activity,
+      changes,
       interrupted,
       isValidToken: (t) => tokens.has(t),
       sealed: via.sealed,
@@ -915,6 +925,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       comments?.stop();
       talk?.stop();
       canvas.stop();
+      changes.stop();
       push.stop();
       // Held hook requests would keep the HTTP server from closing.
       prompts.closeAll();

@@ -28,6 +28,8 @@ import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 import { PLAN_SUBSCRIPTIONS_MAX, type PlanFrame } from "@grenade/protocol";
 import { PlanWriteError } from "../plans/planTracker.js";
 import { PlanModeError } from "../plans/claudePlanMode.js";
+import type { ChangesDiffFrame, ChangesFrame } from "@grenade/protocol";
+import { ChangesError } from "../changes/changesTracker.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -203,6 +205,13 @@ export interface PlansPort {
   enterPlanMode?(sessionId: string): Promise<void>;
 }
 
+/** A session's changes in git and pushing them (PROTOCOL.md "Changes"); `ChangesTracker` in the daemon. Rejects with `ChangesError`. */
+export interface ChangesPort {
+  files(sessionId: string, commit: string | undefined): Promise<ChangesFrame>;
+  diff(sessionId: string, path: string, commit: string | undefined): Promise<ChangesDiffFrame>;
+  push(sessionId: string): Promise<void>;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -259,6 +268,8 @@ export interface ConnectionDeps {
   owner?: OwnerPort;
   /** Sessions' plans. Absent means this daemon shows none (no `plans: 1`) and answers their frames with `bad_frame`. */
   plans?: PlansPort;
+  /** Git changes and pushes. Absent means this daemon reads none (no `changes: 1`) and answers their frames with `bad_frame`. */
+  changes?: ChangesPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
   talk?: TalkPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
@@ -619,6 +630,10 @@ export class Connection {
       case "plan.unsubscribe":
       case "plan.write":
         return this.handlePlan(frame);
+      case "changes":
+      case "changes.diff":
+      case "git.push":
+        return this.handleChanges(frame);
       case "session.mode": {
         const session = r.get(frame.sessionId);
         if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
@@ -701,6 +716,25 @@ export class Connection {
    * A plan is approved as its file holds it now, the user's edits included, and one sent back says the user edited it
    * (PROTOCOL.md "Plans"). Any other answer is the frame as it came.
    */
+  private async handleChanges(frame: Extract<ClientFrame, { type: "changes" | "changes.diff" | "git.push" }>): Promise<void> {
+    if (!this.d.changes) return this.fail("bad_frame", "this daemon reads no git changes", frame.type);
+    if (!this.d.registry.get(frame.sessionId)) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
+    try {
+      switch (frame.type) {
+        case "changes":
+          return this.send(await this.d.changes.files(frame.sessionId, frame.commit));
+        case "changes.diff":
+          return this.send(await this.d.changes.diff(frame.sessionId, frame.path, frame.commit));
+        case "git.push":
+          // How it went reaches every client as `session.updated` and a `push` activity entry.
+          return await this.d.changes.push(frame.sessionId);
+      }
+    } catch (e) {
+      if (e instanceof ChangesError) return this.fail("bad_frame", e.message, frame.type);
+      throw e;
+    }
+  }
+
   private async decisionFor(frame: Extract<ClientFrame, { type: "prompt.answer" }>): Promise<PromptDecision> {
     const plans = this.d.plans;
     const open = this.d.prompts?.list().find((p) => p.promptId === frame.promptId && p.sessionId === frame.sessionId);
