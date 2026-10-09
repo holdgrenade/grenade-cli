@@ -15,6 +15,7 @@ import { ClipStore } from "./clipStore.js";
 import { cutShowreel, openingOf, pushesIn, type DayBoard } from "./showreelCut.js";
 import { buildShowreelInput, CLOSING_REPLIES_MAX, CLOSING_TEXT_MAX, parseShowreelReply, type SessionClosing } from "./showreelPrompt.js";
 import { loadShowreelSettings, saveShowreelSettings } from "./showreelSettings.js";
+import { renderVideo, type RenderOptions, type Rendered } from "./render/renderVideo.js";
 
 /** How long after the last clip the model is asked, so a burst of clips is titled once. */
 export const MODEL_SETTLE_MS = 20_000;
@@ -120,6 +121,17 @@ export class ShowreelService extends EventEmitter<ShowreelServiceEvents> {
     const day = date ?? this.today();
     const doc = this.current(day);
     return this.frameOf(day, doc);
+  }
+
+  /** Renders a day's reel to a video file (`grenade showreel render`, `POST /showreel/render`). Rejects with `RenderError`. */
+  async render(date: string | undefined, options: RenderOptions = {}): Promise<Rendered> {
+    const day = date ?? this.today();
+    const frame = this.frame(day);
+    const boards = await this.o.boardsOf(day).catch(() => [] as DayBoard[]);
+    const started = Date.now();
+    const rendered = await renderVideo({ frame, clipPath: (clip) => this.o.store.fileOf(clip), boards, log: (line) => this.o.log.debug(`Showreel render: ${line}`) }, options);
+    this.o.log.info("Rendered the showreel", { day, path: rendered.path, seconds: rendered.seconds, frames: rendered.frames, took: `${Math.round((Date.now() - started) / 1000)} s` });
+    return rendered;
   }
 
   /** Cuts a day again with the model now (`grenade showreel --make`, `POST /showreel/make`) and returns it. */
