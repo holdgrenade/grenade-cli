@@ -40,12 +40,9 @@
  *   GET  /showreel?date=    → ShowreelFrame   (a day's showreel, cut now when a clip came since)
  *   POST /showreel/make     { date? } → ShowreelFrame   (cuts it again with the model now)
  *   GET  /showreel/settings → { hour }   /   POST /showreel/settings { hour } → { hour }   (the end-of-day hour)
- *   POST /showreel/render   { date?, portrait?, fps?, out? } → { path, seconds, width, height, frames }   (renders the day's reel to an
- *                             MP4 in the Movies folder with Chrome and ffmpeg; `grenade showreel render`)
  */
 import type { Clip, ClipsFrame, PublishedLink, ShowreelFrame, TalkThreadFrame } from "@grenade/protocol";
 import { ClipError } from "../showreel/clipStore.js";
-import { RenderError, type RenderOptions, type Rendered } from "../showreel/render/renderVideo.js";
 import type { ClipInput } from "../showreel/clipFile.js";
 import { randomUUID } from "node:crypto";
 import { addressedToLoopback, fromWebPage, isLoopback } from "./loopback.js";
@@ -118,7 +115,6 @@ export interface ControlDeps {
     make(date: string | undefined): Promise<ShowreelFrame>;
     hour(): number;
     setHour(hour: number): void;
-    render(date: string | undefined, options: RenderOptions): Promise<Rendered>;
   };
   /** Inject a test activity entry. */
   activityTests?: {
@@ -290,17 +286,6 @@ async function showreelRoute(d: ControlDeps, req: IncomingMessage, res: ServerRe
     const day = dateParam(typeof body["date"] === "string" ? body["date"] : null);
     if (day === null) return sendJson(res, 400, { error: "bad_request", message: "date is YYYY-MM-DD" });
     return sendJson(res, 200, await showreel.make(day));
-  }
-  if (method === "POST" && url.pathname === "/showreel/render") {
-    const day = dateParam(typeof body["date"] === "string" ? body["date"] : null);
-    if (day === null) return sendJson(res, 400, { error: "bad_request", message: "date is YYYY-MM-DD" });
-    const options: RenderOptions = { ...(body["portrait"] === true ? { portrait: true } : {}), ...(typeof body["fps"] === "number" && body["fps"] >= 10 && body["fps"] <= 60 ? { fps: Math.round(body["fps"]) } : {}), ...(typeof body["out"] === "string" && body["out"].startsWith("/") ? { out: body["out"] } : {}) };
-    try {
-      return sendJson(res, 200, await showreel.render(day, options));
-    } catch (e) {
-      if (e instanceof RenderError) return sendJson(res, 400, { error: "bad_request", message: e.message });
-      throw e;
-    }
   }
   if (method === "POST" && url.pathname === "/showreel/settings") {
     const hour = body["hour"];

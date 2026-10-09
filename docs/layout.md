@@ -70,11 +70,7 @@ src/showreel/showreelPrompt.ts pure: `SHOWREEL_SYSTEM_PROMPT`, `buildShowreelInp
 src/showreel/dayBoards.ts   `dayBoardsOf(date, sessions, home)`: the boards saved that day in every canvas of the listed sessions' folders, through the canvas readers
 src/showreel/showreelSettings.ts `showreel.json` (0600): the end-of-day hour; load/save
 src/showreel/showreelService.ts ShowreelService (the `ShowreelPort` of `Connection`, and the control API's): `addClip`, `clips`, `chunk`, `frame` (cut again when the clips changed), `make` (the model now), the model after `MODEL_SETTLE_MS`, each day's cut in `<GRENADE_HOME>/showreels/<date>.json`, `checkHour` (title and announce once at the hour, through Talk's `addRow`); event `changed`
-src/showreel/render/videoTimeline.ts pure (Canvas 2 R1A): the cut of a reel as a video on a half-second grid (`videoTimeline`: open, sentence, wall, a chapter per part, montage, close), `videoDay`, `clipAssets`
-src/showreel/render/videoPage.ts pure: `videoPageHtml`, the self-contained motion page that draws the timeline at any instant (`window.__showreel.seek(ms)`, `ready()`)
-src/showreel/render/chromePage.ts ChromePage: a headless Chrome on this computer driven over the DevTools protocol (`resolveChrome`, `navigate`, `evaluate`, `screenshot`, `close`)
-src/showreel/render/renderVideo.ts `renderVideo`: boards to pictures, the page, every frame through Chrome into ffmpeg, an MP4 in Movies (`renderFolder`); `boardsWanted`, `siblingsOf` pure; `RenderError`
-src/cli/clipCommand.ts      `grenade clip <file> --title … [--line …] [--before] [--session …]` (POST /clips), `grenade clips [date]`, `grenade showreel [date] [--make]`, `grenade showreel hour [h]`, `grenade showreel render [date] [--portrait] [--fps n] [--out file]` (POST /showreel/render); `clipLine` and `showreelLines` are pure
+src/cli/clipCommand.ts      `grenade clip <file> --title … [--line …] [--before] [--session …]` (POST /clips), `grenade clips [date]`, `grenade showreel [date] [--make]`, `grenade showreel hour [h]`; `clipLine` and `showreelLines` are pure
 src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
 src/tmux/serverScope.ts    pure: under systemd, `new-session` goes through `systemd-run --user --scope`, so a tmux server it starts is not part of grenaded's service (see "Linux")
 src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command

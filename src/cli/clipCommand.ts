@@ -47,18 +47,6 @@ export function registerClipCommand(program: Command, d: ClipCommandDeps): void 
     });
 
   showreel
-    .command("render [date]")
-    .description("render the day's showreel to an MP4 in your Movies folder (needs Chrome and ffmpeg on this computer)")
-    .option("--portrait", "1080 × 1920 for a phone, instead of 1920 × 1080")
-    .option("--fps <n>", "frames per second (30 unless given)")
-    .option("--out <file>", "where to write it, instead of the Movies folder")
-    .action(async (date: string | undefined, opts: { portrait?: boolean; fps?: string; out?: string }) => {
-      console.log("Rendering… (about a minute)");
-      const done = await d.control<{ path: string; seconds: number; width: number; height: number; frames: number }>("POST", "/showreel/render", { ...(checkDate(date) ? { date } : {}), ...(opts.portrait ? { portrait: true } : {}), ...(opts.fps ? { fps: Number(opts.fps) } : {}), ...(opts.out ? { out: resolve(opts.out) } : {}) });
-      console.log(`${done.path}  (${done.seconds} s, ${done.width}×${done.height})`);
-    });
-
-  showreel
     .command("hour [hour]")
     .description("the hour of the day the showreel is cut and announced in Command Center (18 unless set)")
     .action(async (hour?: string) => {
