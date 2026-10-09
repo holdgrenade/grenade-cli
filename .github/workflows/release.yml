@@ -1,5 +1,5 @@
-# Ships the CLI when a push to main carries a version the tap does not have yet.
-# Bumping `version` in package.json is the release switch; a push without a bump only runs the tests.
+# Ships the CLI on every push to main. A push that did not bump `version` in package.json gets the next patch from the
+# `bump` job, committed back to main; a push that bumped it ships its own number.
 #
 # Homebrew is the release: the tag, the GitHub release with the tarball, and the formula in the tap, whose sha256 is
 # taken from the tarball downloaded back from the release. npm comes last and may fail without failing the release
@@ -26,9 +26,49 @@ permissions:
 concurrency: release
 
 jobs:
+  # Every push releases. A push whose version is tagged already did not bump it, so this job takes the next patch and
+  # commits it back to main ("1.0.69"); a push that bumped the version itself (a minor, say) keeps its number. A tag,
+  # not the tap, says what is released: raw.githubusercontent.com may serve a tap that is minutes old. The jobs below
+  # build the commit this job hands on. Its push uses GITHUB_TOKEN, which starts no workflow, so it never loops.
+  bump:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Check out main as it is now
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The next patch, unless this version is new
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          version() { node -p "require('./package.json').version"; }
+          tagged() { git ls-remote --exit-code --tags origin "refs/tags/v$1" >/dev/null; }
+          # Three tries: a push that lands while this runs moves main, and the bump goes on top of it.
+          for attempt in 1 2 3; do
+            if ! tagged "$(version)"; then break; fi
+            npm version patch --no-git-tag-version >/dev/null
+            git commit --quiet --all -m "$(version)"
+            if git push --quiet origin HEAD:main; then break; fi
+            git fetch --quiet origin main && git reset --quiet --hard origin/main
+            if [ "$attempt" = 3 ]; then echo "main kept moving; push again to release" && exit 1; fi
+          done
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(version)" >> "$GITHUB_OUTPUT"
+          echo "Releasing $(version) from $(git rev-parse --short HEAD)"
+
   # grenaded runs on Linux too: the same tests there, then the daemon against a real tmux (scripts/smoke.mjs), in an
   # Arch Linux container, which is what Omarchy is. A release waits for it.
   linux:
+    needs: bump
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
@@ -38,6 +78,7 @@ jobs:
       - name: Check out grenade-cli
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.bump.outputs.sha }}
           path: grenade-cli
 
       - name: Check out grenade-protocol beside it
@@ -67,12 +108,13 @@ jobs:
           kill %1
 
   release:
-    needs: linux
+    needs: [bump, linux]
     runs-on: macos-latest
     steps:
       - name: Check out grenade-cli
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.bump.outputs.sha }}
           path: grenade-cli
 
       - name: Check out grenade-protocol beside it
