@@ -27,15 +27,16 @@ grenade setup
 1. It checks for macOS or Linux, Node 22+, tmux 3.2+ and an agent, and offers to install tmux when it is missing (`brew install tmux`; on Linux with pacman, apt-get or dnf). iTerm2 is not needed (see below).
 2. It installs a launchd agent (on Linux a systemd user service), so `grenaded` starts at login and comes back if it stops (`grenade service remove`).
 3. It offers the relay, for reaching the computer from any network (`grenade relay off`). Push notifications follow that answer: on with the relay, off without it, and setup says which.
-4. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
+4. On a Mac, it offers the Mac app: the download from the website, checked against its published checksum and for Apple's notarization, put in Applications and opened. Later: `grenade app install`, or `brew install --cask holdgrenade/tap/grenade-app`.
+5. It shows a QR code. Scan it in the Grenade app and the phone is paired, on any network when the relay is on.
 
 Setup touches no agent's settings. Grenade starts Claude Code and Codex with its hooks (`claude --settings …`, `codex -c hooks.…`), so the phone knows when they work and wait. Claude Code also starts with a status line of Grenade's, which tells grenaded how full the conversation is and how much of your Pro or Max plan is used, and then runs your own status line, if you have one, so your line looks as before (a change to it applies to sessions started after). The first Codex session asks once to trust them; the phone shows it as a card, so tap Trust there or pick "Trust all and continue" in the terminal.
 
-`--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay` and `--no-pair` leave a step out.
+`--yes` takes the suggested answer to every question; `--no-hooks`, `--no-service`, `--no-relay`, `--no-app` and `--no-pair` leave a step out.
 
 On a Mac without Homebrew, with Node 22+ and tmux 3.2+ already there: `npm install -g @holdgrenade/cli`, then `grenade setup`.
 
-Then get an app and scan the QR code: [Grenade: Agent Remote](https://apps.apple.com/app/grenade-agent-remote/id6818136871) for iPhone (iOS 17 or later), or [the Mac app](https://downloads.holdgrenade.com/mac/Grenade.dmg) (macOS 26 or later).
+Then get an app and scan the QR code: [Grenade: Agent Remote](https://apps.apple.com/app/grenade-agent-remote/id6818136871) for iPhone (iOS 17 or later), or [the Mac app](https://downloads.holdgrenade.com/mac/Grenade.dmg) (macOS 26 or later; `grenade setup` offers it, and `brew install --cask holdgrenade/tap/grenade-app` installs the same download).
 
 From the source, which needs the `grenade-protocol` repo checked out next to this one (it is not public, so today this works for the maintainers only):
 

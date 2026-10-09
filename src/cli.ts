@@ -18,6 +18,7 @@ import { registerPublishCommand } from "./cli/publishCommand.js";
 import { registerServiceCommand } from "./cli/serviceCommand.js";
 import { registerSetupCommand } from "./cli/setupCommand.js";
 import { registerUpdateCommand } from "./cli/updateCommand.js";
+import { registerAppCommand } from "./cli/appCommand.js";
 import { registerTerminalCommand } from "./cli/terminalCommand.js";
 import { RESTART_EXIT_CODE, underService } from "./update/underService.js";
 import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
@@ -98,6 +99,7 @@ registerTalkCommand(program, { control, version: VERSION });
 registerPublishCommand(program, { control });
 registerPromptCommand(program, { control });
 registerUpdateCommand(program, { control });
+registerAppCommand(program);
 registerTerminalCommand(program, { control });
 
 // Like Claude Code: after a command, one line when a new version is out. Read from the daemon, which checks the tap.

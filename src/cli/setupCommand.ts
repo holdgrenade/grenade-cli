@@ -21,6 +21,9 @@ import { findRequirements } from "../setup/findRequirements.js";
 import { nextSteps } from "../setup/nextSteps.js";
 import { pushNotice, type PushSetting } from "../setup/pushNotice.js";
 import { problems } from "../setup/requirements.js";
+import { MAC_APP_CASK_COMMAND, macAppOffer } from "../app/macApp.js";
+import { installedMacApp } from "../app/installMacApp.js";
+import { installTheMacApp } from "./appCommand.js";
 import { showPairing } from "./pairCommand.js";
 import { startService, type ServiceCommandDeps } from "./serviceCommand.js";
 
@@ -29,8 +32,12 @@ interface SetupOptions {
   label: string;
   service: boolean;
   relay: boolean;
+  app: boolean;
   pair: boolean;
 }
+
+/** Five steps on a Mac, where the Mac app is offered; four on Linux. */
+const STEPS = process.platform === "darwin" ? 5 : 4;
 
 export function registerSetupCommand(program: Command, d: ServiceCommandDeps): void {
   program
@@ -41,6 +48,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
     .option("--no-hooks", "nothing; hooks come with each session now")
     .option("--no-service", "do not start grenaded at login")
     .option("--no-relay", "do not turn on the relay")
+    .option("--no-app", "do not offer the Mac app")
     .option("--no-pair", "stop before pairing a phone")
     .option("--label <label>", "the service's name: a launchd label on a Mac, a systemd unit on Linux", defaultLabel())
     .action(async (o: SetupOptions) => {
@@ -56,7 +64,11 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
       if (o.relay) await relay(d, ask);
       else console.log(`skipped (--no-relay). The phone reaches this ${computerWord()} on the same Wi‑Fi only.`);
       await push(d);
-      step(4, "Pair your phone");
+      if (process.platform === "darwin") {
+        step(4, "The Mac app");
+        await macApp(o.app, ask);
+      }
+      step(STEPS, "Pair your phone");
       if (!o.pair) return console.log("skipped (--no-pair). Pair later with: grenade pair");
       if (await pair(d, o.yes === true)) for (const line of nextSteps(findRequirements().iterm, process.platform)) console.log(line);
       else process.exitCode = 1;
@@ -66,7 +78,7 @@ export function registerSetupCommand(program: Command, d: ServiceCommandDeps): v
 type Ask = (question: string, unattended: boolean) => Promise<boolean>;
 
 function step(n: number, title: string): void {
-  console.log(`\n${n}/4  ${title}`);
+  console.log(`\n${n}/${STEPS}  ${title}`);
 }
 
 async function requirements(ask: Ask): Promise<void> {
@@ -174,6 +186,26 @@ async function push(d: ServiceCommandDeps): Promise<void> {
   if (!setting) return;
   console.log("");
   for (const line of pushNotice(setting, computerWord())) console.log(line);
+}
+
+/**
+ * On a Mac: the Mac app, downloaded, checked and put in Applications (`grenade app install` does the same later). The
+ * app's own first run calls setup without a terminal, so it is never asked there; a copy already in Applications is
+ * left alone. Setup goes on after a failure: the website has the download.
+ */
+async function macApp(wanted: boolean, ask: Ask): Promise<void> {
+  if (!wanted) return console.log("skipped (--no-app). Later: grenade app install");
+  const installed = installedMacApp();
+  if (installed) return console.log(`ok: the Grenade Mac app is at ${installed.path}`);
+  for (const line of macAppOffer()) console.log(line);
+  if (!(await ask("Install the Grenade Mac app in Applications?", false))) {
+    return console.log(`left out. Later: grenade app install, or ${MAC_APP_CASK_COMMAND}`);
+  }
+  try {
+    await installTheMacApp();
+  } catch (e: unknown) {
+    console.log(`The Mac app did not install: ${e instanceof Error ? e.message : String(e)}. Get it from https://www.holdgrenade.com/install instead.`);
+  }
 }
 
 async function pair(d: ServiceCommandDeps, assumeYes: boolean): Promise<boolean> {

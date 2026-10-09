@@ -19,7 +19,7 @@ npm link                         # `grenade` on PATH
 
 grenade daemon [--port 7788] [--name X] [--no-advertise] [--no-summaries] [--no-relay] [--allow-plain-lan]   # foreground
 grenade status | ls
-grenade setup [--yes] [--no-service] [--no-relay] [--no-pair]   # the whole first run: requirements, start at login, relay, QR code (--no-hooks is accepted and does nothing)
+grenade setup [--yes] [--no-service] [--no-relay] [--no-app] [--no-pair]   # the whole first run: requirements, start at login, relay, the Mac app (on a Mac), QR code (--no-hooks is accepted and does nothing)
 grenade pair [--no-wait]         # QR code (pairing offer) + typed code, then waits and names the phone that paired
 grenade service install [-- <daemon options>] | remove | status   # grenaded as a launchd agent (a systemd user service on Linux): starts at login, restarts when it dies
 npm run release                  # release/holdgrenade-cli-<version>.tgz + packaging/homebrew/grenade.rb (nothing is published)
@@ -34,6 +34,8 @@ grenade kill <name>
 grenade install-hooks [--print] [--remove] [--port 7788]   # optional: the hooks in ~/.claude/settings.json too, for a claude typed by hand in a Grenade shell; --remove also cleans ~/.codex/hooks.json
 grenade update [--check] [--now] # install the latest release with Homebrew, npm or (Linux) the release's tarball, and restart grenaded into it
 grenade update --auto on|off     # whether grenaded installs new releases by itself (on unless turned off)
+grenade app                      # the Mac app: where it is installed, or how to get it
+grenade app install              # download the newest Mac app, check its sha256 and Apple's notarization, put it in Applications and open it (or: brew install --cask holdgrenade/tap/grenade-app)
 grenade terminal [iterm|terminal|auto|none]   # also open every session in a Mac terminal (none, the default, unless set); no kind: what is set
 grenade relay on [url] [--key K] # use a relay (default: the main relay, OFFICIAL_RELAY_URL); reloads a running daemon
 grenade relay off                # forget the relay and this Mac's id there

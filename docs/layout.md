@@ -9,7 +9,7 @@ src/cli.ts                 commander CLI; every command except `daemon` and `ope
 src/cli/controlClient.ts   `controlClient(port)`: one call to the control API; `DaemonNotRunningError`
 src/cli/pairCommand.ts     `grenade pair`: prints `pairScreen`, then polls GET /pair-code until a phone paired or the code ran out
 src/cli/serviceCommand.ts  `grenade service …`; `startService` (refuses while a hand-started daemon holds the ports, waits for the daemon to answer); pure `serviceLines`
-src/cli/setupCommand.ts    `grenade setup`: four steps, each skipped when already done; asks before the relay (no answer without a terminal, unless --yes); brings Grenade hooks already in settings.json up to date and takes CLI 1.0.23's out of ~/.codex/hooks.json
+src/cli/setupCommand.ts    `grenade setup`: five steps on a Mac (the Mac app is step 4), four on Linux, each skipped when already done; asks before the relay (no answer without a terminal, unless --yes); brings Grenade hooks already in settings.json up to date and takes CLI 1.0.23's out of ~/.codex/hooks.json
 src/pairing/offer.ts       pure: the pairing offer for this daemon (`offerFor`, `offerUrlFor`), PROTOCOL.md "Pairing offer (QR code)"
 src/pairing/qrText.ts      pure: a URL as a QR code of half-block characters (`uqr`), forced white on black when it may use color
 src/pairing/pairScreen.ts  pure: what `grenade pair` prints, "Option 1" (the QR code) and "Option 2" (the typed code), the names the phone's pairing screen uses; leaves the QR code out of a window it does not fit
@@ -28,6 +28,9 @@ src/setup/firewall.ts      Linux: is ufw on (`/etc/ufw/ufw.conf`, readable witho
 src/platform/findOnPath.ts where a command is on PATH, in place of `which` (bare Arch has none)
 src/platform/loginShell.ts the shell a `shell` session runs: `$SHELL`, else the user's login shell, else `/bin/zsh` on a Mac and `/bin/sh` on Linux (a shell that is not installed ends the session at once)
 src/platform/computer.ts   pure: what the CLI calls the machine ("Mac" on macOS, "computer" on Linux) and the system's name. Every sentence a person reads (commands, logs, errors sent to the phone, push text) takes its word from here; pure functions take it as a `computer` argument that defaults to "Mac". "Mac board" stays: it is the feature's name. `daemonOs` is what the daemon tells the apps it runs on (`macos`, `linux`), so they choose the same word
+src/app/macApp.ts          pure: the Mac app from the terminal: `latest.json` read (version, a DMG on the download host over https, sha256), where a copy is or goes (/Applications, else ~/Applications), the version as plutil prints it, the shell script (download → sha256 → mount → codesign and spctl → ditto, nothing left behind), the lines setup and `grenade app` print
+src/app/installMacApp.ts   its I/O: the installed copy and its version, `latest.json` fetched, the script run, the app opened
+src/cli/appCommand.ts      `grenade app` (where the Mac app is) and `grenade app install`; `installTheMacApp` is also setup's step 4 on a Mac
 src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that the Mac app and the phone show it, and `grenade terminal iterm` (or `terminal` without iTerm2) to open sessions in a terminal too
 src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
 src/setup/answer.ts, ask.ts pure `readYesNo`; `askYesNo` on the terminal
