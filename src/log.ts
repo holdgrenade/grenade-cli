@@ -22,7 +22,7 @@ export interface Logger {
 
 export function createLogger(opts: { level?: Level; file?: string; stderr?: boolean; color?: boolean } = {}): Logger {
   const min = order[opts.level ?? "info"];
-  const stream: WriteStream | undefined = opts.file ? createWriteStream(opts.file, { flags: "a" }) : undefined;
+  const stream: WriteStream | undefined = opts.file ? createWriteStream(opts.file, { flags: "a", mode: 0o600 }) : undefined;
   const useStderr = opts.stderr ?? true;
   const color = opts.color ?? (process.stderr.isTTY === true && !process.env["NO_COLOR"]);
   const write = (level: Level, msg: string, data?: LogData) => {

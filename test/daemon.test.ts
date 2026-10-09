@@ -253,6 +253,38 @@ describe("a web page", () => {
   });
 });
 
+describe("the phones' socket", () => {
+  const opens = (url: string, headers: Record<string, string>) =>
+    new Promise<boolean>((resolve) => {
+      const ws = new WebSocket(url, { headers });
+      ws.on("open", () => {
+        ws.close();
+        resolve(true);
+      });
+      ws.on("error", () => resolve(false));
+    });
+
+  it("cannot be opened by a web page; the phones, the Mac app and Grenade's extension open it", async () => {
+    const { d } = await daemon();
+    const url = `ws://127.0.0.1:${d.port}/ws`;
+    expect(await opens(url, { origin: "https://evil.example" })).toBe(false);
+    expect(await opens(url, { origin: "null" })).toBe(false);
+    expect(await opens(url, {})).toBe(true);
+    expect(await opens(url, { origin: "chrome-extension://eiocljcomciaepiidgadhbbadmmnpdne" })).toBe(true);
+  });
+
+  it("closes on a message larger than any frame a phone sends", async () => {
+    const { d } = await daemon();
+    const ws = new WebSocket(`ws://127.0.0.1:${d.port}/ws`);
+    await new Promise((resolve) => ws.on("open", resolve));
+    const code = await new Promise<number>((resolve) => {
+      ws.on("close", (c) => resolve(c));
+      ws.send("x".repeat(5 * 1024 * 1024));
+    });
+    expect(code).toBe(1009);
+  });
+});
+
 describe("a page that rebinds its own name to this Mac", () => {
   it("is refused by the control API, which answers loopback names only", async () => {
     const { d } = await daemon();

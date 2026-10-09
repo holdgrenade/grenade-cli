@@ -17,14 +17,14 @@ export function createAttachmentStore(dir: string, now: () => Date = () => new D
   return {
     async save(sessionId, name, mime, data) {
       const folder = join(dir, sessionId);
-      await mkdir(folder, { recursive: true });
+      await mkdir(folder, { recursive: true, mode: 0o700 });
       const fileName = attachmentFileName(name, mime, now());
       // Two uploads in the same second get `-2`, `-3`… before the extension. `wx` claims the name, so uploads
       // written at once (several images dropped together, all called "image") never pick the same one.
       for (let n = 1; ; n++) {
         const path = join(folder, numbered(fileName, n));
         try {
-          await writeFile(path, data, { flag: "wx" });
+          await writeFile(path, data, { flag: "wx", mode: 0o600 });
           return { path, bytes: data.length };
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;

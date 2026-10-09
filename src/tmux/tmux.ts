@@ -24,6 +24,18 @@ import { parsePidList, parsePsTable, processTree } from "./processes.js";
 import { scopeUnavailable, scopeUnit, scopedCommand } from "./serverScope.js";
 import { parseWindowWidths, type WindowWidth } from "../sessions/widthFloor.js";
 
+/**
+ * What a failed tmux call says: tmux's own words, else how it failed. Never `err.message`, which is the whole
+ * command line, typed text and all, and an error is logged and sent to the phone. Pure.
+ */
+export function tmuxFailure(stderr: string, err: { killed?: boolean; code?: unknown; signal?: unknown }): string {
+  if (stderr.trim()) return stderr.trim();
+  if (err.killed) return "tmux did not answer in time";
+  if (typeof err.code === "number") return `tmux exited with ${err.code}`;
+  if (typeof err.code === "string") return `tmux could not run (${err.code})`;
+  return err.signal ? `tmux stopped by ${String(err.signal)}` : "tmux failed";
+}
+
 export class TmuxError extends Error {
   constructor(message: string, readonly args: string[]) {
     super(message);
@@ -80,7 +92,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
   const run = (args: string[]): Promise<string> =>
     new Promise((resolve, reject) => {
       execFile(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
-        if (err) reject(new TmuxError((stderr || err.message).trim(), args));
+        if (err) reject(new TmuxError(tmuxFailure(stderr, err), args));
         else resolve(stdout);
       });
     });
@@ -93,7 +105,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       execFile(scoped.file, scoped.args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
         if (!err) return resolve(stdout);
         if (scopeUnavailable(err, stderr)) return run(args).then(resolve, reject);
-        reject(new TmuxError((stderr || err.message).trim(), args));
+        reject(new TmuxError(tmuxFailure(stderr, err), args));
       });
     });
   };

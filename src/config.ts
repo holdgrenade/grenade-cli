@@ -1,7 +1,7 @@
 /** Paths, identity and version for the daemon. Everything lives under ~/.grenade (override with GRENADE_HOME). */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -41,8 +41,13 @@ export const paths = {
   codexHooks: join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "hooks.json"),
 };
 
+/**
+ * Makes GRENADE_HOME, readable by this user alone: it holds the phones' screenshots, the log and every session's
+ * folder and summary, beside the secret files (each 0600 too). A folder made by an older version is closed as well.
+ */
 export function ensureDir(): void {
-  mkdirSync(GRENADE_DIR, { recursive: true });
+  mkdirSync(GRENADE_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(GRENADE_DIR, 0o700);
 }
 
 /** Stable per-Mac daemon id, generated once. */

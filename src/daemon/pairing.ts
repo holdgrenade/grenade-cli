@@ -3,7 +3,7 @@
  * pairing ends (PROTOCOL.md "Unpairing"). `PairingCodes` is pure (inject `now`); `TokenStore` owns the file.
  */
 import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ClientInfo } from "@grenade/protocol";
 
@@ -197,6 +197,10 @@ export class TokenStore {
   private save(): void {
     if (!this.path) return;
     mkdirSync(dirname(this.path), { recursive: true });
-    writeFileSync(this.path, JSON.stringify(this.list(), null, 2) + "\n", { mode: 0o600 });
+    // A new copy swapped in whole: a crash part way through a write would otherwise forget every phone.
+    const temp = `${this.path}.tmp`;
+    writeFileSync(temp, JSON.stringify(this.list(), null, 2) + "\n", { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, this.path);
   }
 }

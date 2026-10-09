@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,16 @@ describe("TokenStore", () => {
     expect(record).toMatchObject({ issuedAt: "2026-09-29T08:00:00.000Z", lastSeen: "2026-09-29T08:00:00.000Z" });
     expect(record?.sealed).toBeUndefined();
     expect(store.get(store.issue(phone, { sealed: true }))?.sealed).toBe(true);
+  });
+
+  it("swaps a whole new file in, readable by this user only, and leaves no half-written copy", () => {
+    const path = join(dir, "whole", "tokens.json");
+    const store = new TokenStore(path, () => T0);
+    store.issue(phone);
+    store.issue(phone);
+    expect(existsSync(`${path}.tmp`)).toBe(false);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toHaveLength(2);
   });
 
   it("reads a file written before phones had ids, and starts their clock now", () => {

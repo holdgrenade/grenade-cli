@@ -6,7 +6,7 @@
  */
 import { computerWord, daemonOs } from "../platform/computer.js";
 import { dirname, join } from "node:path";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, codexActivityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
@@ -95,6 +95,9 @@ import { TalkService } from "../talk/talkService.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
+
+/** The largest message a socket on :7788 takes, the relay's cap too: a sealed 2 MiB attachment is about 3.75 MB. */
+export const WS_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 export interface DaemonOptions {
   port?: number;
@@ -770,7 +773,14 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       close,
     });
 
-  const wss = new WebSocketServer({ server: http, path: WS_PATH });
+  // The largest frame a phone sends is an attachment (ATTACHMENT_MAX_BYTES, about 3.75 MB sealed), as on the relay.
+  // A web page may not open the socket at all: it could spend wrong pairing tries and pause pairing (`fromWebPage`).
+  const wss = new WebSocketServer({
+    server: http,
+    path: WS_PATH,
+    maxPayload: WS_MAX_MESSAGE_BYTES,
+    verifyClient: ({ req }: { req: IncomingMessage }) => !fromWebPage(req.headers.origin),
+  });
   wss.on("connection", (socket: WebSocket, req) => {
     const lan = new LanSocket({
       socket: {

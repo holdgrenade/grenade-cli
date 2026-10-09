@@ -105,7 +105,8 @@ grenaded runs on Linux as a systemd user service (started for Omarchy, Arch x86_
 
 - Never block the event loop on tmux: every tmux call is `execFile` with a 3 s timeout. Poll ticks skip if the previous one is still running.
 - The daemon never reads a frame it did not validate: every inbound message goes through `parseClientFrame`; every outbound frame is typed `DaemonFrame`.
-- The control API binds to `127.0.0.1` only. The WebSocket requires the encryption handshake, then a paired token before anything else, and closes after 5 s without a first frame or without `hello`.
+- The control API binds to `127.0.0.1` only. The WebSocket requires the encryption handshake, then a paired token before anything else, and closes after 5 s without a first frame or without `hello`. Its upgrade is refused to a web page (`fromWebPage` on the Origin, as on every HTTP route), and it takes messages up to `WS_MAX_MESSAGE_BYTES` (4 MiB, the relay's cap; a sealed 2 MiB attachment is about 3.75 MB).
+- `GRENADE_HOME` is 0700 (`ensureDir` closes one an older version made), attachments 0700/0600, the log 0600, and `tokens.json` is written to a temp file and renamed in, never in place. A tmux error never carries tmux's command line (`tmuxFailure`): it holds the typed text, and the error is logged and sent to the phone.
 - A token never crosses a network in the clear: `hello` and `pair` are only accepted on a sealed connection (unless `--allow-plain-lan`). Never log a token, a pairing code or a pairing secret; log the device `id`.
 - Nothing readable crosses the relay: every frame after the handshake goes through `SealedChannel`. The relay gets access hashes, never tokens. Never add a feature that needs the relay to read a frame.
 - A device token, a board's push token, a push key and a pairing token never reach a log line: a phone is named by its device id (`p_…`). `test/pusher.test.ts` checks it.
