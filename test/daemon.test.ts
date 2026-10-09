@@ -245,6 +245,7 @@ describe("a web page", () => {
     expect((await fetch(`http://127.0.0.1:${d.controlPort}/status`, { headers: page })).status).toBe(403);
     expect((await fetch(`${base}/pair`, { method: "POST", headers: { ...page, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
     expect((await fetch(`${base}/hooks/claude`, { method: "POST", headers: page, body: "{}" })).status).toBe(403);
+    expect((await mint({ origin: "null" })).status).toBe(403);
     expect((await mint({ origin: "chrome-extension://abcdefghijklmnop" })).status).toBe(200);
     expect((await mint({})).status).toBe(200);
     expect((await fetch(`${base}/health`, { headers: page })).status).toBe(200);
