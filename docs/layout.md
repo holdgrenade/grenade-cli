@@ -1,0 +1,195 @@
+# Source layout
+
+Read before adding or moving a file: what each file in `src/` does.
+
+Part of `grenade-cli`: its rules and invariants are in the repo's `CLAUDE.md`.
+
+```
+src/cli.ts                 commander CLI; every command except `daemon` and `open` goes through the control API
+src/cli/controlClient.ts   `controlClient(port)`: one call to the control API; `DaemonNotRunningError`
+src/cli/pairCommand.ts     `grenade pair`: prints `pairScreen`, then polls GET /pair-code until a phone paired or the code ran out
+src/cli/serviceCommand.ts  `grenade service …`; `startService` (refuses while a hand-started daemon holds the ports, waits for the daemon to answer); pure `serviceLines`
+src/cli/setupCommand.ts    `grenade setup`: four steps, each skipped when already done; asks before the relay (no answer without a terminal, unless --yes); brings Grenade hooks already in settings.json up to date and takes CLI 1.0.23's out of ~/.codex/hooks.json
+src/pairing/offer.ts       pure: the pairing offer for this daemon (`offerFor`, `offerUrlFor`), PROTOCOL.md "Pairing offer (QR code)"
+src/pairing/qrText.ts      pure: a URL as a QR code of half-block characters (`uqr`), forced white on black when it may use color
+src/pairing/pairScreen.ts  pure: what `grenade pair` prints, "Option 1" (the QR code) and "Option 2" (the typed code), the names the phone's pairing screen uses; leaves the QR code out of a window it does not fit
+src/pairing/pairingWatch.ts pure: what became of the last pair code (none, waiting, paired with which phone over which route, expired; `GET /pair-code` answers `paused` instead while pairing is paused)
+src/pairing/pausedLines.ts pure: what `grenade pair` prints while pairing is paused (`pausedLines`, `remainingWords`)
+src/service/service.ts     `grenade service` on whichever system this is: launchd on a Mac, systemd on Linux; `defaultLabel`, `serviceManager`. `serviceTypes.ts` holds `ServiceOptions` and `ServiceStatus` (`file`, `manager`)
+src/service/servicePath.ts pure: the PATH the service runs with (the login shell's, then the usual homes of node, tmux and claude)
+src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `stableProgram` (no versioned Cellar path)
+src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, pid, last exit)
+src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`
+src/service/systemdUnit.ts pure: the Linux service, `grenade.service` in `~/.config/systemd/user`: `renderUnit` (Restart=on-failure after 10 s, KillMode=process, its marker `GRENADE_SERVICE`), `unitPath`
+src/service/systemctlOutput.ts pure: reads `systemctl --user show` (loaded, running, pid, last exit)
+src/service/systemd.ts     installs, removes and inspects that service with `systemctl --user` (no admin rights); a failed install leaves no unit behind
+src/setup/requirements.ts  pure: what is missing (macOS or Linux, Node 22+, tmux 3.2+, an agent; iTerm2 is never asked for) and the command that fixes it (`tmuxFix`: brew, or `sudo pacman` / `apt-get` / `dnf` on Linux); `findRequirements.ts` looks
+src/setup/firewall.ts      Linux: is ufw on (`/etc/ufw/ufw.conf`, readable without root) and the lines that say how to open the port; setup never runs sudo for it
+src/platform/findOnPath.ts where a command is on PATH, in place of `which` (bare Arch has none)
+src/platform/loginShell.ts the shell a `shell` session runs: `$SHELL`, else the user's login shell, else `/bin/zsh` on a Mac and `/bin/sh` on Linux (a shell that is not installed ends the session at once)
+src/platform/computer.ts   pure: what the CLI calls the machine ("Mac" on macOS, "computer" on Linux) and the system's name. Every sentence a person reads (commands, logs, errors sent to the phone, push text) takes its word from here; pure functions take it as a `computer` argument that defaults to "Mac". "Mac board" stays: it is the feature's name. `daemonOs` is what the daemon tells the apps it runs on (`macos`, `linux`), so they choose the same word
+src/setup/nextSteps.ts     pure: what setup ends on once the phone is paired: how to start an agent, that the Mac app and the phone show it, and `grenade terminal iterm` (or `terminal` without iTerm2) to open sessions in a terminal too
+src/setup/pushNotice.ts    pure: what setup says about push notifications (they follow remote access; to which relay the Mac posts them; how to turn them on alone)
+src/setup/answer.ts, ask.ts pure `readYesNo`; `askYesNo` on the terminal
+src/config.ts              paths under GRENADE_HOME, daemon id, default name, VERSION
+src/log.ts                 leveled logger → stderr (local time, color on a TTY) + daemon.log (ISO time); plain sentences + `key=value`, `formatLine` is pure; `silentLogger` for tests
+src/frames.ts              narrowed frame types (ScreenFrame) derived from the protocol unions
+src/daemon/server.ts       startDaemon(): HTTP (/pair, /hooks/claude, /hooks/claude/status, /hooks/codex, /health) + WS (/ws) on :7788, control on 127.0.0.1:7789, the relay link; `makeConnection(out, close, {route, sealed})` builds the same Connection for a LAN socket and a relay pipe; ends pairings (`devices`, `closeConnectionsOf`) and unpairs idle phones hourly
+src/daemon/wsHandler.ts    Connection: one per socket; hello/auth (refuses a plain `hello`), subscriptions, `unpair`, dispatch to registry (and `attachment` to the store, `talk.thread` / `talk.say` / `talk.agent` to the `TalkPort`, after `talk.thread` its `talk.entry`, `talk.busy` and new `talk.thread` frames); an `input` with an `id` is answered `input.sent`, or `error` with the `id`. Transport-agnostic.
+src/daemon/sentInputs.ts   SentInputs: the `input` ids already typed (the last 1000, for 10 minutes), shared by every connection, so a prompt a phone sends again after a dropped connection is typed once (PROTOCOL.md "Sending prompts")
+src/daemon/lanSocket.ts    LanSocket: one WebSocket from the Wi‑Fi; its first frame decides: the E2E handshake → `SealedPipe`, anything else → a plain Connection. No `ws` import
+src/daemon/connections.ts  LiveConnections: the connections that said hello, by token; what `grenade devices` shows as connected and what an unpair closes
+src/daemon/devices.ts      pure: `Device` (a paired phone without its token), `matchDevice` (id, name, unique prefix; never guesses), `ago`
+src/daemon/pairingPause.ts PairingPause: PROTOCOL.md "Pausing after wrong codes": every 5th wrong try while a code is live is a strike that pauses pairing for 1 min, 10 min, 1 h, then 24 h (`PAUSE_STEPS_MS`); forgets after a pairing or a day without a wrong try; kept in `pairing-pause.json` beside tokens.json; `status` (with `lastStrike`) for `GET /status`; `pauseWords`
+src/daemon/pairCheck.ts    pure: the 4 check digits of a typed pairing code (`pairCheck`, `typedCode`, `spacedCode`)
+src/daemon/loopback.ts     pure: `isLoopback(address)`, for routes only this Mac may call; `fromWebPage(origin)`, for requests a web page sent
+src/daemon/control.ts      loopback JSON API for the CLI and the Mac app (status incl. `relayLink` and `update`, sessions CRUD, pair-code, devices: list and unpair, POST /relay/reload, GET /update, POST /update/check and /update/install, GET /agents, typed Talk: GET /talk/thread, POST /talk/say, /talk/agent and /talk/tool)
+src/daemon/pairing.ts      PairingCodes (pure: a 6-digit code and the 22-character secret of the pairing offer, minted together, 2 min, 5 tries shared, using one voids both; `liveSecret`, `void`, `onChange`) + TokenStore (grt_ tokens, tokens.json; each record has a device `id`, `lastSeen`, `sealed`; `revoke`, `revokeAll`, `revokeIdle`; onChange fires when the set of tokens changes)
+src/relay/relayConfig.ts   relay.json {url, key?, id, secret}: load/save/remove; pure normalizeRelayUrl, relayWsUrl, relayConfigFor, applyRelayInfo
+src/relay/e2eKey.ts        the daemon's long-term X25519 key (e2e-key, 0600), made on first start
+src/relay/e2e.ts           pure crypto: daemonAccept / phoneStart handshake, SealedChannel (ChaCha20-Poly1305, counter nonces)
+src/relay/access.ts        pure: accessKey / accessHash of a pairing token (what the relay checks, never the token)
+src/relay/localIps.ts      pure: the Mac's IPv4 addresses from os.networkInterfaces()
+src/relay/sealedPipe.ts    SealedPipe: one encrypted connection from a phone, whatever carries it; handshake, then open → Connection → seal. Text in, text out
+src/relay/phonePipe.ts     PhonePipe: one relay conn; a SealedPipe whose text travels in the relay's `data` frames
+src/relay/relayLink.ts     RelayLink: WebSocket to <relay>/v1/daemon; register, update, ping/pong, backoff, routes conns to pipes
+src/plans/planTracker.ts   PlanTracker (PROTOCOL.md "Plans"): each session's `Session.plan` from Claude Code's hooks (`permission_mode`, a write in `~/.claude/plans/`, `ExitPlanMode`'s `planFilePath`; `writing` from the agent's first write in a turn to the turn's end), its plan file followed every 400 ms (`follow`), the user's edit (`write`, refused while the agent writes) and the note the next prompt carries after it (`takeEditedNote`, through `registry.noteOnSubmit`); a plan approved is the file's text (`textOf`); `watchPlanFile` follows a published plan's file. `claudePlanMode.ts`: `session.mode` presses Shift-Tab until Claude Code's footer says plan mode is on (`claudeModeIn`, pure)
+src/daemon/hooks.ts        POST /hooks/claude?session=… → registry.applyHook, or `holdForBackground` for a `Stop` that lists background tasks; a tool hook with `agent_id` is applied as an aside; a UserPromptSubmit prompt goes to the Summarizer and the ActivityStore; transcript_path → registry.setTranscript (saved), registry.setModel and the TranscriptReader (activity and `setCwd`)
+src/daemon/discovery.ts    Bonjour _grenade._tcp with TXT v/id/name; the system's own responder so the address follows Wi‑Fi changes: `dns-sd -R` (mDNSResponder) on macOS, `avahi-publish -s` (avahi-daemon) on Linux; bonjour-service on a Linux without avahi, also when avahi-daemon is not running
+src/daemon/http.ts         readBody / sendJson
+src/attachments/attachmentName.ts  pure: the on-disk name of an upload (UTC stamp, sanitized name, extension from the mime type)
+src/attachments/attachmentStore.ts createAttachmentStore(dir): writes <dir>/<sessionId>/<name>, never overwrites (-2, -3…)
+src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
+src/tmux/serverScope.ts    pure: under systemd, `new-session` goes through `systemd-run --user --scope`, so a tmux server it starts is not part of grenaded's service (see "Linux")
+src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command
+src/tmux/pasteSettle.ts    pure: `waitForSettle`, how long Enter waits after a paste (the pane changed, then held still for two reads 100 ms apart; 2 s at most)
+src/tmux/controlParser.ts  pure: ControlParser reads a tmux control-mode client's stdout as bytes (`%output` unescaped, command replies, `%exit`)
+src/tmux/termPaint.ts      pure: the live terminal's first paint (`firstPaint`: scrollback, screen, modes, cursor from `PANE_STATE_FORMAT`), `sendBytesCommands` (`send-keys -H`), `isInterrupt`
+src/sessions/termStream.ts TermStream: one client's live terminal on one session: `tmux -C attach-session`, first paint, output coalesced 8 ms, typed bytes in; sizes the window through the registry
+src/sessions/registry.ts   SessionRegistry: Session objects, status machine driver, screen cache, persistence, events
+src/terminal/mirror.ts     TerminalMirror: one tab or window per live session in the chosen terminal (`none | iterm | terminal | auto`, asked at every event), `status`, `refresh`; `relayoutSteps` pure. Mirrors into nothing where there is no AppleScript (Linux)
+src/terminal/terminalSetting.ts ~/.grenade/terminal.json `{ "terminal": "iterm" }`: which terminal; missing or unknown is `none`
+src/cli/terminalCommand.ts `grenade terminal [kind]`: writes the setting, `POST /terminal/reload`; `terminalLines` is pure
+src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`
+src/terminal/appleTerminal.ts AppleTerminalAdapter: one Terminal.app window per session (`terminal`, or `auto` without iTerm2)
+src/sessions/status.ts     pure status reducer (see below)
+src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt), a group's name (groupNameOf, named, cleanGroupName)
+src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
+src/sessions/groupOrderStore.ts GroupOrderStore: that order for every client, follows the registry's `updated`/`removed`, `move` for `group.move`, event `changed` (a `groups` frame), groups.json
+src/sessions/poller.ts     timers: 200 ms capture of subscribed sessions, 1 s sweep of all sessions (and the width floor)
+src/sessions/widthFloor.ts pure: the width floor (`WIDTH_FLOOR` 60): `onRelease`, `onSweep`, `parseWindowWidths` (window width and widest Mac terminal per session, control-mode clients left out)
+src/summary/summaryPrompt.ts  pure: model instructions, input (prompts + screen tail), parseSummaryReply (line 1 title, line 2 summary)
+src/summary/summaryTiming.ts  pure: summaryDelay (wanted delay vs. one run per minute)
+src/summary/claudeCli.ts   resolveClaudeBin + runClaudeSummary: `claude -p --model haiku`, stdin in, reply out
+src/summary/summarizer.ts  Summarizer: listens to the registry, schedules runs, calls registry.setSummary and setGuessedTitle
+src/transcript/modelLabel.ts  pure: lastReplyModelIn (model id, effort level and time of the last assistant reply in transcript JSONL), lastModelIn, modelLabel ("claude-opus-5-5" → "Opus 5.5")
+src/transcript/readModel.ts   readTranscriptModel: reads the last 256 KB of a transcript, returns the label, the effort level and when that reply was written
+src/transcript/aiTitle.ts     pure: aiTitleIn (newest Claude Code `ai-title` in transcript JSONL), clipTitle (one line, SESSION_TITLE_MAX)
+src/activity/transcriptReader.ts  TranscriptReader: reads a transcript from where it left off, whole lines only, one read at a time per file; the protocol's `activityEntriesIn` and `workingDirectoryIn` say what the lines mean
+src/activity/catchUp.ts           CatchUp: reads a transcript again at growing delays after a `Stop` that showed no reply yet, until it does (`start`, `cancel`, `stop`)
+src/activity/activityStore.ts     ActivityStore: the last 200 entries per session; `append` (from the transcript), `noteAsked` (a hook's prompt, shown at once; the transcript's copy of it is not sent again, and when the transcript puts it elsewhere the next frame is `full`), `forget`; event `activity` carries new entries as a frame
+src/folders/listFolders.ts  `listFolders(path)`: the `folders` reply (PROTOCOL.md "Folders"), the folders inside a path, links to folders included; `expandHome` and `shownFolders` (hidden dropped, Finder order, capped) are pure
+src/canvas/canvasAccess.ts  pure: which canvases are served (PROTOCOL.md "Canvas", "Which folders"): `normalizeCwd` (`~`, `.`, `..`, trailing `/`), `sharedFolder` (the folder paths share, whole names), `canvasCwds` (each listed session's `cwd`, gone ones too, and the folder each group of several shares, as the Mac app's `Canvas.folder(for:)`), `allowedCanvasCwd`, `canvasFolderOf` (`<cwd>/.grenade/canvas`), `groupFolderOf` (`<cwd>/.grenade/canvas/<group>`), `groupCanvasFolderOf` (a group's `canvas-<n>`, or `shared`: the folder's own), `isListedGroup`
+src/canvas/boardListing.ts  pure: `boardsFrom` (the boards of a folder in Finder's order, capped, each named by the protocol's `boardNameOf` and sized by `boardSizeOf`), `isBoardFile`, `listingKey` (what a watcher compares: file, save time, size), `boardTooLarge` (the sentence for a board over 2 MiB or a frame over the cap)
+src/canvas/canvasFolder.ts  reads a canvas folder, never writes: `listCanvas` (readdir + lstat, the first 8 KiB of each board once per save, `HeadCache`), `readBoard` (opened with O_NOFOLLOW, a regular file only, at most 2 MiB), `readHead`, `canvasInfoOf` (a canvas's name from its first board, count, newest save), `listCanvases` (a group's `canvas-<n>` folders by number, then `shared` while it has a board); every folder from `.grenade` down must be a real folder (a link is a `CanvasError`); a folder not there is `missing`
+src/canvas/canvasWatcher.ts CanvasWatcher: polls each watched folder every 400 ms (`CANVAS_POLL_MS`), one poll however many subscribe, none once nobody does; hands each subscriber the listing when it differs from what that subscriber last got. `Every` is injected for tests
+src/publish/publishPlan.ts  pure: what a link holds (PROTOCOL.md "Publishing"): `PublishRecord` (a link with its key, as published.json keeps it), `boardsInScope` (newest = the highest revision's boards), `referencedAssets` (files of the folder a board names, as written or percent-encoded; never a page or a hidden file), `titleOf`, `newSecrets` (token 12 bytes, key 32, base64url), `withExpiry`, `isExpired`, `linkOf`/`linksOf` (never the key), `tokenForLog` (4 characters: the token is the address)
+src/publish/publishFolder.ts the other files of a canvas folder that may go up: `assetFiles` (regular, not hidden, not a page, at most 5 MiB; links left out), `readAsset` (O_NOFOLLOW)
+src/publish/publishStore.ts  published.json: `loadPublished` (drops anything malformed), `savePublished` (mode 0600, written to a temp file and renamed)
+src/publish/shareClient.ts   ShareClient: the share host's HTTP API (PROTOCOL.md "Share host"): `putManifest` → the files it lacks, `putFile`, `remove` (404 is down already); 30 s each; `ShareHostError` carries the host's sentence and status
+src/publish/publisher.ts     Publisher (the `PublishPort` of `Connection`, and the control API's): `publishCanvas` (new link, or scope/expiry of the folder's link; `newLink` takes the old address down first; a move token points that link at another canvas, `repoint`; a group's canvas is titled with its name, `nameOf`), `remove` (host first, then forgotten; a host that cannot be reached keeps the link), `start` (every stored link again), `stop`; watches each link's folder with the canvas's `CanvasWatcher` and uploads once a change held 1.5 s (`PUBLISH_SETTLE_MS`), one upload per link at a time; a failure retries after a minute (`PUBLISH_RETRY_MS`); emits `changed` with every link
+src/cli/publishCommand.ts    `grenade publish | publish off <link>` through GET /published and DELETE /published/<token>; `publishedLines` and `tokenOf` are pure
+src/canvas/canvasService.ts CanvasService (the `CanvasPort` of `Connection`): each takes a `CanvasPick` (`cwd`, and a group's `group` and `canvas`): `folderOf` (refuses a cwd no session uses, a group no listed session is in, and one of `group`/`canvas` without the other), `canvases`, `list`, `board`, `watch` (a group's canvas carries its `name`, worked out again on each change); `CanvasError` is a sentence for the user, sent as `bad_frame` with the request's `id`
+src/agents/agentCatalog.ts  the agents this daemon can start and what it does with each (`AGENTS`, sent as `daemon.agents`; `agentInfo`, `isKnownAgent`), with the models a Claude Code session can be switched to. A new agent starts here (PROTOCOL.md "Agents")
+src/agents/agentSetup.ts    pure: what each agent needs on this computer, for the Mac app's first run (`GET /agents`): its program on PATH, its sign-in as the agent reports it (`claude auth status --json`, `codex login status`), and the commands that install it (`brew install --cask …` with Homebrew) and sign it in. `findAgentSetup.ts` looks (8 s per status command; calls during a look share it)
+src/models/modelChoice.ts   pure: may this `session.model` be done: `modelChoiceProblem` (the model and effort are ones the agent lists), `switchTimingProblem` (the agent is at its prompt)
+src/models/claudeModelPicker.ts pure: Claude Code's `/model` picker read off the screen (`modelPickerIn`: rows, cursor, effort level, the session-only key), `rowsDownTo`, `promptText` (what is typed in the prompt box), `switchedModelIn` (the "Set model to …" line), `sessionModelIn` (that line's model and effort level, read across wrapped rows)
+src/models/claudeModelSwitch.ts `switchClaudeModel(terminal, model, effort)`: steers that picker (see "Models") and answers Claude Code's "Switch model?" with Yes; `ModelSwitchError` says why the agent did not switch
+src/conversations/conversationSource.ts  `ConversationSource` (one agent's conversations: `list`, `find`, `preview`, `trashPaths`) and `AllConversations`, which merges every source newest first and sends each id to the source that has it; `list(false)` keeps Claude Code's only, for apps that send no `anyAgent`
+src/conversations/fileEnds.ts          readEnds (the first and last 128 KB of a transcript) and isDirectoryOnDisk, for both sources
+src/conversations/codexConversations.ts CodexConversations: Codex's ConversationSource, the rollouts in `<codex dir>/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`, titled by `session_index.jsonl`; never `running`; a preview of a fork reads the original's lines first
+src/conversations/codexConversationInfo.ts  pure: `codexConversationInfoIn` (folder from `session_meta`, also from a cut first line; Codex's thread name, else the first prompt; last prompt), `codexConversationIdOf` (the id in a rollout's name), `codexTitlesIn`, `codexForkOf` and `codexLinesBefore` (what a `codex fork` took from its original)
+src/conversations/conversationIndex.ts ConversationIndex: Claude Code's ConversationSource, the transcripts in `<claude dir>/projects/*/*.jsonl` as `Conversation`s (`list`, newest first, at most 500, a row re-read only when its file changed), `find` (transcript and folder of an id), `preview` (its last 200 activity entries), `trashPaths` (what a delete moves to the Trash, or why not)
+src/conversations/conversationInfo.ts  pure: `conversationInfoIn(head, tail)`: first `cwd`, newest `ai-title` (else the first prompt), last prompt; null without a typed prompt
+src/conversations/conversationMarks.ts ConversationMarks: Grenade's own mark in ~/.grenade/conversations.json: copy id → the conversation it was resumed from
+src/conversations/trash.ts             moveToTrash: `/usr/bin/trash` on macOS (a deleted conversation goes to the Trash), `linuxTrash.ts` on Linux
+src/conversations/linuxTrash.ts        the freedesktop.org home trash (`~/.local/share/Trash/files` + `info/<name>.trashinfo`), so the file manager shows it and puts it back; `trashInfo`, `trashName` pure
+src/conversations/runningClaude.ts     the conversations live Claude Code processes have open (`<claude dir>/sessions/<pid>.json`, pid alive), and what each process says it is doing (`runningClaudeProcesses`: `status` `busy`, `idle`, `shell`); `parseClaudeProcess` is pure
+src/conversations/heldConversations.ts pure: conversation id → the live Grenade session whose transcript it is; `conversationIdOf` reads Claude Code's `<id>.jsonl` and Codex's rollout names
+src/hooks/installHooks.ts  pure: Grenade's Claude Code hooks, eight command hooks that report status and the `PermissionRequest` HTTP hook (`promptHook`) that Claude Code holds open; `claudeHookFlags` (`--settings '<JSON>'`, what the daemon starts Claude Code with) and merge/remove into a settings object (`install-hooks`); `mergeEntries`/`removeEntries` are the shape-generic halves
+src/usage/claudeStatusLine.ts pure: Claude Code's status line (PROTOCOL.md "Usage"): `claudeStatusLine` (the command Grenade starts it with: posts the payload to `POST /hooks/claude/status` in the background, then runs the user's own line with the same payload), `userStatusLineIn` (the user's line from their settings, never Grenade's), `claudeStatusUsage` (payload → the context and the plan windows)
+src/usage/codexUsage.ts    pure: `codexUsageIn`, the last `token_count` of a Codex rollout → the context and the plan windows (`rate_limits.primary`/`secondary`)
+src/usage/planLimits.ts    PlanLimits: each agent's latest plan windows, in memory; `list` drops a window whose reset has passed, shortest first; answers `limits`
+src/usage/readUsage.ts     `readCodexUsage` (the last 256 KB of a rollout) and `readUserStatusLine` (the user's settings.json, read as each Claude session starts)
+src/hooks/installCodexHooks.ts  pure: Grenade's Codex hooks, `codexHookFlags` (`-c hooks.<Event>=[…]` per event, what the daemon starts Codex with; `codexHookCommand` throws its output away and always exits 0) and `removeCodexHooks` for the hooks.json entries of CLI 1.0.23
+src/hooks/shellQuote.ts    pure: one word for the shell tmux runs the agent's command line in
+src/daemon/codexHooks.ts   POST /hooks/codex?session=… → registry.applyHook (`statusForCodexHook`), or `holdForBackground` for a `Stop` whose screen shows background terminals; the prompt goes to the Summarizer and the ActivityStore, `model` to registry.setModel, `transcript_path` (the rollout) to registry.setTranscript and the TranscriptReader
+src/daemon/promptHook.ts   POST /hooks/claude/prompt: `openPromptFromHook` (pure but for the store) and the HTTP wrapper that holds the response; `closePromptsByHook` for hooks that reach /hooks/claude
+src/prompts/promptStore.ts PromptStore: the prompts an agent is showing, each with the callback that answers its held request (`open`) or the keys that answer a dialog on the screen (`openScreen`, `close`); `answer`, `dropped`, `closeByHook`, `closeSession`; events `opened`, `closed`, `answered` (hook prompts only)
+src/prompts/screenDialog.ts pure: what a dialog read off a screen is (`ScreenDialog`: its `question` body, each choice's keys, what a dismissal presses, the model it switched to) and the helpers both readers use (`menuIn`, `keysTo`, `questionBody`)
+src/prompts/codexDialogs.ts pure: `codexDialogIn(lines)`, Codex's "Hooks need review" and "Trust this folder?" as a question prompt and the keys of each option (arrows from the `›` row, Enter)
+src/prompts/claudeDialogs.ts pure: `claudeDialogIn(lines)`, Claude Code's "Switch model?" (after a `/model` typed in the terminal) as a question prompt (`Switch`, `Don't switch`), the keys of each option (arrows from the `❯` row, Enter; "no" then owes an Esc for the picker it leads back to) and `chose` (the model the screen says it switched to)
+src/prompts/screenPrompts.ts ScreenPrompts: listens to the registry's `captured`, opens a card when a Codex or Claude Code screen shows a dialog (and `registry.asks`), types the chosen option, and when the screen moves on closes the card, calls `registry.asked` and, for a model the screen says was switched to, `registry.chooseModel`
+src/prompts/promptText.ts  pure: one line that says what a prompt asks, for its push
+src/background/heldTasks.ts pure: the background tasks that hold a session `working` (`HeldTask`: the protocol's task plus the agent's id for it), `heldTasks` (a report → tasks, each keeping its start time), `countedTasks` (tasks of which only the number is known), `restoreHeld` (from sessions.json)
+src/background/codexBackground.ts pure: `codexBackgroundIn(lines)`, how many background terminals Codex's screen says are running
+src/background/screenBackground.ts `watchScreenBackground`: every changed capture of a Codex session tells the registry how many run (`registry.screenBackground`)
+src/background/claudeBackgroundWatch.ts ClaudeBackgroundWatch: every 3 s, ends the hold of a Claude Code session whose process says `idle` twice in a row (`claudeSaysIdle`, pure), for a task stopped in Claude Code's own task view, which fires no hook
+src/prompts/promptTests.ts PromptTests: test cards (`grenade prompt test`); `testPayload(kind)` is a payload as Claude Code sends it, `start` opens it in the store with nothing behind it, `result` resolves with the reply the phone's answer became
+src/cli/promptCommand.ts   `grenade prompt test`; src/cli/promptAnswer.ts (pure) reads the answer off the hook reply, in words
+src/push/pusher.ts         Pusher: listens to the registry, keeps pending pushes, seals one per registered phone and posts it; `register`/`unregister` for a Connection
+src/push/pushPolicy.ts     pure: is a change an event (startedWaiting), wait / hold / send / drop (decide), how long a session was busy (trackBusy), worthPushing
+src/push/pushContent.ts    pure: what a push says (pushContentFor, pushText, clip)
+src/push/pushSeal.ts       pure crypto: sealPush (X25519 + HKDF + ChaCha20-Poly1305, one key per push), collapseId
+src/push/macPresence.ts    is someone at the Mac: pure parsers for `ioreg` (idle time, screen lock) + readMacPresence
+src/push/pushGateway.ts    postPush: one HTTPS POST to <relay>/v1/push; outcomeOf (pure) maps the answer to sent / unregistered / retry / refused
+src/push/pushConfig.ts     push.json {enabled?, url?, key?, atMacSeconds?}: load/save; pure pushMode (on / off / auto), pushGatewayFor, pushConfigOn, atMacMs
+src/push/pushDevices.ts    PushDevices: push-devices.json (0600), one registration per paired phone, keyed by device id; prune
+src/push/startPush.ts      startPush(): builds the Pusher and the BoardPusher from the files and the daemon's registry, tokens and key
+src/push/boardPolicy.ts    pure: a session's board key (boardKey), and when a Mac board pushes: observe / boardStep (debounce, min interval, end) / afterTry, boardAlert
+src/push/boardPusher.ts    BoardPusher: listens to the registry, builds each registered phone's board, pushes `kind: "board"` updates and the end; `register`/`unregister` for a Connection
+src/push/boardDevices.ts   BoardDevices: push-boards.json (0600), one Mac board per paired phone, keyed by device id, with the board last sent; prune
+src/cli/pushCommand.ts     `grenade push on | off | status | test`; statusLines and testLine are pure
+src/voice/voiceService.ts  VoiceService: the daemon's side of PROTOCOL.md "Voice providers": `list`/`frame`, `setKey` (checked with the provider first), `token`, `reload`; emits `changed`
+src/voice/voiceProvider.ts what a provider is to the daemon (`VoiceProvider`: id, name, uses, `tokenRequest`, `readToken`), `TokenAsk`, `MintedToken`, `VoiceError`; pure `refusalWords`
+src/voice/openai.ts        pure: OpenAI for Talk, a Realtime client secret. `gemini.ts`: Google for Talk, an ephemeral Live API token
+src/voice/voiceCatalog.ts  `VOICE_PROVIDERS`, every provider in the order clients list them; `voiceProvider(id)`
+src/voice/mintToken.ts     `mintToken`: one HTTPS POST to the provider with the key, 10 s; the provider's words on a refusal, with the key taken out
+src/voice/voiceKey.ts      pure: `cleanVoiceKey` (what was pasted), `maskVoiceKey` ("sk-…a1b2"), `withoutKey`
+src/voice/voiceKeyStore.ts voice-keys.json (0600): the key per provider id; load/save
+src/cli/voiceCommand.ts    `grenade voice | voice key <provider> | voice forget <provider>`: checks and writes voice-keys.json itself, then POST /voice/reload; `statusLines` is pure
+src/cli/readSecret.ts      `readSecret`: a key typed without being shown, or the first line of piped stdin
+src/cli/talkCommand.ts     `grenade talk "<words>" | talk log | talk agent [agent]` through /talk/*, and the hidden `grenade talk-mcp` (the MCP server the agent runs); `rowLine` and `agentLines` are pure
+src/talk/talkService.ts    TalkService (the `TalkPort` of `Connection`, and the control API's): the day's thread, the queue (one turn at a time, in order), `busy`, a turn's run and its `it` / `failed` row, `tool` (a call of the running turn only), `setAgent`, `noteAsked` (a hook's prompt, for the feed), the feed through `FeedWatcher`, a new day; events `entry`, `busy`, `thread`. `answeringAgent`, `continuing` are pure
+src/talk/talkFeed.ts       pure: the feed's rules (PROTOCOL.md "The feed"): `feedText` (folded, 280, …), `workingText` (not a slash command, not `<…>`, not within 15 s of a Talk send), `waitingKind` (the push rule), `stillWaiting` (the settle check), `freshReply` (the turn's own reply), `finishedText`, `repeatsLast`, `lastRowsBySession`
+src/talk/feedWatcher.ts    FeedWatcher: `working` from `asked`, `needsYou` / `finished` from the registry once a waiting held 1.5 s; a `finished` waits up to 6 s for its reply; remembers per session the turn start and the last Talk send (`sentTo`)
+src/talk/talkRouter.ts     pure: which session the owner means, the port of the apps' `VoiceRouter` (same weights, threshold 0.6, tie margin 0.1, stop words, outcomes); `decide`, `askAbout`, `keywords`, `words`
+src/talk/talkGuard.ts      pure: a turn (`newTurn`: id + secret), `isTurnCall` (timing-safe), `noteRoute` / `maySend` (a prompt only to a session routed for `prompt` in this turn), `noteConfirmation` (the `which` row's choices), `mayStart` (3 per turn)
+src/talk/talkTools.ts      TalkTools: the six tools against the daemon (`TalkToolDeps`): list_sessions, read_session, route_session, send_to_session, create_session, ask_which; each returns what the agent reads and the rows it adds (`sent`, `started`, `which`)
+src/talk/talkToolDefs.ts   pure: the tools' names, descriptions and argument schemas, as the MCP server lists them (worded as the apps' `VoiceTools`)
+src/talk/talkSessions.ts   pure: a session as the agent reads it (`sessionRow`, no path), `handleOf` (id without `gr-`), `resolveSession`, `sendable` (one line, 1000 characters), `clipped`, `recentEntries`, `askingOf`, `DATA_NOTE`
+src/talk/talkProjects.ts   pure: where create_session may start one (`knownProjects`: live sessions' folders, then recent conversations'; `matchProject` by folder name, never a path), `checkNewSession`, `sessionNameFor`, `agentForNewSession` (never a shell)
+src/talk/agentReady.ts     pure: whether an agent's screen takes a prompt (`readiness`: send, wait, hold at Claude Code's trust dialog or a Codex dialog), the port of the apps' `ClaudeStartup` / `VoiceFirstPrompt`
+src/talk/talkPrompt.ts     pure: `TALK_INSTRUCTIONS` (the standing rules) and `turnMessage` (the fenced session snapshot, the projects, the day in short for a new conversation, the owner's words)
+src/talk/talkAgents.ts     pure: `claudeTalkArgs`, `codexTalkArgs`, `claudeOutcome`, `codexOutcome` (the answer and the conversation id), `failureSentence`, `noAgentSentence`
+src/talk/talkRunner.ts     `runTalkAgent`: spawns the agent for one turn (stdin in, 5 min, no `GRENADE_SESSION`); `resolveCodexBin`, `resolveTalkBin`
+src/talk/talkMcp.ts        `grenade talk-mcp`: stdio MCP server, JSON-RPC 2.0 per line (`handleMcpMessage` pure), each call to `POST /talk/tool` with the turn id and secret from its environment (`daemonToolCaller`)
+src/talk/talkThread.ts     TalkThread: the day's JSONL file (`talkDate` local, `append`, `entries` newest 200, `rollover`), read once per day, ids and the last row number kept in memory; `entriesIn`, `lastRowNumber` pure
+src/talk/talkSettings.ts   talk.json (0600): the chosen agent and the day's agent conversation; load/save
+src/cli/updateCommand.ts   `grenade update` (`--check`, `--now`, `--auto on|off`): installs with the installer of this copy, then restarts the agent
+src/update/tarballInstall.ts pure: a copy unpacked from the release's tarball (`<data home>/grenade/package`, what the website's `install.sh` lays down on Linux): `tarballRoot`, and the shell script that brings it up to date (formula → download → sha256 → unpack → swap)
+src/update/versions.ts     pure: compare versions, the latest from the tap's formula or npm's answer, `installerFor` (absolute brew/npm paths from the command's real path, or the tarball's root), `installerName`, `InstallState`, notice and status lines
+src/update/updateChecker.ts UpdateChecker: asks for the latest every 6 h, installs it itself (auto) or on `installNow`, retries a failure after 1 h, restarts into a newer version on disk once nothing is busy
+src/update/installer.ts    runInstall: runs brew or npm asynchronously with a time limit; `pinned`, `needsAdmin`; installError (pure) puts a failure in a few words
+src/update/autoSetting.ts  ~/.grenade/update.json `{ "auto": false }` turns automatic installs off; read at every check
+src/update/installedVersion.ts, underService.ts  the version on disk behind the command; whether this is the launchd agent (`XPC_SERVICE_NAME`) or the systemd service (its marker and `SYSTEMD_EXEC_PID` equal to this pid), which is what lets the daemon restart itself
+scripts/smoke.mjs          end-to-end check against a running daemon (needs tmux)
+scripts/push-smoke.mjs     acts as a phone that registers for pushes, then asks for a test push; refuses to run unless the daemon pushes through a relay on this Mac (127.0.0.1, localhost)
+scripts/relay-smoke.mjs    acts as a phone through a relay: presence, E2E handshake, sealed hello → welcome
+scripts/pair-smoke.mjs     acts as a phone that scanned the QR code: reads the offer, pairs with its secret on this Mac or `--via relay`, says hello
+scripts/release.mjs        `npm run release`: bundles CLI, daemon, protocol and libraries into one file (esbuild), packs the tarball, writes the formula
+packaging/homebrew/        formula.mjs (the template, pure; its `homepage` is the website, its `url` this repo's releases) and grenade.rb (generated; goes into the tap as Formula/grenade.rb)
+scripts/formula-from-tarball.mjs  writes packaging/homebrew/grenade.rb from a tarball already on the GitHub release (its sha256), what the workflow puts in the tap
+.github/workflows/release.yml  on every push to main: the `linux` job (in an Arch Linux container, what Omarchy is: tests, then `scripts/smoke.mjs` against a real tmux; Ubuntu 24.04's tmux 3.4 keeps 2000 rows of scrollback whatever `history-limit` says before `respawn-pane`, which the smoke run does not accept), then tests on macOS; if `version` is not in the tap yet, `npm run release`, tag, GitHub release, the formula from the released tarball to the tap, then npm (best effort)
+test/                      vitest; wsHandler.test.ts replays every ../grenade-protocol/fixtures/client.*.json
+```
