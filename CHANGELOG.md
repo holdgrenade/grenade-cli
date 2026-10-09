@@ -2,6 +2,14 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.76 (2026-10-09)
+
+- Each session now shows a git summary: how many files have changed and how many commits haven't been pushed yet. It refreshes when the session starts, after the agent's hooks run, and every 10 seconds.
+- From the app, phone, or Chrome, you can list a session's changed files and commits and view the diff for any file.
+- You can push a session's branch from the app. Pushes never force-push.
+- Every push, whether from the app, the agent, or a terminal, adds a push card to the session's activity.
+- A rejected or failed push shows the reason on its card.
+
 ## 1.0.75 (2026-10-09)
 
 - Small fixes and improvements.
