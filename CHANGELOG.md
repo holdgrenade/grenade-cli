@@ -2,6 +2,15 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.78 (2026-10-09)
+
+- Agents can now save a short recording of a feature in use with `grenade clip <file> --title …`, optionally with `--line` and `--before`. Clips are kept by day under ~/.grenade/clips.
+- Each clip is re-encoded to a 720p MP4 of at most 15 seconds, using ffmpeg or the Mac's avconvert. Pictures are copied as they are.
+- The daemon cuts a showreel from each day's clips, with one piece per feature, the before shown beside its clip, and the push that closed it.
+- Once a day's clips stop changing, a small AI model (Haiku) gives each showreel piece a title and a bucket.
+- `grenade showreel hour` sets the end-of-day hour, when the daemon writes that day's showreel.
+- The daemon now answers requ
+
 ## 1.0.77 (2026-10-09)
 
 - On a Mac, `grenade setup` now has a fourth step, "The Mac app," which offers to install the Mac app if it isn't already in your Applications folder. Pairing is now step five. Setup on Linux still has four steps.
