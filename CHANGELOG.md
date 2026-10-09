@@ -2,6 +2,13 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.77 (2026-10-09)
+
+- On a Mac, `grenade setup` now has a fourth step, "The Mac app," which offers to install the Mac app if it isn't already in your Applications folder. Pairing is now step five. Setup on Linux still has four steps.
+- The offered install is the same download the website links to. Before the app is copied into place and opened, grenade checks it against its published SHA-256 and confirms it is signed with a Developer ID and notarized by Apple.
+- Pass `--no-app` to `grenade setup` to skip the Mac app step.
+- New `grenade app` command shows where the Mac app is installed. `grenade app install` installs it on request.
+
 ## 1.0.76 (2026-10-09)
 
 - Each session now shows a git summary: how many files have changed and how many commits haven't been pushed yet. It refreshes when the session starts, after the agent's hooks run, and every 10 seconds.
