@@ -1,7 +1,7 @@
 /** Pure: how clips become pieces, with and without a model's proposal; what the model is told and what it answers. */
 import { describe, expect, it } from "vitest";
 import type { Clip } from "@grenade/protocol";
-import { cutShowreel, doneOf, groupsByTitle, pushesIn, type DayBoard } from "../src/showreel/showreelCut.js";
+import { cutShowreel, doneOf, groupsByTitle, openingOf, pushesIn, type DayBoard } from "../src/showreel/showreelCut.js";
 import { buildShowreelInput, parseShowreelReply } from "../src/showreel/showreelPrompt.js";
 
 const clip = (id: string, title: string, at: string, extra: Partial<Clip> = {}): Clip => ({ id, kind: "video", title, at, mime: "video/mp4", bytes: 1000, ...extra });
@@ -48,6 +48,13 @@ describe("cutShowreel", () => {
     expect(pushesIn("gr-cli", [{ kind: "push", text: "Pushed", at: "2026-10-09T15:31:00.000Z" }, { kind: "push", text: "Push failed", at: "2026-10-09T15:32:00.000Z", failed: "auth" }, { kind: "said", text: "Done.", at: "2026-10-09T15:33:00.000Z" }])).toEqual([{ session: "gr-cli", at: "2026-10-09T15:31:00.000Z", text: "Pushed" }]);
   });
 
+  it("opens with the model's sentence, else one from the titles, and with nothing when there is no piece", () => {
+    const pieces = cutShowreel({ clips: [changes, install], boards: [], pushes: [] });
+    expect(openingOf(pieces, { opening: "  Changes from the phone, and a Mac app that installs itself. ", pieces: [] })).toBe("Changes from the phone, and a Mac app that installs itself.");
+    expect(openingOf(pieces, undefined)).toBe("Shipped today: Installs itself and Changes, from the phone.");
+    expect(openingOf([], { opening: "x", pieces: [] })).toBeUndefined();
+  });
+
   it("never carries a number into a title or line it writes itself", () => {
     const pieces = cutShowreel({ clips: [changes], boards: [], pushes: [] });
     expect(JSON.stringify(pieces)).not.toMatch(/commits|files|sessions/);
@@ -65,8 +72,8 @@ describe("the model's input and reply", () => {
   });
 
   it("reads the JSON in a reply, with prose around it, and gives null for anything else", () => {
-    const reply = 'Here you go:\n{"pieces":[{"title":"T","line":"L","parts":[{"board":"b.html","before":"c-1","clips":["c-2", 3]}]}, {"title": 5}]}\nDone.';
-    expect(parseShowreelReply(reply)).toEqual({ pieces: [{ title: "T", line: "L", parts: [{ board: "b.html", before: "c-1", clips: ["c-2"] }] }] });
+    const reply = 'Here you go:\n{"opening":"One line.","pieces":[{"title":"T","line":"L","parts":[{"board":"b.html","before":"c-1","clips":["c-2", 3]}]}, {"title": 5}]}\nDone.';
+    expect(parseShowreelReply(reply)).toEqual({ opening: "One line.", pieces: [{ title: "T", line: "L", parts: [{ board: "b.html", before: "c-1", clips: ["c-2"] }] }] });
     expect(parseShowreelReply("no json")).toBeNull();
     expect(parseShowreelReply('{"pieces": "x"}')).toBeNull();
   });

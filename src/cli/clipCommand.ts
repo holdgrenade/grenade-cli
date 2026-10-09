@@ -83,6 +83,7 @@ export function showreelLines(frame: ShowreelFrame): string[] {
   if (frame.pieces.length === 0) return [`No showreel for ${frame.date}: no clips yet. An agent records one with: grenade clip <file> --title "…"`];
   const titles = new Map(frame.clips.map((c) => [c.id, c]));
   const lines = [`Showreel · ${frame.date}${frame.madeAt ? ` · cut ${new Date(frame.madeAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""} · version ${frame.version}`];
+  if (frame.opening) lines.push(`   ${frame.opening}`);
   frame.pieces.forEach((piece, i) => {
     lines.push(`${i + 1}. ${piece.title}${piece.line ? ` — ${piece.line}` : ""}`);
     for (const part of piece.parts) {
