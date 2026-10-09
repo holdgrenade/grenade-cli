@@ -60,12 +60,6 @@ import { offerUrlFor } from "../pairing/offer.js";
 import { PairingWatch } from "../pairing/pairingWatch.js";
 import { PairingPause, pauseWords, type PairRoute } from "./pairingPause.js";
 import { createAttachmentStore } from "../attachments/attachmentStore.js";
-import { ClipStore } from "../showreel/clipStore.js";
-import { ShowreelService } from "../showreel/showreelService.js";
-import { dayBoardsOf } from "../showreel/dayBoards.js";
-import { SHOWREEL_SYSTEM_PROMPT } from "../showreel/showreelPrompt.js";
-import { TALK_KIND_SHOWREEL } from "@grenade/protocol";
-import { runClaudePrompt } from "../summary/claudeCli.js";
 import { accessHash } from "../relay/access.js";
 import { loadOrCreateE2EKey } from "../relay/e2eKey.js";
 import { localIpv4 } from "../relay/localIps.js";
@@ -131,12 +125,6 @@ export interface DaemonOptions {
   e2eKeyPath?: string;
   /** Folder for files phones upload (`attachment` frames). Defaults to ~/.grenade/attachments. */
   attachmentsDir?: string;
-  /** Folder for the agents' clips (PROTOCOL.md "Showreel"). Defaults to ~/.grenade/clips; none when `tokensPath` is null. */
-  clipsDir?: string;
-  /** Where each day's cut is kept; defaults to `showreels` beside the clips. */
-  showreelsDir?: string;
-  /** The end-of-day hour's file; defaults to `showreel.json` beside the clips. */
-  showreelSettingsPath?: string;
   /**
    * Accept phones that predate the encrypted local network: a plain `hello` and a plain `POST /pair`
    * (PROTOCOL.md "Older clients and daemons"). Off by default; `--allow-plain-lan` turns it on.
@@ -193,11 +181,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const publishedPath = opts.publishedPath ?? (opts.tokensPath === null ? undefined : paths.published);
   // Typed Talk: the agents installed here can answer it (PROTOCOL.md "Agents", `talk`).
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
-  // Clips and the day's showreel (PROTOCOL.md "Showreel"): kept beside the Talk thread, so a test daemon without a home keeps none.
-  const clipsDir = opts.clipsDir ?? (opts.tokensPath === null ? undefined : paths.clips);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(clipsDir ? { showreel: 1 as const } : {}), ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -724,22 +710,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       })
     : undefined;
 
-  // The showreel: the agents' clips, cut into pieces and announced in the thread at the end of the day.
-  const showreelBin = opts.summaries === false || process.env["GRENADE_SUMMARIES"] === "off" ? undefined : resolveClaudeBin();
-  const showreel = clipsDir
-    ? new ShowreelService({
-        store: new ClipStore(clipsDir),
-        dir: opts.showreelsDir ?? join(dirname(clipsDir), "showreels"),
-        settingsPath: opts.showreelSettingsPath ?? join(dirname(clipsDir), "showreel.json"),
-        registry,
-        entriesOf: (id) => activity.entriesOf(id),
-        boardsOf: (date) => dayBoardsOf(date, registry.list(), homedir()),
-        run: showreelBin ? (input) => runClaudePrompt(showreelBin, SHOWREEL_SYSTEM_PROMPT, input) : undefined,
-        announce: talk ? (text) => void talk.addRow({ kind: TALK_KIND_SHOWREEL, text }) : undefined,
-        log,
-      })
-    : undefined;
-
   /** One protocol connection, the same for a LAN socket and a relay pipe. */
   const makeConnection = (
     out: (frame: DaemonFrame) => void,
@@ -752,7 +722,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       sentInputs,
       activity,
       changes,
-      ...(showreel ? { showreel } : {}),
       interrupted,
       isValidToken: (t) => tokens.has(t),
       sealed: via.sealed,
@@ -920,7 +889,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     push,
     voice,
     ...(talk ? { talk } : {}),
-    ...(showreel ? { showreel } : {}),
     ...(publisher ? { publish: publisher } : {}),
     terminal: {
       status: terminalStatus,
@@ -956,7 +924,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       publisher?.stop();
       comments?.stop();
       talk?.stop();
-      showreel?.stop();
       canvas.stop();
       changes.stop();
       push.stop();

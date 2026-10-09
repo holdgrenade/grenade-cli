@@ -30,20 +30,15 @@ export function resolveClaudeBin(): string | undefined {
  * including Grenade's own), no MCP servers, no saved session. It runs in the temp folder so no
  * project CLAUDE.md is picked up, and without GRENADE_SESSION so it can never report as a session.
  */
-export function claudeSummaryArgs(systemPrompt: string = SUMMARY_SYSTEM_PROMPT): string[] {
-  return ["-p", "--model", "haiku", "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", systemPrompt];
+export function claudeSummaryArgs(): string[] {
+  return ["-p", "--model", "haiku", "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", SUMMARY_SYSTEM_PROMPT];
 }
 
 export function runClaudeSummary(bin: string, input: string): Promise<string> {
-  return runClaudePrompt(bin, SUMMARY_SYSTEM_PROMPT, input);
-}
-
-/** One call of `claude -p` with Haiku under any system prompt (the showreel's cut uses it too), the same flags as a summary. */
-export function runClaudePrompt(bin: string, systemPrompt: string, input: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env["GRENADE_SESSION"];
-    const child = spawn(bin, claudeSummaryArgs(systemPrompt), { cwd: tmpdir(), env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(bin, claudeSummaryArgs(), { cwd: tmpdir(), env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
     const timer = setTimeout(() => child.kill("SIGTERM"), TIMEOUT_MS);

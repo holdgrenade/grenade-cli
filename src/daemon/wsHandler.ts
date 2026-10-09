@@ -30,7 +30,6 @@ import { PlanWriteError } from "../plans/planTracker.js";
 import { PlanModeError } from "../plans/claudePlanMode.js";
 import type { ChangesDiffFrame, ChangesFrame } from "@grenade/protocol";
 import { ChangesError } from "../changes/changesTracker.js";
-import type { ClipChunkFrame, ClipsFrame, ShowreelFrame } from "@grenade/protocol";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -206,16 +205,6 @@ export interface PlansPort {
   enterPlanMode?(sessionId: string): Promise<void>;
 }
 
-/** A day's clips and its showreel (PROTOCOL.md "Showreel"); `ShowreelService` in the daemon. */
-export interface ShowreelPort {
-  frame(date: string | undefined): ShowreelFrame;
-  clips(date: string | undefined): ClipsFrame;
-  /** Null for a clip the daemon does not have, or an offset past its end. */
-  chunk(id: string, from: number): ClipChunkFrame | null;
-  on(event: "changed", cb: (f: ShowreelFrame) => void): unknown;
-  off(event: "changed", cb: (f: ShowreelFrame) => void): unknown;
-}
-
 /** A session's changes in git and pushing them (PROTOCOL.md "Changes"); `ChangesTracker` in the daemon. Rejects with `ChangesError`. */
 export interface ChangesPort {
   files(sessionId: string, commit: string | undefined): Promise<ChangesFrame>;
@@ -281,8 +270,6 @@ export interface ConnectionDeps {
   plans?: PlansPort;
   /** Git changes and pushes. Absent means this daemon reads none (no `changes: 1`) and answers their frames with `bad_frame`. */
   changes?: ChangesPort;
-  /** Clips and the day's showreel. Absent means this daemon keeps none (no `showreel: 1`) and answers their frames with `bad_frame`. */
-  showreel?: ShowreelPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
   talk?: TalkPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
@@ -343,11 +330,6 @@ export class Connection {
   private readonly onPrompt = (f: PromptFrame | PromptClosedFrame) => this.send(f);
   /** This client sent `talk.thread`, so it hears of every new row, of the agent being busy and of a new day or agent. */
   private watchesTalk = false;
-  /** The days this connection asked the showreel of: it hears of each one cut again. */
-  private readonly showreelDays = new Set<string>();
-  private readonly onShowreel = (frame: ShowreelFrame) => {
-    if (this.showreelDays.has(frame.date)) this.send(frame);
-  };
   private readonly onTalkEntry = (entry: TalkEntry) => this.send({ type: "talk.entry", entry });
   private readonly onTalkBusy = (busy: boolean) => this.send({ type: "talk.busy", busy });
   private readonly onTalkThread = (frame: TalkThreadFrame) => this.send(frame);
@@ -440,7 +422,6 @@ export class Connection {
       if (this.watchesOwner) this.d.owner?.off("changed", this.onOwner);
       this.watchesOwner = false;
       this.stopWatchingTalk();
-      this.stopWatchingShowreel();
       this.authed = false;
       this.stopWatchingPush?.();
       if (this.token) this.d.onEnd?.(this, this.token);
@@ -653,10 +634,6 @@ export class Connection {
       case "changes.diff":
       case "git.push":
         return this.handleChanges(frame);
-      case "clips":
-      case "clip.get":
-      case "showreel":
-        return this.handleShowreel(frame);
       case "session.mode": {
         const session = r.get(frame.sessionId);
         if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
@@ -818,33 +795,6 @@ export class Connection {
     if (!talk.setAgent(frame.agent)) return this.fail("bad_frame", `${frame.agent} cannot answer Talk on this ${computerWord()}`, frame.type);
     // Every connection that watches hears of it through `thread`; the sender gets its answer either way.
     if (!this.watchesTalk) this.send(talk.frame());
-  }
-
-  /** The showreel frames (PROTOCOL.md "Showreel"): a day's reel (and every cut of it after), its clips, a clip's bytes. */
-  private handleShowreel(frame: Extract<ClientFrame, { type: "clips" | "clip.get" | "showreel" }>): void {
-    const showreel = this.d.showreel;
-    if (!showreel) return this.fail("bad_frame", "this daemon keeps no clips", frame.type);
-    switch (frame.type) {
-      case "clips":
-        return this.send(showreel.clips(frame.date));
-      case "clip.get": {
-        const chunk = showreel.chunk(frame.id, frame.from);
-        if (!chunk) return this.fail("bad_frame", `no clip ${frame.id} from byte ${frame.from}`, frame.type);
-        return this.send(chunk);
-      }
-      case "showreel": {
-        const reply = showreel.frame(frame.date);
-        if (this.showreelDays.size === 0) showreel.on("changed", this.onShowreel);
-        this.showreelDays.add(reply.date);
-        return this.send(reply);
-      }
-    }
-  }
-
-  private stopWatchingShowreel(): void {
-    if (this.showreelDays.size === 0) return;
-    this.d.showreel?.off("changed", this.onShowreel);
-    this.showreelDays.clear();
   }
 
   private stopWatchingTalk(): void {

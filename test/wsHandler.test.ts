@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
-import { type PlansPort, type ChangesPort, type ShowreelPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort } from "../src/daemon/wsHandler.js";
+import { type PlansPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -76,19 +76,6 @@ class FakeActivity extends EventEmitter {
 }
 
 /** A daemon's voice keys: OpenAI takes any key but "bad", and a token is the key's first letters with a count. */
-/** Clips and a showreel as the daemon's ShowreelService answers them: the frames are the protocol's fixtures. */
-class FakeShowreel extends EventEmitter implements ShowreelPort {
-  frame(date?: string) {
-    return { ...(JSON.parse(fixture("daemon.showreel.json")) as { type: "showreel"; date: string; version: number; pieces: []; clips: [] }), date: date ?? "2026-10-09" };
-  }
-  clips(date?: string) {
-    return { ...(JSON.parse(fixture("daemon.clips.json")) as { type: "clips"; date: string; clips: [] }), date: date ?? "2026-10-09" };
-  }
-  chunk(id: string, from: number) {
-    return id === "c-3f9a2b" && from === 0 ? (JSON.parse(fixture("daemon.clip.chunk.json")) as { type: "clip.chunk"; id: string; from: number; data: string; bytes: number; last: boolean }) : null;
-  }
-}
-
 /** Typed Talk as the daemon's TalkService answers it, without an agent: the frames are the protocol's fixtures. */
 class FakeTalk extends EventEmitter implements TalkPort {
   said: string[] = [];
@@ -146,7 +133,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; changes?: ChangesPort; showreel?: ShowreelPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; changes?: ChangesPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -173,7 +160,6 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.voice ? { voice: opts.voice } : {}),
     ...(opts.canvas ? { canvas: opts.canvas } : {}),
     ...(opts.changes ? { changes: opts.changes } : {}),
-    ...(opts.showreel ? { showreel: opts.showreel } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
     ...(opts.comments ? { comments: opts.comments } : {}),
@@ -327,7 +313,7 @@ describe("Connection", () => {
     const planFrame = { type: "plan" as const, sessionId: session.id, file: "plan.md", folder: "/p", text: "", modified: "2026-10-08T16:20:04.000Z", by: "user" as const, writing: false };
     const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined, async enterPlanMode() {} };
     const changes: ChangesPort = { async files(sessionId) { return { type: "changes", sessionId, files: [] }; }, async diff(sessionId, path) { return { type: "changes.diff", sessionId, path, lines: [] }; }, async push() {} };
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, changes, showreel: new FakeShowreel(), talk: new FakeTalk(), openTerm: () => term });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, changes, talk: new FakeTalk(), openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
@@ -339,31 +325,6 @@ describe("Connection", () => {
       const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
       expect(errors, name).toEqual([]);
     }
-  });
-
-  it("answers the showreel frames, hears of a day cut again only after asking for it, and refuses what the daemon has no clips for", async () => {
-    const showreel = new FakeShowreel();
-    const { conn, out } = connect({ showreel });
-    await conn.handleMessage(fixture("client.hello.json"));
-    out.length = 0;
-    await conn.handleMessage(fixture("client.clips.json"));
-    expect(out[0]).toMatchObject({ type: "clips", date: "2026-10-09" });
-    await conn.handleMessage(fixture("client.clip.get.json"));
-    expect(out[1]).toMatchObject({ type: "clip.chunk", id: "c-3f9a2b", from: 0, last: false });
-    await conn.handleMessage(JSON.stringify({ type: "clip.get", id: "c-nope", from: 0 }));
-    expect(out[2]).toMatchObject({ type: "error", code: "bad_frame", ref: "clip.get" });
-    showreel.emit("changed", showreel.frame("2026-10-09"));
-    expect(out).toHaveLength(3);
-    await conn.handleMessage(fixture("client.showreel.json"));
-    expect(out[3]).toMatchObject({ type: "showreel", date: "2026-10-09", version: 2 });
-    showreel.emit("changed", showreel.frame("2026-10-09"));
-    showreel.emit("changed", showreel.frame("2026-10-08"));
-    expect(out).toHaveLength(5);
-    expect(out[4]).toMatchObject({ type: "showreel", date: "2026-10-09" });
-    const without = connect({});
-    await without.conn.handleMessage(fixture("client.hello.json"));
-    await without.conn.handleMessage(fixture("client.showreel.json"));
-    expect(without.out.at(-1)).toMatchObject({ type: "error", code: "bad_frame", ref: "showreel" });
   });
 
   it("passes typed Talk on to a client that asked for the thread, and refuses an agent that cannot answer", async () => {
