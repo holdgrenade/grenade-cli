@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LiveConnections } from "../src/daemon/connections.js";
 import { ago, deviceOf, matchDevice, type Device } from "../src/daemon/devices.js";
-import { fromWebPage, isLoopback } from "../src/daemon/loopback.js";
+import { addressedToLoopback, fromWebPage, isLoopback } from "../src/daemon/loopback.js";
 
 const device = (id: string, name: string): Device => ({
   id, name, platform: "ios", version: "0.1.0", pairedAt: "2026-09-27T12:00:00.000Z", lastSeen: "2026-09-29T08:00:00.000Z", connected: [], sealed: true,
@@ -90,9 +90,17 @@ describe("isLoopback", () => {
 });
 
 describe("fromWebPage", () => {
-  it("lets through no Origin and the Chrome extension's only", () => {
-    for (const o of [undefined, "chrome-extension://abcdefghijklmnop", " chrome-extension://ABCDEFGHIJKLMNOP "]) expect(fromWebPage(o), String(o)).toBe(false);
-    for (const o of ["https://evil.example", "http://localhost:4321", "null", "NULL", "file://", "moz-extension://abc", "", "chrome-extension://", "chrome-extension://abc, https://evil.example", "chrome-extension://abc/x"]) expect(fromWebPage(o), o).toBe(true);
-    expect(fromWebPage(["chrome-extension://abc", "https://evil.example"])).toBe(true);
+  const grenade = "chrome-extension://eiocljcomciaepiidgadhbbadmmnpdne";
+  it("lets through no Origin and Grenade's own extension only", () => {
+    for (const o of [undefined, grenade, ` ${grenade.toUpperCase()} `]) expect(fromWebPage(o), String(o)).toBe(false);
+    for (const o of ["https://evil.example", "http://localhost:4321", "null", "NULL", "file://", "moz-extension://abc", "", "chrome-extension://", "chrome-extension://abcdefghijklmnopabcdefghijklmnop", `${grenade}, https://evil.example`, `${grenade}/x`]) expect(fromWebPage(o), o).toBe(true);
+    expect(fromWebPage([grenade, "https://evil.example"])).toBe(true);
+  });
+});
+
+describe("addressedToLoopback", () => {
+  it("is true for this Mac's loopback names only", () => {
+    for (const h of ["127.0.0.1:7789", "127.0.0.1", "localhost:7789", "LOCALHOST", "[::1]:7789"]) expect(addressedToLoopback(h), h).toBe(true);
+    for (const h of ["evil.example:7789", "127.0.0.1.evil.example:7789", "localhost.evil.example", "192.168.1.20:7789", "", undefined]) expect(addressedToLoopback(h), String(h)).toBe(false);
   });
 });

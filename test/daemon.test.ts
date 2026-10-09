@@ -246,9 +246,27 @@ describe("a web page", () => {
     expect((await fetch(`http://127.0.0.1:${d.controlPort}/status`, { headers: page })).status).toBe(403);
     expect((await fetch(`${base}/pair`, { method: "POST", headers: { ...page, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
     expect((await fetch(`${base}/hooks/claude`, { method: "POST", headers: page, body: "{}" })).status).toBe(403);
-    expect((await mint({ origin: "chrome-extension://abcdefghijklmnop" })).status).toBe(200);
+    expect((await mint({ origin: "chrome-extension://eiocljcomciaepiidgadhbbadmmnpdne" })).status).toBe(200);
+    expect((await mint({ origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" })).status).toBe(403);
     expect((await mint({})).status).toBe(200);
     expect((await fetch(`${base}/health`, { headers: page })).status).toBe(200);
+  });
+});
+
+describe("a page that rebinds its own name to this Mac", () => {
+  it("is refused by the control API, which answers loopback names only", async () => {
+    const { d } = await daemon();
+    const { request } = await import("node:http");
+    const get = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        request({ host: "127.0.0.1", port: d.controlPort, path: "/sessions", headers: { host } }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        }).on("error", reject).end();
+      });
+    expect(await get(`evil.example:${d.controlPort}`)).toBe(403);
+    expect(await get(`127.0.0.1:${d.controlPort}`)).toBe(200);
+    expect(await get(`localhost:${d.controlPort}`)).toBe(200);
   });
 });
 

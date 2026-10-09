@@ -37,7 +37,7 @@
  */
 import type { PublishedLink, TalkThreadFrame } from "@grenade/protocol";
 import { randomUUID } from "node:crypto";
-import { fromWebPage, isLoopback } from "./loopback.js";
+import { addressedToLoopback, fromWebPage, isLoopback } from "./loopback.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { PromptKind, SessionCreateFrame, TALK_TEXT_MAX, SessionGroupFrame, type DaemonInfo, type PromptFrame, type VoiceProviderInfo } from "@grenade/protocol";
 import type { Logger } from "../log.js";
@@ -110,6 +110,8 @@ export function createControlServer(d: ControlDeps): Server {
     try {
       // Loopback is not enough: a web page in a browser on this Mac reaches 127.0.0.1 too.
       if (fromWebPage(req.headers.origin)) return sendJson(res, 403, { error: "forbidden" });
+      // A page that rebinds its own name to 127.0.0.1 sends no Origin on a GET; its Host gives it away.
+      if (!addressedToLoopback(req.headers.host)) return sendJson(res, 403, { error: "forbidden" });
       await route(d, req, res);
     } catch (e) {
       d.log.error("CLI request failed", { url: req.url, error: e });
