@@ -20,6 +20,7 @@ import { registerSetupCommand } from "./cli/setupCommand.js";
 import { registerUpdateCommand } from "./cli/updateCommand.js";
 import { registerAppCommand } from "./cli/appCommand.js";
 import { registerTerminalCommand } from "./cli/terminalCommand.js";
+import { registerClipCommand } from "./cli/clipCommand.js";
 import { RESTART_EXIT_CODE, underService } from "./update/underService.js";
 import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
 import { startDaemon } from "./daemon/server.js";
@@ -101,6 +102,7 @@ registerPromptCommand(program, { control });
 registerUpdateCommand(program, { control });
 registerAppCommand(program);
 registerTerminalCommand(program, { control });
+registerClipCommand(program, { control });
 
 // Like Claude Code: after a command, one line when a new version is out. Read from the daemon, which checks the tap.
 program.hook("postAction", async (_program, action) => {

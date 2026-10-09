@@ -62,6 +62,15 @@ src/daemon/discovery.ts    Bonjour _grenade._tcp with TXT v/id/name; the system'
 src/daemon/http.ts         readBody / sendJson
 src/attachments/attachmentName.ts  pure: the on-disk name of an upload (UTC stamp, sanitized name, extension from the mime type)
 src/attachments/attachmentStore.ts createAttachmentStore(dir): writes <dir>/<sessionId>/<name>, never overwrites (-2, -3…)
+src/showreel/clipFile.ts    pure (PROTOCOL.md "Showreel", `docs/showreel.md`): what a clip's file is (`clipMediaOf`), a PNG's or JPEG's size from its header (`imageSizeOf`), what mdls and ffprobe print (`parseMdls`, `parseFfprobe`), `clipIdFrom`, `clipDate` (the computer's calendar), `olderThan`, `foldText`
+src/showreel/media.ts       the media tools: `encode` (ffmpeg, else the Mac's avconvert: 720p MP4, at most 15 s; false without either), `probe` (ffprobe, else mdls); every call `execFile` with a timeout
+src/showreel/clipStore.ts   ClipStore: `<GRENADE_HOME>/clips/<date>/<id>.<mp4|png|jpg>` beside `<id>.json` (0600 in 0700 folders): `add` (encode or copy, probe, write; `ClipError` says why not), `list`, `find`, `chunk` (1 MiB from an offset), `prune` (30 days)
+src/showreel/showreelCut.ts pure: `cutShowreel` (a piece per title without a model; the model's pieces with every unknown clip or board dropped and every clip it left out kept), `groupsByTitle`, `doneOf` (the push within two hours), `pushesIn`
+src/showreel/showreelPrompt.ts pure: `SHOWREEL_SYSTEM_PROMPT`, `buildShowreelInput` (clips, boards, closings as fenced data), `parseShowreelReply`
+src/showreel/dayBoards.ts   `dayBoardsOf(date, sessions, home)`: the boards saved that day in every canvas of the listed sessions' folders, through the canvas readers
+src/showreel/showreelSettings.ts `showreel.json` (0600): the end-of-day hour; load/save
+src/showreel/showreelService.ts ShowreelService (the `ShowreelPort` of `Connection`, and the control API's): `addClip`, `clips`, `chunk`, `frame` (cut again when the clips changed), `make` (the model now), the model after `MODEL_SETTLE_MS`, each day's cut in `<GRENADE_HOME>/showreels/<date>.json`, `checkHour` (title and announce once at the hour, through Talk's `addRow`); event `changed`
+src/cli/clipCommand.ts      `grenade clip <file> --title … [--line …] [--before] [--session …]` (POST /clips), `grenade clips [date]`, `grenade showreel [date] [--make]`, `grenade showreel hour [h]`; `clipLine` and `showreelLines` are pure
 src/tmux/tmux.ts           createTmux(): execFile wrapper (list, has, new, capture, sendText, sendKey, resize, releaseSize, kill)
 src/tmux/serverScope.ts    pure: under systemd, `new-session` goes through `systemd-run --user --scope`, so a tmux server it starts is not part of grenaded's service (see "Linux")
 src/tmux/parse.ts          pure: parse tmux output, buildScreen, slugify, key map, input command (types one line, pastes several), agent command

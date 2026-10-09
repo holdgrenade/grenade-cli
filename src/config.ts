@@ -33,6 +33,10 @@ export const paths = {
   // Typed Talk: the day files and the work folder agents run in, and which agent answers.
   talk: join(GRENADE_DIR, "talk"),
   talkSettings: join(GRENADE_DIR, "talk.json"),
+  // The showreel: the agents' clips by day, each day's cut, and the end-of-day hour.
+  clips: join(GRENADE_DIR, "clips"),
+  showreels: join(GRENADE_DIR, "showreels"),
+  showreelSettings: join(GRENADE_DIR, "showreel.json"),
   // Claude Code keeps its settings, transcripts and process files in CLAUDE_CONFIG_DIR when that is set.
   claudeDir: process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"),
   claudeSettings: join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "settings.json"),

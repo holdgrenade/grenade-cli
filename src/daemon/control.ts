@@ -34,8 +34,16 @@
  *   POST /talk/agent        { agent } → TalkThreadFrame | 400   (the agent that answers; `grenade talk agent`)
  *   POST /talk/tool         { turn, secret, name, arguments } → { text, isError } | 403   (one call of Grenade's MCP server,
  *                             `grenade talk-mcp`, for the running turn only)
+ *   POST /clips             { path, title, line?, before?, session? } → Clip   (keeps a file an agent recorded as a clip of
+ *                             today, PROTOCOL.md "Showreel"; `grenade clip`)
+ *   GET  /clips?date=       → ClipsFrame   (a day's clips; today without a date)
+ *   GET  /showreel?date=    → ShowreelFrame   (a day's showreel, cut now when a clip came since)
+ *   POST /showreel/make     { date? } → ShowreelFrame   (cuts it again with the model now)
+ *   GET  /showreel/settings → { hour }   /   POST /showreel/settings { hour } → { hour }   (the end-of-day hour)
  */
-import type { PublishedLink, TalkThreadFrame } from "@grenade/protocol";
+import type { Clip, ClipsFrame, PublishedLink, ShowreelFrame, TalkThreadFrame } from "@grenade/protocol";
+import { ClipError } from "../showreel/clipStore.js";
+import type { ClipInput } from "../showreel/clipFile.js";
 import { randomUUID } from "node:crypto";
 import { addressedToLoopback, fromWebPage, isLoopback } from "./loopback.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -99,6 +107,15 @@ export interface ControlDeps {
     setAgent(agent: string): boolean;
     tool(turn: unknown, secret: unknown, name: string, args: Record<string, unknown>): Promise<{ ok: true; text: string; isError: boolean } | { ok: false; message: string }>;
   };
+  /** Clips and the day's showreel (PROTOCOL.md "Showreel"). Absent in tests that have none. */
+  showreel?: {
+    addClip(input: ClipInput): Promise<Clip>;
+    clips(date: string | undefined): ClipsFrame;
+    frame(date: string | undefined): ShowreelFrame;
+    make(date: string | undefined): Promise<ShowreelFrame>;
+    hour(): number;
+    setHour(hour: number): void;
+  };
   /** Inject a test activity entry. */
   activityTests?: {
     noteErrored(sessionId: string, message: string): void;
@@ -144,6 +161,7 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
   if (method === "POST" && url.pathname === "/voice/reload") return sendJson(res, 200, d.voice?.reload() ?? []);
   if (method === "GET" && url.pathname === "/agents") return sendJson(res, 200, { agents: (await d.agents?.()) ?? [] });
   if (url.pathname.startsWith("/talk/")) return talkRoute(d, req, res, method, url.pathname);
+  if (url.pathname === "/clips" || url.pathname.startsWith("/showreel")) return showreelRoute(d, req, res, method, url);
   if (method === "POST" && url.pathname === "/prompts/test") return startPromptTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   if (method === "POST" && url.pathname === "/activity/test") return injectActivityTest(d, JSON.parse((await readBody(req)) || "{}"), res);
   const tested = url.pathname.match(/^\/prompts\/test\/([^/]+)$/);
@@ -237,6 +255,51 @@ async function talkRoute(d: ControlDeps, req: IncomingMessage, res: ServerRespon
     return sendJson(res, 200, { text: done.text, isError: done.isError });
   }
   sendJson(res, 404, { error: "not_found" });
+}
+
+/** The clip and showreel routes (PROTOCOL.md "Showreel"): `grenade clip`, `grenade clips`, `grenade showreel`. */
+async function showreelRoute(d: ControlDeps, req: IncomingMessage, res: ServerResponse, method: string, url: URL): Promise<void> {
+  const showreel = d.showreel;
+  if (!showreel) return sendJson(res, 404, { error: "not_found", message: "this daemon keeps no clips" });
+  if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
+  const date = dateParam(url.searchParams.get("date"));
+  if (date === null) return sendJson(res, 400, { error: "bad_request", message: "date is YYYY-MM-DD" });
+  if (method === "GET" && url.pathname === "/clips") return sendJson(res, 200, showreel.clips(date));
+  if (method === "GET" && url.pathname === "/showreel") return sendJson(res, 200, showreel.frame(date));
+  if (method === "GET" && url.pathname === "/showreel/settings") return sendJson(res, 200, { hour: showreel.hour() });
+  const body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+  if (method === "POST" && url.pathname === "/clips") {
+    const path = typeof body["path"] === "string" ? body["path"] : "";
+    const title = typeof body["title"] === "string" ? body["title"].trim() : "";
+    if (!path.startsWith("/")) return sendJson(res, 400, { error: "bad_request", message: "path is the absolute path of the recording or picture" });
+    if (!title) return sendJson(res, 400, { error: "bad_request", message: "a clip needs a title: what the feature is, in the product's words" });
+    const session = typeof body["session"] === "string" && d.registry.get(body["session"]) ? body["session"] : undefined;
+    try {
+      const clip = await showreel.addClip({ path, title, ...(typeof body["line"] === "string" ? { line: body["line"] } : {}), ...(body["before"] === true ? { before: true } : {}), ...(session ? { session } : {}) });
+      return sendJson(res, 201, clip);
+    } catch (e) {
+      if (e instanceof ClipError) return sendJson(res, 400, { error: "bad_request", message: e.message });
+      throw e;
+    }
+  }
+  if (method === "POST" && url.pathname === "/showreel/make") {
+    const day = dateParam(typeof body["date"] === "string" ? body["date"] : null);
+    if (day === null) return sendJson(res, 400, { error: "bad_request", message: "date is YYYY-MM-DD" });
+    return sendJson(res, 200, await showreel.make(day));
+  }
+  if (method === "POST" && url.pathname === "/showreel/settings") {
+    const hour = body["hour"];
+    if (typeof hour !== "number" || !Number.isInteger(hour) || hour < 0 || hour > 23) return sendJson(res, 400, { error: "bad_request", message: "hour is 0 to 23" });
+    showreel.setHour(hour);
+    return sendJson(res, 200, { hour });
+  }
+  sendJson(res, 404, { error: "not_found" });
+}
+
+/** A `date` as given: undefined for none (today), null for one that is not a day. */
+function dateParam(raw: string | null): string | undefined | null {
+  if (raw === null || raw === "") return undefined;
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
 }
 
 /** `POST /activity/test`: injects a test errored entry on the named session, or the first running one. */

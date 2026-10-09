@@ -126,6 +126,12 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     this.feed.asked(sessionId, prompt);
   }
 
+  /** A row another part of the daemon writes (the showreel's `showreel` row): appended to the day and sent to every client that watches. */
+  addRow(row: NewTalkEntry): TalkEntry {
+    this.checkDay();
+    return this.append(row);
+  }
+
   /** The owner's words (`talk.say`). False when that id was said already: it is not said again. */
   say(id: string, text: string): boolean {
     this.checkDay();
@@ -209,10 +215,11 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     }
   }
 
-  private append(row: NewTalkEntry): void {
+  private append(row: NewTalkEntry): TalkEntry {
     const entry = this.thread.append(row);
     if (entry.session && lastRowsBySession([entry]).size > 0) this.lastRows.set(entry.session, entry);
     this.emit("entry", entry);
+    return entry;
   }
 
   /** A new day: a new thread, told to every client that watches. */
