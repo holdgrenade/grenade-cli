@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LiveConnections } from "../src/daemon/connections.js";
 import { ago, deviceOf, matchDevice, type Device } from "../src/daemon/devices.js";
-import { isLoopback } from "../src/daemon/loopback.js";
+import { fromWebPage, isLoopback } from "../src/daemon/loopback.js";
 
 const device = (id: string, name: string): Device => ({
   id, name, platform: "ios", version: "0.1.0", pairedAt: "2026-09-27T12:00:00.000Z", lastSeen: "2026-09-29T08:00:00.000Z", connected: [], sealed: true,
@@ -86,5 +86,13 @@ describe("isLoopback", () => {
   it("is true for this Mac only", () => {
     for (const a of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "127.0.0.53"]) expect(isLoopback(a), a).toBe(true);
     for (const a of ["192.168.1.20", "::ffff:192.168.1.20", "fe80::1", "10.0.0.1", "", undefined]) expect(isLoopback(a), String(a)).toBe(false);
+  });
+});
+
+describe("fromWebPage", () => {
+  it("lets through no Origin and the Chrome extension's only", () => {
+    for (const o of [undefined, "chrome-extension://abcdefghijklmnop", " chrome-extension://ABCDEFGHIJKLMNOP "]) expect(fromWebPage(o), String(o)).toBe(false);
+    for (const o of ["https://evil.example", "http://localhost:4321", "null", "NULL", "file://", "moz-extension://abc", "", "chrome-extension://", "chrome-extension://abc, https://evil.example", "chrome-extension://abc/x"]) expect(fromWebPage(o), o).toBe(true);
+    expect(fromWebPage(["chrome-extension://abc", "https://evil.example"])).toBe(true);
   });
 });

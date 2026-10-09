@@ -242,6 +242,7 @@ describe("a web page", () => {
     const mint = (headers: Record<string, string>) => fetch(`http://127.0.0.1:${d.controlPort}/pair-code`, { method: "POST", headers });
     expect((await mint(page)).status).toBe(403);
     expect((await mint({ origin: "http://localhost:4321" })).status).toBe(403);
+    expect((await mint({ origin: "null" })).status).toBe(403);
     expect((await fetch(`http://127.0.0.1:${d.controlPort}/status`, { headers: page })).status).toBe(403);
     expect((await fetch(`${base}/pair`, { method: "POST", headers: { ...page, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
     expect((await fetch(`${base}/hooks/claude`, { method: "POST", headers: page, body: "{}" })).status).toBe(403);
