@@ -56,7 +56,7 @@ describe("ShowreelService", () => {
     const clip = await service.addClip({ path: picture("a.png"), title: "Changes, from the phone", line: "See what changed.", session: "gr-cli" });
     const frame = service.frame("2026-10-09");
     expect(DaemonFrame.safeParse(frame).success).toBe(true);
-    expect(frame).toMatchObject({ version: 1, opening: "Shipped today: Changes, from the phone.", pieces: [{ title: "Changes, from the phone", line: "See what changed.", parts: [{ clips: [clip.id], done: { kind: "push", text: "Pushed 2 commits to origin/main" } }] }], clips: [clip] });
+    expect(frame).toMatchObject({ version: 1, pieces: [{ title: "Changes, from the phone", line: "See what changed.", parts: [{ clips: [clip.id], done: { kind: "push", text: "Pushed 2 commits to origin/main" } }] }], clips: [clip] });
     expect(changed).toHaveLength(1);
     expect(service.clips(undefined).clips).toEqual([clip]);
     expect(service.chunk(clip.id, 0)).toMatchObject({ type: "clip.chunk", id: clip.id, from: 0, bytes: PNG_2x3.length, last: true });
@@ -64,7 +64,7 @@ describe("ShowreelService", () => {
   });
 
   it("asks the model once the clips held still, cuts again with its titles and board, and tells who watches", async () => {
-    const run = vi.fn(async () => JSON.stringify({ opening: "Changes, from the phone.", pieces: [{ title: "Changes, from the phone", line: "What a session changed, and Push.", parts: [{ board: "R10C · Drawer.html", clips: ["c-abcdefgh"] }] }] }));
+    const run = vi.fn(async () => JSON.stringify({ pieces: [{ title: "Changes, from the phone", line: "What a session changed, and Push.", parts: [{ board: "R10C · Drawer.html", clips: ["c-abcdefgh"] }] }] }));
     const { service, changed, inputs, picture } = setup({ run });
     await service.addClip({ path: picture("a.png"), title: "changes drawer", session: "gr-cli" });
     expect(run).not.toHaveBeenCalled();
@@ -74,7 +74,6 @@ describe("ShowreelService", () => {
     expect(inputs[0]).toContain("R10C · Drawer.html");
     const frame = service.frame(undefined);
     expect(frame.version).toBe(2);
-    expect(frame.opening).toBe("Changes, from the phone.");
     expect(frame.pieces[0]).toMatchObject({ title: "Changes, from the phone", line: "What a session changed, and Push.", parts: [{ board: { cwd: "/p", file: "R10C · Drawer.html" }, clips: ["c-abcdefgh"] }] });
     expect(changed.at(-1)).toEqual(frame);
     // A reply that is not pieces leaves the cut as it was.

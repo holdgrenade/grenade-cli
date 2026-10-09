@@ -4,7 +4,7 @@
  * pieces are the model's, with every clip or board it names that the day does not have dropped, and every clip it
  * left out given a piece of its own. No count of anything reaches the reel. No I/O, no clock.
  */
-import { CLIP_LINE_MAX, CLIP_TITLE_MAX, PART_CLIPS_MAX, SHOWREEL_OPENING_MAX, SHOWREEL_PIECES_MAX, defaultOpening, type ActivityEntry, type Clip, type ShowreelBoard, type ShowreelDone, type ShowreelPart, type ShowreelPiece } from "@grenade/protocol";
+import { CLIP_LINE_MAX, CLIP_TITLE_MAX, PART_CLIPS_MAX, SHOWREEL_PIECES_MAX, type ActivityEntry, type Clip, type ShowreelBoard, type ShowreelDone, type ShowreelPart, type ShowreelPiece } from "@grenade/protocol";
 import { foldText } from "./clipFile.js";
 
 /** A board saved on the day, as the cut can name it. */
@@ -23,8 +23,6 @@ export interface DayPush {
 
 /** What a model proposes: pieces that name clips by id and boards by file name. Anything else in it is ignored. */
 export interface ShowreelProposal {
-  /** One sentence of what shipped today, for the opening card. */
-  opening?: string;
   pieces: {
     title: string;
     line?: string;
@@ -41,13 +39,6 @@ export interface CutInput {
 
 /** A push closes a part when it came within this long after the part's last clip. */
 export const DONE_WINDOW_MS = 2 * 60 * 60 * 1000;
-
-/** The opening sentence: the model's when it wrote one, else from the titles; none without a piece. Pure. */
-export function openingOf(pieces: readonly ShowreelPiece[], proposal: ShowreelProposal | undefined): string | undefined {
-  if (pieces.length === 0) return undefined;
-  const written = proposal?.opening ? foldText(proposal.opening, SHOWREEL_OPENING_MAX) : "";
-  return written || defaultOpening(pieces);
-}
 
 /** The pieces of a day's reel, in play order. */
 export function cutShowreel(input: CutInput): ShowreelPiece[] {

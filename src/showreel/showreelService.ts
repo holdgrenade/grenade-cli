@@ -12,7 +12,7 @@ import { clipIdsOf, showreelRowText, type ActivityEntry, type Clip, type ClipChu
 import type { Logger } from "../log.js";
 import { clipDate, type ClipInput } from "./clipFile.js";
 import { ClipStore } from "./clipStore.js";
-import { cutShowreel, openingOf, pushesIn, type DayBoard } from "./showreelCut.js";
+import { cutShowreel, pushesIn, type DayBoard } from "./showreelCut.js";
 import { buildShowreelInput, CLOSING_REPLIES_MAX, CLOSING_TEXT_MAX, parseShowreelReply, type SessionClosing } from "./showreelPrompt.js";
 import { loadShowreelSettings, saveShowreelSettings } from "./showreelSettings.js";
 
@@ -26,8 +26,6 @@ export interface ShowreelDoc {
   date: string;
   madeAt: string;
   version: number;
-  /** One sentence of what shipped, for the opening card. */
-  opening?: string;
   pieces: ShowreelPiece[];
   /** The ids of the clips the cut was made from, so a new clip is noticed. */
   from: string[];
@@ -151,14 +149,10 @@ export class ShowreelService extends EventEmitter<ShowreelServiceEvents> {
   private cut(day: string, clips: Clip[], proposal: ReturnType<typeof parseShowreelReply> | undefined, previous: ShowreelDoc | undefined, boards: DayBoard[] = []): ShowreelDoc {
     const pushes = [...new Set(clips.map((c) => c.session).filter((s): s is string => !!s))].flatMap((s) => pushesIn(s, this.o.entriesOf(s)).filter((p) => clipDate(new Date(p.at)) === day));
     const pieces = cutShowreel({ clips, boards, pushes, proposal: proposal ?? undefined });
-    // A cut without the model keeps the sentence the model wrote last time, when the pieces are the same titles.
-    const kept = !proposal && previous?.opening && sameTitles(previous.pieces, pieces) ? previous.opening : undefined;
-    const opening = kept ?? openingOf(pieces, proposal ?? undefined);
     const doc: ShowreelDoc = {
       date: day,
       madeAt: this.now().toISOString(),
       version: (previous?.version ?? 0) + 1,
-      ...(opening ? { opening } : {}),
       pieces,
       from: clips.map((c) => c.id),
       titled: proposal !== undefined || !this.o.run,
@@ -243,7 +237,7 @@ export class ShowreelService extends EventEmitter<ShowreelServiceEvents> {
     if (!doc) return { type: "showreel", date: day, version: 0, pieces: [], clips: [] };
     const all = new Map(this.o.store.list(day).map((c) => [c.id, c]));
     const clips = clipIdsOf(doc.pieces).map((id) => all.get(id)).filter((c): c is Clip => !!c);
-    return { type: "showreel", date: day, madeAt: doc.madeAt, version: doc.version, ...(doc.opening ? { opening: doc.opening } : {}), pieces: doc.pieces, clips };
+    return { type: "showreel", date: day, madeAt: doc.madeAt, version: doc.version, pieces: doc.pieces, clips };
   }
 
   private load(day: string): ShowreelDoc | undefined {
@@ -270,10 +264,6 @@ export class ShowreelService extends EventEmitter<ShowreelServiceEvents> {
   private fileOf(day: string): string {
     return join(this.o.dir, `${day}.json`);
   }
-}
-
-function sameTitles(a: readonly ShowreelPiece[], b: readonly ShowreelPiece[]): boolean {
-  return a.length === b.length && a.every((p, i) => p.title === b[i]!.title);
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
