@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.79 (2026-10-09)
+
+- Showreels now open with a one-sentence summary of what shipped that day, shown on the opening card. Without an AI model, the card reads like "Shipped today: A, B and C." Re-cutting a reel without the model keeps the earlier summary sentence and still updates the piece titles.
+
 ## 1.0.78 (2026-10-09)
 
 - Agents can now save a short recording of a feature in use with `grenade clip <file> --title …`, optionally with `--line` and `--before`. Clips are kept by day under ~/.grenade/clips.
