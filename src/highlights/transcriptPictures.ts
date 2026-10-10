@@ -25,6 +25,8 @@ interface Line {
 
 interface Block {
   type?: unknown;
+  id?: unknown;
+  tool_use_id?: unknown;
   name?: unknown;
   input?: Record<string, unknown>;
   content?: unknown;
@@ -55,11 +57,13 @@ export function screenshotWrittenBy(command: string): string | null {
 
 /**
  * The pictures in some transcript JSONL whose lines fall between `from` and `to` (ISO times, inclusive), in order,
- * each path once (the first time it was seen). Lines that do not parse are skipped.
+ * each path once (the first time it was seen). A `Read` of a picture answers with the picture inline too: that result's
+ * images are not counted again (the file is the picture). Lines that do not parse are skipped.
  */
 export function picturesIn(jsonl: string, from: string, to: string): TranscriptPicture[] {
   const out: TranscriptPicture[] = [];
   const seen = new Set<string>();
+  const pictureCalls = new Set<string>();
   const start = Date.parse(from);
   const end = Date.parse(to);
   for (const line of jsonl.split("\n")) {
@@ -79,11 +83,13 @@ export function picturesIn(jsonl: string, from: string, to: string): TranscriptP
       if (!block || typeof block !== "object") continue;
       if (entry.type === "assistant" && block.type === "tool_use") {
         const path = pathOfToolUse(block);
+        if (path && typeof block.id === "string") pictureCalls.add(block.id);
         if (path && !seen.has(path)) {
           seen.add(path);
           out.push({ kind: "path", path, at: entry.timestamp });
         }
       } else if (entry.type === "user" && block.type === "tool_result" && Array.isArray(block.content)) {
+        if (typeof block.tool_use_id === "string" && pictureCalls.has(block.tool_use_id)) continue;
         for (const inner of block.content as Block[]) {
           const picture = inlinePicture(inner, entry.timestamp);
           if (picture) out.push(picture);

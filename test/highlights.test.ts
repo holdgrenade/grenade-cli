@@ -166,3 +166,17 @@ describe("pictureStore", () => {
     await store.remove(kept!.id);
   });
 });
+
+it("a Read of a picture is one picture, not the file and its inline answer too", () => {
+  const line = (o: unknown) => JSON.stringify(o);
+  const jsonl = [
+    line({ type: "assistant", timestamp: "2026-10-10T13:49:46.000Z", message: { content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/shots/sim.png" } }] } }),
+    line({ type: "user", timestamp: "2026-10-10T13:49:47.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }] }] } }),
+    line({ type: "assistant", timestamp: "2026-10-10T13:49:48.000Z", message: { content: [{ type: "tool_use", id: "toolu_2", name: "mcp__browser__screenshot", input: {} }] } }),
+    line({ type: "user", timestamp: "2026-10-10T13:49:49.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_2", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BBBB" } }] }] } }),
+  ].join("\n");
+  const found = picturesIn(jsonl, "2026-10-10T13:49:00.000Z", "2026-10-10T13:50:00.000Z");
+  expect(found.map((p) => p.kind)).toEqual(["path", "inline"]);
+  expect(found[0]).toMatchObject({ kind: "path", path: "/shots/sim.png" });
+});
+
