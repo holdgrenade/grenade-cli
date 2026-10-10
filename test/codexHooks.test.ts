@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { handleCodexHook } from "../src/daemon/codexHooks.js";
 import { CODEX_HOOK_EVENTS, codexHookCommand, codexHookFlags, removeCodexHooks } from "../src/hooks/installCodexHooks.js";
 import { claudeHookFlags, mergeHooks } from "../src/hooks/installHooks.js";
+import { BROWSER_INSTRUCTIONS } from "../src/browser/browserPrompt.js";
 import { silentLogger } from "../src/log.js";
 import { agentCommand } from "../src/tmux/parse.js";
 
@@ -58,6 +59,15 @@ describe("the hooks an agent starts with", () => {
     expect(args[0]).toBe("--settings");
     expect(JSON.parse(args[1]!)).toEqual({ ...mergeHooks({}, 7788).settings, statusLine: claudeStatusLine(7788) });
     expect(args.slice(2)).toEqual(["--resume", "9a76de47-6489-4620-8e10-4bf9c4d12b09", "--fork-session"]);
+  });
+  it("tell Claude Code to test pages in the app's toolbox, as --append-system-prompt after --settings", () => {
+    const args = argv(agentCommand("claude", undefined, undefined, { claude: claudeHookFlags(7788, undefined, BROWSER_INSTRUCTIONS) }), "claude");
+    expect(args[0]).toBe("--settings");
+    expect(args[2]).toBe("--append-system-prompt");
+    // Several lines, quotes and backticks reach Claude Code as they are.
+    expect(args.slice(3).join("\n")).toBe(BROWSER_INSTRUCTIONS);
+    expect(BROWSER_INSTRUCTIONS).toContain("grenade browser");
+    expect(BROWSER_INSTRUCTIONS).toContain("Chrome DevTools MCP");
   });
   it("are the same for every session, so Codex asks to trust them once", () => {
     expect(codexHookFlags(7788)).toBe(codexHookFlags(7788));

@@ -54,10 +54,12 @@ export function mergeHooks(input: unknown, port: number): { settings: Settings; 
 /**
  * `--settings '<the hooks and the status line as JSON>'`, quoted for the shell tmux runs the agent in. The status line
  * reports usage to the daemon and then runs `userStatusLine`, the user's own, so their line looks as it did.
+ * `instructions` follow as `--append-system-prompt` (on a Mac, `BROWSER_INSTRUCTIONS`).
  */
-export function claudeHookFlags(port: number, userStatusLine?: UserStatusLine): string {
+export function claudeHookFlags(port: number, userStatusLine?: UserStatusLine, instructions?: string): string {
   const settings = { ...mergeHooks({}, port).settings, statusLine: claudeStatusLine(port, userStatusLine) };
-  return `--settings ${shellQuote(JSON.stringify(settings))}`;
+  const flags = `--settings ${shellQuote(JSON.stringify(settings))}`;
+  return instructions ? `${flags} --append-system-prompt ${shellQuote(instructions)}` : flags;
 }
 
 export function removeHooks(input: unknown): { settings: Settings; changed: boolean } {

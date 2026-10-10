@@ -49,6 +49,7 @@ import { codexBackgroundIn } from "../background/codexBackground.js";
 import { watchScreenBackground } from "../background/screenBackground.js";
 import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
+import { BROWSER_INSTRUCTIONS } from "../browser/browserPrompt.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { fromWebPage, isLoopback } from "./loopback.js";
@@ -194,7 +195,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
         // Read as each session starts, so a status line the user set up since is the one it runs.
         get claude() {
-          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")));
+          // On a Mac, the session is told to test web pages in the app's toolbox (`grenade browser`).
+          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), process.platform === "darwin" ? BROWSER_INSTRUCTIONS : undefined);
         },
         codex: codexHookFlags(port),
       }, serverScope: underSystemd() });
