@@ -63,6 +63,11 @@ describe("highlightWords", () => {
     ]);
     // Without a board there is no choice, and a question back is not the approach.
     expect(wordsOf(turn, []).map((w) => w.kind)).toEqual(["asked", "said", "said"]);
+    // Many prompts after the boards keep the first and the last two, and never push the result out.
+    const long: ActivityEntry[] = [turn[0]!, turn[1]!, ...Array.from({ length: 8 }, (_, i): ActivityEntry => ({ kind: "asked", text: `Change ${i + 1}.`, at: at(22 + i) })), turn[5]!];
+    const words = wordsOf(long, [at(21)]);
+    expect(words.filter((w) => w.kind === "chose").map((w) => w.text)).toEqual(["Change 1.", "Change 7.", "Change 8."]);
+    expect(words.at(-1)).toMatchObject({ kind: "said", text: "Done. Pushed to origin/main." });
     expect(isApproach("Which one?")).toBe(false);
     expect(isApproach("Sure.")).toBe(false);
   });

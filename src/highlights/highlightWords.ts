@@ -32,10 +32,14 @@ export function isApproach(text: string): boolean {
   return line.length >= APPROACH_MIN_CHARS && !line.endsWith("?");
 }
 
+/** The most `chose` words a turn keeps: the first prompt after the boards, and the last two. */
+export const CHOSE_MAX = 3;
+
 /**
  * The turn's words: `asked` (the first prompt), `said` (the approach, when the agent's first sentence is one), `chose`
- * (the owner's prompts after the first board was saved), `said` (the last sentence, when it is not the approach).
- * `boardTimes` are when the turn's boards were saved. At most `HIGHLIGHT_WORDS_MAX`, in time order.
+ * (the owner's prompts after the first board was saved: the first of them and the last two, `CHOSE_MAX`), `said` (the
+ * last sentence, when it is not the approach). `boardTimes` are when the turn's boards were saved. In time order, at
+ * most `HIGHLIGHT_WORDS_MAX`; the ask, the approach and the result are never the ones cut.
  */
 export function wordsOf(turn: readonly ActivityEntry[], boardTimes: readonly string[]): HighlightWord[] {
   const words: HighlightWord[] = [];
@@ -44,14 +48,15 @@ export function wordsOf(turn: readonly ActivityEntry[], boardTimes: readonly str
   const saids = turn.filter((e) => e.kind === "said" && e.text.trim().length > 0);
   const first = saids[0];
   if (first && isApproach(first.text)) words.push({ kind: "said", at: first.at, text: wordText(first.text, HIGHLIGHT_WORD_MAX) });
-  const firstBoard = boardTimes.map((t) => Date.parse(t)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b)[0];
-  if (firstBoard !== undefined) {
-    for (const e of turn) {
-      if (e.kind === "asked" && e !== asked && Date.parse(e.at) > firstBoard) words.push({ kind: "chose", at: e.at, text: wordText(e.text, HIGHLIGHT_WORD_MAX) });
-    }
-  }
   const last = saids.at(-1);
   if (last && last !== first) words.push({ kind: "said", at: last.at, text: wordText(last.text, HIGHLIGHT_WORD_MAX) });
+  const firstBoard = boardTimes.map((t) => Date.parse(t)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b)[0];
+  if (firstBoard !== undefined) {
+    const chose = turn.filter((e) => e.kind === "asked" && e !== asked && Date.parse(e.at) > firstBoard);
+    const kept = chose.length <= CHOSE_MAX ? chose : [chose[0]!, ...chose.slice(-(CHOSE_MAX - 1))];
+    const room = Math.max(0, HIGHLIGHT_WORDS_MAX - words.length);
+    for (const e of kept.slice(0, room)) words.push({ kind: "chose", at: e.at, text: wordText(e.text, HIGHLIGHT_WORD_MAX) });
+  }
   words.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return words.slice(0, HIGHLIGHT_WORDS_MAX);
 }

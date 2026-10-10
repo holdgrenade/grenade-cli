@@ -171,26 +171,30 @@ export class HighlightsService {
     const canvases = await listCanvases(groupFolder, canvasFolderOf(cwd));
     const start = Date.parse(from);
     const end = Date.parse(to);
-    const tiles: HighlightTile[] = [];
+    // Every board saved in the window, then the newest `BOARDS_MAX`: a long design session keeps its latest boards.
+    const found: { folder: string; canvas: string; file: string; modified: string }[] = [];
     for (const info of canvases) {
       const folder = info.canvas === "shared" ? canvasFolderOf(cwd) : join(groupFolder, info.canvas);
       const { boards } = await listCanvas(folder);
       for (const board of boards) {
         const modified = Date.parse(board.modified);
-        if (modified < start || modified > end) continue;
-        const head = await readHead(folder, board.file);
-        tiles.push({
-          id: highlightIdOf(`board:${folder}/${board.file}`),
-          kind: "board",
-          at: board.modified,
-          caption: (boardTitleOf(head) ?? boardNameOf(board.file).name).slice(0, 200),
-          cwd,
-          group,
-          canvas: info.canvas,
-          file: board.file,
-        });
-        if (tiles.length >= BOARDS_MAX) return tiles;
+        if (modified >= start && modified <= end) found.push({ folder, canvas: info.canvas, file: board.file, modified: board.modified });
       }
+    }
+    found.sort((a, b) => Date.parse(a.modified) - Date.parse(b.modified));
+    const tiles: HighlightTile[] = [];
+    for (const board of found.slice(-BOARDS_MAX)) {
+      const head = await readHead(board.folder, board.file);
+      tiles.push({
+        id: highlightIdOf(`board:${board.folder}/${board.file}`),
+        kind: "board",
+        at: board.modified,
+        caption: (boardTitleOf(head) ?? boardNameOf(board.file).name).slice(0, 200),
+        cwd,
+        group,
+        canvas: board.canvas,
+        file: board.file,
+      });
     }
     return tiles;
   }
