@@ -12,8 +12,20 @@ export const CAPTION_WINDOW_MS = 10 * 60_000;
 
 /** Text as a word or a caption carries it: whitespace folded, cut with "…". */
 export function wordText(text: string, max: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
+  const line = plainWords(text).replace(/\s+/g, " ").trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * An agent's sentence without its Markdown marks, since a caption and a reel's words are drawn plain: bold and italic
+ * marks, code ticks, a heading's hashes and a list's bullet at the start. The words themselves stay.
+ */
+export function plainWords(text: string): string {
+  return text
+    .replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)/, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[^\w*])[*_]([^*_\n]+?)[*_](?=[^\w*]|$)/g, "$1$2")
+    .replace(/`([^`\n]+)`/g, "$1");
 }
 
 /** The entries whose time falls in the turn, from `from` to `to` inclusive (ISO times). */

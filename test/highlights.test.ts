@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEntry, HighlightTile } from "@grenade/protocol";
 import { gatherHighlights, shippedTiles } from "../src/highlights/gatherHighlights.js";
 import { highlightIdOf } from "../src/highlights/highlightId.js";
-import { captionFor, entriesInTurn, firstLine, isApproach, wordsOf } from "../src/highlights/highlightWords.js";
+import { captionFor, entriesInTurn, firstLine, isApproach, plainWords, wordsOf } from "../src/highlights/highlightWords.js";
 import { PictureStore, findResizer } from "../src/highlights/pictureStore.js";
 import { picturesIn, screenshotWrittenBy } from "../src/highlights/transcriptPictures.js";
 import { entriesIn, TalkThread } from "../src/talk/talkThread.js";
@@ -178,5 +178,13 @@ it("a Read of a picture is one picture, not the file and its inline answer too",
   const found = picturesIn(jsonl, "2026-10-10T13:49:00.000Z", "2026-10-10T13:50:00.000Z");
   expect(found.map((p) => p.kind)).toEqual(["path", "inline"]);
   expect(found[0]).toMatchObject({ kind: "path", path: "/shots/sim.png" });
+});
+
+it("a caption or a word loses its Markdown marks and keeps its words", () => {
+  expect(plainWords("**sim-cc-1.png**: The iPhone simulator's `Command Center` at *8:30*.")).toBe("sim-cc-1.png: The iPhone simulator's Command Center at 8:30.");
+  expect(plainWords("- A list's first line")).toBe("A list's first line");
+  expect(plainWords("## Done")).toBe("Done");
+  expect(plainWords("2 * 3 = 6, and snake_case_names stay")).toBe("2 * 3 = 6, and snake_case_names stay");
+  expect(firstLine("**Bold** start\nmore")).toBe("Bold start");
 });
 
