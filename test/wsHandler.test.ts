@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
+import { BrowserBridge } from "../src/browser/browserBridge.js";
 import { type PlansPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
@@ -143,7 +144,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; changes?: ChangesPort; talk?: TalkPort; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; changes?: ChangesPort; talk?: TalkPort; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -172,6 +173,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.changes ? { changes: opts.changes } : {}),
     ...(opts.talk ? { talk: opts.talk } : {}),
     ...(opts.highlights ? { highlights: opts.highlights } : {}),
+    ...(opts.browser ? { browser: opts.browser, local: opts.local === true } : {}),
     ...(opts.publish ? { publish: opts.publish } : {}),
     ...(opts.comments ? { comments: opts.comments } : {}),
     ...(opts.owner ? { owner: opts.owner } : {}),
@@ -324,7 +326,7 @@ describe("Connection", () => {
     const planFrame = { type: "plan" as const, sessionId: session.id, file: "plan.md", folder: "/p", text: "", modified: "2026-10-08T16:20:04.000Z", by: "user" as const, writing: false };
     const plans: PlansPort = { follow: () => () => {}, async write() { return planFrame; }, async textOf() { return undefined; }, takeEditedPath: () => undefined, async enterPlanMode() {} };
     const changes: ChangesPort = { async files(sessionId) { return { type: "changes", sessionId, files: [] }; }, async diff(sessionId, path) { return { type: "changes.diff", sessionId, path, lines: [] }; }, async push() {} };
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, changes, talk: new FakeTalk(), highlights: fakeHighlights, openTerm: () => term });
+    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];

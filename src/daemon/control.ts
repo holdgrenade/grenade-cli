@@ -32,6 +32,9 @@
  *   GET  /talk/thread       → TalkThreadFrame   (today's typed Talk thread, PROTOCOL.md "Talk by text"; `grenade talk log`)
  *   POST /talk/say          { text, id? } → { id, said }   (the owner's words, as a `talk.say`; `grenade talk`)
  *   POST /talk/agent        { agent } → TalkThreadFrame | 400   (the agent that answers; `grenade talk agent`)
+ *   POST /browser           { session, action, url?, script? } → { ok, message?, url?, title?, value?, path? }   (an agent's
+ *                             command for its browser in the app, PROTOCOL.md "Agent browser"; `path` is a screenshot saved
+ *                             with the session's attachments; `grenade browser`)
  *   POST /talk/tool         { turn, secret, name, arguments } → { text, isError } | 403   (one call of Grenade's MCP server,
  *                             `grenade talk-mcp`, for the running turn only)
  */
@@ -53,9 +56,14 @@ import type { TerminalStatus } from "../terminal/mirror.js";
 import type { AgentSetup } from "../agents/agentSetup.js";
 import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
+import { BrowserAction, BROWSER_SCRIPT_MAX } from "@grenade/protocol";
+import type { BrowserBridge } from "../browser/browserBridge.js";
+import type { AttachmentStore } from "../attachments/attachmentStore.js";
 
 export interface ControlDeps {
   registry: SessionRegistry;
+  /** The agent's browser (PROTOCOL.md "Agent browser"), and where its screenshots go. Absent in tests that have none. */
+  browser?: { bridge: BrowserBridge; attachments: AttachmentStore };
   codes: PairingCodes;
   /** The code with its check digits (PROTOCOL.md "Key check for typed codes"). */
   typedCode(code: string): string;
@@ -190,6 +198,9 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     const pausedUntil = d.pause.pausedUntil();
     return sendJson(res, 200, pausedUntil === null ? d.pairing.state() : { state: "paused", pausedUntil });
   }
+  if (method === "POST" && url.pathname === "/browser") {
+    return runBrowser(d, JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>, res);
+  }
   if (method === "GET" && url.pathname === "/devices") return sendJson(res, 200, d.devices.list());
   if (method === "DELETE" && url.pathname === "/devices") return sendJson(res, 200, d.devices.unpairAll());
   if (method === "GET" && url.pathname === "/published") return sendJson(res, 200, d.publish?.list() ?? []);
@@ -237,6 +248,34 @@ async function talkRoute(d: ControlDeps, req: IncomingMessage, res: ServerRespon
     return sendJson(res, 200, { text: done.text, isError: done.isError });
   }
   sendJson(res, 404, { error: "not_found" });
+}
+
+/** `POST /browser`: one of an agent's commands for its browser, passed to the app; a screenshot is saved to a file. */
+async function runBrowser(d: ControlDeps, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+  if (!d.browser) return sendJson(res, 409, { error: "conflict", message: "this daemon has no browser" });
+  const wanted = typeof body["session"] === "string" ? body["session"] : "";
+  const session = d.registry.list().find((s) => s.status !== "gone" && (s.id === wanted || s.name === wanted));
+  if (!session) return sendJson(res, 404, { error: "not_found", message: `no running session ${wanted}` });
+  const action = BrowserAction.safeParse(body["action"]);
+  if (!action.success) return sendJson(res, 400, { error: "bad_request", message: "action is open, screenshot, eval or release" });
+  const url = typeof body["url"] === "string" ? body["url"] : undefined;
+  const script = typeof body["script"] === "string" ? body["script"] : undefined;
+  if (action.data === "open" && !(url && /^https?:\/\//i.test(url) && URL.canParse(url))) {
+    return sendJson(res, 400, { error: "bad_request", message: "open needs an http or https address" });
+  }
+  if (action.data === "eval" && !(script && script.length <= BROWSER_SCRIPT_MAX)) {
+    return sendJson(res, 400, { error: "bad_request", message: `eval needs a script of at most ${BROWSER_SCRIPT_MAX} characters` });
+  }
+  const answer = await d.browser.bridge.run({
+    sessionId: session.id,
+    action: action.data,
+    ...(action.data === "open" ? { url } : {}),
+    ...(action.data === "eval" ? { script } : {}),
+  });
+  const { image, mime, ...rest } = answer;
+  if (!image) return sendJson(res, 200, rest);
+  const saved = await d.browser.attachments.save(session.id, "browser", mime ?? "image/png", Buffer.from(image, "base64"));
+  sendJson(res, 200, { ...rest, path: saved.path });
 }
 
 /** `POST /activity/test`: injects a test errored entry on the named session, or the first running one. */

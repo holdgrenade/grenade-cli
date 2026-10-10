@@ -5,7 +5,7 @@
 import { computerWord } from "../platform/computer.js";
 import { listFolders } from "../folders/listFolders.js";
 import { agentInfo } from "../agents/agentCatalog.js";
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type BrowserCommandFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -30,6 +30,7 @@ import { PlanWriteError } from "../plans/planTracker.js";
 import { PlanModeError } from "../plans/claudePlanMode.js";
 import type { ChangesDiffFrame, ChangesFrame } from "@grenade/protocol";
 import { ChangesError } from "../changes/changesTracker.js";
+import type { BrowserBridge } from "../browser/browserBridge.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -282,6 +283,10 @@ export interface ConnectionDeps {
   talk?: TalkPort;
   /** Highlights on the feed's finished rows. Absent means this daemon keeps none (no `highlights: 1`) and answers their frames with `bad_frame`. */
   highlights?: HighlightsPort;
+  /** An agent's browser commands (PROTOCOL.md "Agent browser"). Absent means this daemon passes none (no `browser: 1`). */
+  browser?: BrowserBridge;
+  /** The socket came from this computer (loopback): only such a connection may say `browser.host`. */
+  local?: boolean;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -313,6 +318,8 @@ export class Connection {
   /** The plans this connection follows, by session. */
   private readonly planFollows = new Map<string, () => void>();
   private helloTimer: unknown;
+  /** This connection said `browser.host`: the agent's browser commands come here (PROTOCOL.md "Agent browser"). */
+  private readonly browserHost = { send: (frame: BrowserCommandFrame) => this.send(frame) };
   private readonly onUpdated = (s: Session) => this.send({ type: "session.updated", session: s });
   private readonly onRemoved = (id: string) => {
     this.subscriptions.delete(id);
@@ -434,6 +441,7 @@ export class Connection {
       this.stopWatchingTalk();
       this.authed = false;
       this.stopWatchingPush?.();
+      this.d.browser?.drop(this.browserHost);
       if (this.token) this.d.onEnd?.(this, this.token);
     }
   }
@@ -714,6 +722,14 @@ export class Connection {
         if (outcome === "elsewhere") this.send({ type: "prompt.closed", sessionId: frame.sessionId, promptId: frame.promptId, reason: "elsewhere" });
         return;
       }
+      case "browser.host":
+        // Only the app on this computer: an agent's browser never reaches a phone or another computer.
+        if (!this.d.browser || !this.d.local) return this.fail("bad_frame", "only the app on this computer can host the agent's browser", frame.type);
+        this.d.browser.host(this.browserHost);
+        this.d.log.info("The Grenade app hosts the agent's browser");
+        return;
+      case "browser.result":
+        return this.d.browser?.result(this.browserHost, frame);
       case "attachment": {
         this.requireSession(frame.sessionId);
         const data = Buffer.from(frame.data, "base64");

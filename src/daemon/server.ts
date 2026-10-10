@@ -60,6 +60,7 @@ import { offerUrlFor } from "../pairing/offer.js";
 import { PairingWatch } from "../pairing/pairingWatch.js";
 import { PairingPause, pauseWords, type PairRoute } from "./pairingPause.js";
 import { createAttachmentStore } from "../attachments/attachmentStore.js";
+import { BrowserBridge } from "../browser/browserBridge.js";
 import { accessHash } from "../relay/access.js";
 import { loadOrCreateE2EKey } from "../relay/e2eKey.js";
 import { localIpv4 } from "../relay/localIps.js";
@@ -187,7 +188,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -613,6 +614,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   });
 
   const attachments = createAttachmentStore(opts.attachmentsDir ?? paths.attachments);
+  const browser = new BrowserBridge({ computer: computerWord() });
   const push = startPush({
     registry,
     tokens,
@@ -734,11 +736,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const makeConnection = (
     out: (frame: DaemonFrame) => void,
     close: (code: number, reason: string) => void,
-    via: { route: Route; sealed: boolean },
+    via: { route: Route; sealed: boolean; local?: boolean },
   ) =>
     new Connection({
       registry,
       attachments,
+      browser,
+      local: via.local === true,
       sentInputs,
       activity,
       changes,
@@ -821,7 +825,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         close: (code, reason) => socket.close(code, reason),
       },
       staticKey: e2eKey,
-      makeConnection: (out, close, sealed) => makeConnection(out, close, { route: "lan", sealed }),
+      makeConnection: (out, close, sealed) => makeConnection(out, close, { route: "lan", sealed, local: isLoopback(req.socket.remoteAddress) }),
       log,
       label: req.socket.remoteAddress ?? "lan",
     });
@@ -884,6 +888,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   const control: Server = createControlServer({
     registry,
+    browser: { bridge: browser, attachments },
     codes,
     typedCode: (code) => typedCode(code, e2eKey.publicKey),
     offerUrl: (secret) => offerUrlFor(info, secret, localIpv4(networkInterfaces()), port),
