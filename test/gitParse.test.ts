@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText } from "../src/changes/gitParse.js";
+import { commitPageOf, filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText, remoteOfRef } from "../src/changes/gitParse.js";
 
 describe("parseStatusV2", () => {
   it("reads the branch, its upstream and the files", () => {
@@ -154,5 +154,37 @@ describe("pushes", () => {
     expect(pushRemoteOf(["fork"])).toBe("fork");
     expect(pushRemoteOf(["a", "b"])).toBeUndefined();
     expect(pushRemoteOf([])).toBeUndefined();
+  });
+});
+
+describe("commitPageOf", () => {
+  const h = "a1f3c9e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2";
+  it("reads every form of a GitHub remote", () => {
+    for (const url of ["git@github.com:owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git/\n"]) {
+      expect(commitPageOf(url, h)).toBe(`https://github.com/owner/repo/commit/${h}`);
+    }
+  });
+  it("never keeps a user name or token", () => {
+    expect(commitPageOf("https://x-access-token:ghp_secret@github.com/owner/repo.git", h)).toBe(`https://github.com/owner/repo/commit/${h}`);
+  });
+  it("knows GitLab, with subgroups, and Bitbucket", () => {
+    expect(commitPageOf("git@gitlab.com:group/sub/repo.git", h)).toBe(`https://gitlab.com/group/sub/repo/-/commit/${h}`);
+    expect(commitPageOf("https://bitbucket.org/owner/repo.git", h)).toBe(`https://bitbucket.org/owner/repo/commits/${h}`);
+  });
+  it("has none for another host, a local path, or an odd path", () => {
+    expect(commitPageOf("git@example.com:owner/repo.git", h)).toBeUndefined();
+    expect(commitPageOf("/tmp/remote.git", h)).toBeUndefined();
+    expect(commitPageOf("file:///tmp/remote.git", h)).toBeUndefined();
+    expect(commitPageOf("https://github.com/owner", h)).toBeUndefined();
+    expect(commitPageOf("https://github.com/owner/repo%3Fx", h)).toBeUndefined();
+    expect(commitPageOf("https://github.com/owner/repo.git", "not-a-hash")).toBeUndefined();
+  });
+});
+
+describe("remoteOfRef", () => {
+  it("takes the longest remote the ref starts with", () => {
+    expect(remoteOfRef("origin/main", ["origin", "fork"])).toBe("origin");
+    expect(remoteOfRef("me/fork/main", ["me", "me/fork"])).toBe("me/fork");
+    expect(remoteOfRef("main", ["origin"])).toBeUndefined();
   });
 });

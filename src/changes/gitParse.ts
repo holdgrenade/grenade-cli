@@ -231,6 +231,46 @@ export function pushText(push: { upstream: string; commits: number } | { upstrea
   }
 }
 
+/** Where each host whose website the daemon knows shows one commit, after `https://<host>/<path>`. */
+const COMMIT_PAGES: Record<string, string> = { "github.com": "/commit/", "gitlab.com": "/-/commit/", "bitbucket.org": "/commits/" };
+
+/**
+ * A commit's page on its remote's website (PROTOCOL.md "The push card"), from the remote's URL in any of git's forms
+ * (`https://`, `ssh://`, `git@host:path`) and the full hash. Only for the hosts in `COMMIT_PAGES`; built from the host
+ * and path alone, so a user name or token in the URL never reaches it. Undefined for anything else.
+ */
+export function commitPageOf(remoteUrl: string, hash: string): string | undefined {
+  if (!/^[0-9a-f]{7,64}$/.test(hash)) return undefined;
+  const url = remoteUrl.trim();
+  let host: string;
+  let path: string;
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/)(.+)$/.exec(url);
+  if (/^(https?|ssh|git):\/\//i.test(url)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return undefined;
+    }
+    host = parsed.hostname;
+    path = parsed.pathname;
+  } else if (scp) {
+    host = scp[1]!;
+    path = scp[2]!;
+  } else return undefined;
+  host = host.toLowerCase().replace(/^www\./, "");
+  const page = COMMIT_PAGES[host];
+  if (!page) return undefined;
+  const parts = path.replace(/\.git\/?$/, "").split("/").filter(Boolean);
+  if (parts.length < 2 || parts.some((p) => !/^[A-Za-z0-9._-]+$/.test(p) || p === "." || p === "..")) return undefined;
+  return `https://${host}/${parts.join("/")}${page}${hash}`;
+}
+
+/** The remote a ref like `origin/main` belongs to: the longest remote name it starts with and a `/`. */
+export function remoteOfRef(ref: string, remotes: readonly string[]): string | undefined {
+  return remotes.filter((r) => ref.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+}
+
 /** The remote a branch with no upstream would go to: `origin` when there is one, else the only remote. */
 export function pushRemoteOf(remotes: readonly string[]): string | undefined {
   if (remotes.includes("origin")) return "origin";

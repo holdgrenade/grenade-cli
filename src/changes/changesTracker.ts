@@ -26,7 +26,7 @@ export interface ChangesActivityPort {
 }
 
 /** What git does; `git.ts` unless a test hands in another. */
-export type GitPort = Pick<typeof git, "readSnapshot" | "readFiles" | "readCommits" | "readCommitFiles" | "readDiff" | "pushBranch" | "upstreamHas" | "topOf">;
+export type GitPort = Pick<typeof git, "readSnapshot" | "readFiles" | "readCommits" | "readCommitFiles" | "readDiff" | "pushBranch" | "upstreamHas" | "topOf" | "commitPagesOf">;
 
 export interface ChangesTrackerOptions {
   registry: ChangesRegistryPort;
@@ -207,12 +207,17 @@ export class ChangesTracker {
     for (const c of gone) if (await this.git.upstreamHas(top, upstream, c.hash)) pushed.push(c);
     if (pushed.length === 0) return;
     this.o.log.info("A session's commits reached their upstream", { session: id, upstream, commits: pushed.length });
+    const shown = pushed.slice(0, PUSH_COMMITS_MAX);
+    const pages = await this.git.commitPagesOf(top, upstream, shown.map((c) => c.hash));
     this.o.activity.notePush(id, {
       kind: "push",
       text: pushText({ upstream, commits: pushed.length }),
       at: new Date(this.now()).toISOString(),
       upstream,
-      commits: pushed.slice(0, PUSH_COMMITS_MAX).map((c) => ({ hash: c.hash.slice(0, 7), subject: c.subject.slice(0, 200) })),
+      commits: shown.map((c) => {
+        const url = pages.get(c.hash);
+        return { hash: c.hash.slice(0, 7), subject: c.subject.slice(0, 200), ...(url ? { url } : {}) };
+      }),
     });
   }
 

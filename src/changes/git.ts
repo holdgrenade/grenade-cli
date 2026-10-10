@@ -8,6 +8,7 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { CHANGES_COMMITS_MAX, CHANGES_FILES_MAX, type ChangeCommit, type ChangedFile, type DiffLine, type PushFailure, type SessionChanges } from "@grenade/protocol";
 import {
+  commitPageOf,
   filesWithCounts,
   firstGitLine,
   LOG_FORMAT,
@@ -19,6 +20,7 @@ import {
   parseUnifiedDiff,
   pushFailureOf,
   pushRemoteOf,
+  remoteOfRef,
   type LoggedCommit,
 } from "./gitParse.js";
 
@@ -230,4 +232,22 @@ export async function pushBranch(top: string, changes: SessionChanges): Promise<
 export async function upstreamHas(top: string, upstream: string, hash: string): Promise<boolean> {
   const r = await runGit(top, ["merge-base", "--is-ancestor", hash, upstream]);
   return r.code === 0;
+}
+
+/**
+ * Each commit's page on the website of the remote `upstream` (a ref like `origin/main`) belongs to, by full hash;
+ * empty when that remote is on no host whose website the daemon knows (`commitPageOf`).
+ */
+export async function commitPagesOf(top: string, upstream: string, hashes: readonly string[]): Promise<Map<string, string>> {
+  const pages = new Map<string, string>();
+  const remotes = await runGit(top, ["remote"]);
+  const remote = remoteOfRef(upstream, remotes.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  if (!remote) return pages;
+  const url = await runGit(top, ["remote", "get-url", "--", remote]);
+  if (url.code !== 0) return pages;
+  for (const hash of hashes) {
+    const page = commitPageOf(url.stdout, hash);
+    if (page) pages.set(hash, page);
+  }
+  return pages;
 }
