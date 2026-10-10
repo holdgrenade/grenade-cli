@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.84 (2026-10-10)
+
+- Highlights no longer show a picture the agent read as two tiles. Each screenshot an agent reads now appears once. Screenshots taken by a browser tool still appear as before.
+
 ## 1.0.83 (2026-10-10)
 
 - Small fixes and improvements.
