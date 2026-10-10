@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.82 (2026-10-10)
+
+- Long design turns in highlights now show the newest boards, up to eighteen, instead of the oldest ones.
+- In a long design turn's spoken highlight, the choices are trimmed to the first and last two, so the closing sentence and the main ask, approach, and result are no longer cut off.
+
 ## 1.0.81 (2026-10-10)
 
 - Finished turns in Talk now collect their highlights: the boards saved on the group's canvases during the turn, screenshots and pictures the agent read or was shown, pictures you sent, and any push it sent. They appear on the turn's row about twenty seconds after it finishes.
