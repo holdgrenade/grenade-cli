@@ -2,6 +2,12 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.86 (2026-10-10)
+
+- Agents in a Grenade session can now drive a browser tab with `grenade browser`: `open <url>`, `screenshot`, `eval <script>`, and `release`. The tab lives in the Mac app's toolbox and needs the Mac app running on this computer.
+- Screenshots are saved to a file and the path is printed, so the agent can open or reference the image.
+- The browser tab belongs to its session and sits in that session's group. It appears dimmed under "Take control," so you can take it over at any time.
+
 ## 1.0.85 (2026-10-10)
 
 - Captions and highlighted words under a picture no longer show Markdown marks like bold stars, code ticks, or list bullets. The words themselves stay.
