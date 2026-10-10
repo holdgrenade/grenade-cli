@@ -192,6 +192,14 @@ export interface TalkPort {
   off(event: "thread", cb: (frame: TalkThreadFrame) => void): unknown;
 }
 
+/** Highlights (PROTOCOL.md "Highlights"); `HighlightsService` in the daemon. */
+export interface HighlightsPort {
+  /** A kept picture, or null when it is not here. */
+  image(id: string): Promise<{ mime: string; width: number; height: number; data: Buffer } | null>;
+  /** Takes a tile out of a row everywhere. False when the row or the tile is not here. */
+  remove(rowId: string, highlightId: string): Promise<boolean>;
+}
+
 /** Sessions' plans (PROTOCOL.md "Plans"); `PlanTracker` in the daemon. */
 export interface PlansPort {
   follow(sessionId: string, send: (frame: PlanFrame) => void): () => void;
@@ -272,6 +280,8 @@ export interface ConnectionDeps {
   changes?: ChangesPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
   talk?: TalkPort;
+  /** Highlights on the feed's finished rows. Absent means this daemon keeps none (no `highlights: 1`) and answers their frames with `bad_frame`. */
+  highlights?: HighlightsPort;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
@@ -626,6 +636,9 @@ export class Connection {
       case "talk.say":
       case "talk.agent":
         return this.handleTalk(frame);
+      case "highlight.image":
+      case "highlight.remove":
+        return this.handleHighlight(frame);
       case "plan.subscribe":
       case "plan.unsubscribe":
       case "plan.write":
@@ -795,6 +808,19 @@ export class Connection {
     if (!talk.setAgent(frame.agent)) return this.fail("bad_frame", `${frame.agent} cannot answer Talk on this ${computerWord()}`, frame.type);
     // Every connection that watches hears of it through `thread`; the sender gets its answer either way.
     if (!this.watchesTalk) this.send(talk.frame());
+  }
+
+  /** The highlight frames (PROTOCOL.md "Highlights"): a kept picture by its id, or a tile taken out of a row. */
+  private async handleHighlight(frame: Extract<ClientFrame, { type: "highlight.image" | "highlight.remove" }>): Promise<void> {
+    const highlights = this.d.highlights;
+    if (frame.type === "highlight.image") {
+      if (!highlights) return this.fail("bad_frame", "this daemon keeps no highlights", frame.type, false, frame.id);
+      const picture = await highlights.image(frame.highlight);
+      if (!picture) return this.fail("bad_frame", "That picture is no longer kept.", frame.type, false, frame.id);
+      return this.send({ type: "highlight.image", id: frame.id, highlight: frame.highlight, mime: picture.mime, width: picture.width, height: picture.height, data: picture.data.toString("base64") });
+    }
+    if (!highlights) return this.fail("bad_frame", "this daemon keeps no highlights", frame.type);
+    if (!(await highlights.remove(frame.row, frame.highlight))) return this.fail("bad_frame", "That row has no such picture.", frame.type);
   }
 
   private stopWatchingTalk(): void {

@@ -92,6 +92,8 @@ import { homedir } from "node:os";
 import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
 import { TalkService } from "../talk/talkService.js";
+import { HighlightsService } from "../highlights/highlightsService.js";
+import { PictureStore } from "../highlights/pictureStore.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 import { ChangesTracker } from "../changes/changesTracker.js";
@@ -125,6 +127,8 @@ export interface DaemonOptions {
   e2eKeyPath?: string;
   /** Folder for files phones upload (`attachment` frames). Defaults to ~/.grenade/attachments. */
   attachmentsDir?: string;
+  /** Where highlights keep their copies of pictures. Default: paths.highlights. */
+  highlightsDir?: string;
   /**
    * Accept phones that predate the encrypted local network: a plain `hello` and a plain `POST /pair`
    * (PROTOCOL.md "Older clients and daemons"). Off by default; `--allow-plain-lan` turns it on.
@@ -183,7 +187,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, changes: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -468,6 +472,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!prompt.trimStart().startsWith("<task-notification>")) summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
         talk?.noteAsked(id, prompt);
+        highlights?.turnStarted(id);
       },
       (id, path, event) => {
         // A resumed session names its copy from the first prompt on: remember it as Grenade's copy.
@@ -497,6 +502,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
         talk?.noteAsked(id, prompt);
+        highlights?.turnStarted(id);
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
@@ -710,6 +716,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       })
     : undefined;
 
+  // Highlights (PROTOCOL.md "Highlights"): what a turn made, on its `finished` row, from what the daemon already has.
+  const highlights = talk
+    ? new HighlightsService({
+        registry,
+        entriesOf: (id) => activity.entriesOf(id),
+        talk,
+        pictures: new PictureStore(opts.highlightsDir ?? paths.highlights),
+        attachmentsDir: opts.attachmentsDir ?? paths.attachments,
+        home: homedir(),
+        log,
+      })
+    : undefined;
+  talk?.on("entry", (entry) => highlights?.onEntry(entry));
+
   /** One protocol connection, the same for a LAN socket and a relay pipe. */
   const makeConnection = (
     out: (frame: DaemonFrame) => void,
@@ -762,6 +782,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       limits: planLimits,
       conversations,
       ...(talk ? { talk } : {}),
+      ...(highlights ? { highlights } : {}),
       openTerm(open) {
         const stream = new TermStream({
           ...open,
@@ -889,6 +910,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     push,
     voice,
     ...(talk ? { talk } : {}),
+    ...(highlights ? { highlights } : {}),
     ...(publisher ? { publish: publisher } : {}),
     terminal: {
       status: terminalStatus,
@@ -924,6 +946,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       publisher?.stop();
       comments?.stop();
       talk?.stop();
+      highlights?.stop();
       canvas.stop();
       changes.stop();
       push.stop();

@@ -1,7 +1,9 @@
 /**
  * The day's Talk thread on disk (PROTOCOL.md "Talk by text", "The thread"): one JSONL file per day,
- * `<GRENADE_HOME>/talk/YYYY-MM-DD.jsonl` in the computer's own calendar, mode 0600 in a folder of mode 0700. Rows are
- * only ever appended. A line that does not decode as a `TalkEntry` is skipped, never an error.
+ * `<GRENADE_HOME>/talk/YYYY-MM-DD.jsonl` in the computer's own calendar, mode 0600 in a folder of mode 0700. Lines are
+ * only ever appended: a row that changes (a `finished` row given its highlights, PROTOCOL.md "Highlights") is appended
+ * again with the same id, and the newest line of an id is the row, in the place of its first. A line that does not
+ * decode as a `TalkEntry` is skipped, never an error.
  */
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,11 +18,19 @@ export function talkDate(now: Date): string {
 /** The rows in a day's file, oldest first; lines that are not rows are skipped. Pure. */
 export function entriesIn(jsonl: string): TalkEntry[] {
   const entries: TalkEntry[] = [];
+  const at = new Map<string, number>();
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = TalkEntry.safeParse(JSON.parse(line));
-      if (parsed.success) entries.push(parsed.data);
+      if (!parsed.success) continue;
+      const index = at.get(parsed.data.id);
+      // The newest line of an id is the row, where its first line was.
+      if (index !== undefined) entries[index] = parsed.data;
+      else {
+        at.set(parsed.data.id, entries.length);
+        entries.push(parsed.data);
+      }
     } catch {
       // a line cut short by a crash: skip it
     }
@@ -94,6 +104,25 @@ export class TalkThread {
     this.rows.push(entry);
     this.ids.add(entry.id);
     this.lastNumber = Math.max(this.lastNumber, lastRowNumber([entry]));
+    return entry;
+  }
+
+  /** The row with this id, as it is now. */
+  find(id: string): TalkEntry | undefined {
+    return this.rows.find((e) => e.id === id);
+  }
+
+  /**
+   * Changes a row in place (its highlights): the whole row is appended again under its id, and takes the old one's
+   * place. Undefined when no row has the id.
+   */
+  update(id: string, change: (row: TalkEntry) => TalkEntry): TalkEntry | undefined {
+    const index = this.rows.findIndex((e) => e.id === id);
+    if (index < 0) return undefined;
+    const entry: TalkEntry = { ...change(this.rows[index]!), id };
+    this.ensureDir();
+    appendFileSync(this.fileOf(this.day), `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+    this.rows[index] = entry;
     return entry;
   }
 

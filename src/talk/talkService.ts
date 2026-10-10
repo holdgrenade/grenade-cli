@@ -11,7 +11,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { ActivityEntry, Session, TalkEntry, TalkThreadFrame } from "@grenade/protocol";
+import type { ActivityEntry, Highlights, Session, TalkEntry, TalkThreadFrame } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { FeedWatcher } from "./feedWatcher.js";
 import { lastRowsBySession } from "./talkFeed.js";
@@ -124,6 +124,24 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
   /** A hook's prompt: the session starts a turn (the feed's `working`). */
   noteAsked(sessionId: string, prompt: string): void {
     this.feed.asked(sessionId, prompt);
+  }
+
+  /** The row with this id, as it is now. */
+  row(id: string): TalkEntry | undefined {
+    return this.thread.find(id);
+  }
+
+  /**
+   * A `finished` row's highlights are ready, or changed (PROTOCOL.md "Highlights"): the row is written again with
+   * them and sent to every client that watches, which replaces the row it has. Undefined when no row has the id.
+   */
+  setHighlights(rowId: string, highlights: Highlights | undefined): TalkEntry | undefined {
+    const entry = this.thread.update(rowId, (row) => {
+      const { highlights: _dropped, ...rest } = row;
+      return highlights ? { ...rest, highlights } : rest;
+    });
+    if (entry) this.emit("entry", entry);
+    return entry;
   }
 
   /** The owner's words (`talk.say`). False when that id was said already: it is not said again. */
