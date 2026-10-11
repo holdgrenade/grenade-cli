@@ -4,6 +4,7 @@ import {
   claudeBackgroundStartIn,
   claudeBackgroundTasksIn,
   statusForClaudeHook,
+  toolStepOf,
   waitingForClaudeHook,
   type ReportedBackgroundTask,
   type WaitingFor,
@@ -17,6 +18,28 @@ export interface HookRegistryPort {
   holdForBackground(id: string, tasks: readonly ReportedBackgroundTask[]): boolean;
   /** The agent has just started a background task with this id. */
   backgroundStarted(id: string, taskId: string): void;
+  /** What the agent does this moment changed (PROTOCOL.md "Step"). */
+  noteStep?(id: string, change: StepChange): void;
+}
+
+/** A tool hook's change to the session's step: a new one, the tool returned, or a new turn without one yet. */
+export type StepChange = { start: string } | "done" | "clear";
+
+/** The change a hook makes to the session's step (PROTOCOL.md "Step"), or null for none. The same for every agent. */
+export function stepChangeOf(event: string, toolName: unknown, toolInput: unknown): StepChange | null {
+  switch (event) {
+    case "UserPromptSubmit":
+      return "clear";
+    case "PreToolUse": {
+      const text = toolStepOf(toolName, toolInput);
+      return text ? { start: text } : null;
+    }
+    case "PostToolUse":
+    case "PostToolUseFailure":
+      return "done";
+    default:
+      return null;
+  }
 }
 
 export interface HookResult {
@@ -60,6 +83,9 @@ export function handleClaudeHook(
   if (!applied) return { status: 404, body: { ok: false, reason: `unknown session ${sessionParam}` } };
   const started = parsed.data.hook_event_name === "PostToolUse" ? claudeBackgroundStartIn(parsed.data) : null;
   if (started) registry.backgroundStarted(sessionParam, started);
+  // A subagent's tool calls are not what the session does: its own step is the call that started the subagent.
+  const step = aside ? null : stepChangeOf(parsed.data.hook_event_name, parsed.data.tool_name, parsed.data.tool_input);
+  if (step) registry.noteStep?.(sessionParam, step);
   if (parsed.data.prompt !== undefined) onPrompt?.(sessionParam, parsed.data.prompt);
   if (parsed.data.transcript_path) onTranscript?.(sessionParam, parsed.data.transcript_path, parsed.data.hook_event_name);
   if (waitingFor === "answer" && parsed.data.message) onAsked?.(sessionParam, parsed.data.message);

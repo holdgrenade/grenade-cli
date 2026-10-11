@@ -9,7 +9,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionChanges, SessionContext, SessionPlan, SessionStatus, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionChanges, SessionContext, SessionPlan, SessionStatus, SessionStep, WaitingFor } from "@grenade/protocol";
+import type { StepChange } from "../daemon/hooks.js";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
@@ -545,6 +546,23 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.records.get(id)?.backgroundStarts.set(taskId, new Date(this.now()).toISOString());
   }
 
+  /**
+   * What the agent does this moment (PROTOCOL.md "Step"), from its tool hooks: only while it works on its own turn,
+   * never while it only waits for background tasks. Not saved.
+   */
+  noteStep(id: string, change: StepChange): void {
+    const r = this.records.get(id);
+    if (!r) return;
+    const { step: was, ...rest } = r.session;
+    let step: SessionStep | undefined;
+    if (change === "clear" || r.session.status !== "working" || r.session.background) step = undefined;
+    else if (change === "done") step = was && !was.done ? { ...was, done: true } : was;
+    else step = was && !was.done && was.text === change.start ? was : { text: change.start, at: new Date(this.now()).toISOString() };
+    if (step === was) return;
+    r.session = step ? { ...rest, step } : rest;
+    this.emit("updated", r.session);
+  }
+
   /** The background tasks that held the session are over, and no hook said so: its turn is done. */
   backgroundOver(id: string): void {
     const r = this.records.get(id);
@@ -723,7 +741,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       heldChanged || next.status !== r.state.status || shownWaitingFor(next) !== r.session.waitingFor || shownStoppedBecause(next) !== r.session.stoppedBecause;
     r.state = next;
     if (changed) {
-      const { waitingFor: _was, stoppedBecause: _because, background: _held, ...rest } = r.session;
+      const { waitingFor: _was, stoppedBecause: _because, background: _held, step, ...rest } = r.session;
       const waitingFor = shownWaitingFor(next);
       const stoppedBecause = shownStoppedBecause(next);
       r.shownHeld = shown;
@@ -734,6 +752,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         ...(waitingFor ? { waitingFor } : {}),
         ...(stoppedBecause ? { stoppedBecause } : {}),
         ...(shown.length > 0 ? { background: shown.map(shownTask) } : {}),
+        // The step is the turn's: it goes when the session stops working or only waits for background tasks.
+        ...(step && next.status === "working" && shown.length === 0 ? { step } : {}),
       };
       if (heldChanged) this.persist();
       if (emit) this.emit("updated", r.session);
