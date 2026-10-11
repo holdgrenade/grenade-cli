@@ -102,6 +102,7 @@ import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 import { ChangesTracker } from "../changes/changesTracker.js";
 import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
+import { shellLaunch, writeShellPrompt } from "../platform/shellPrompt.js";
 
 /** The largest message a socket on :7788 takes, the relay's cap too: a sealed 2 MiB attachment is about 3.75 MB. */
 export const WS_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
@@ -203,6 +204,16 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), process.platform === "darwin" ? BROWSER_INSTRUCTIONS : undefined);
         },
         codex: codexHookFlags(port),
+        // Shells start with Grenade's prompt, its files written (again, if a new version changed them) as each starts.
+        shell: (shell: string) => {
+          try {
+            writeShellPrompt(paths.shell);
+            return shellLaunch(shell, paths.shell, process.env["ZDOTDIR"]);
+          } catch (e) {
+            log.warn("Could not write the shell prompt; the shell starts with its own", { error: e });
+            return shell;
+          }
+        },
       }, serverScope: underSystemd() });
   const tokens = new TokenStore(opts.tokensPath === null ? undefined : (opts.tokensPath ?? paths.tokens));
   const codes = new PairingCodes();

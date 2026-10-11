@@ -208,6 +208,8 @@ export function goesInAsPaste(text: string, paste = false): boolean {
 export interface AgentFlags {
   claude?: string | undefined;
   codex?: string | undefined;
+  /** How a shell starts, given the shell: with Grenade's prompt (`shellLaunch`). */
+  shell?: ((shell: string) => string) | undefined;
 }
 
 /** The program launched inside the tmux session for an agent kind. */
@@ -230,7 +232,7 @@ export function agentCommand(agent: AgentKind, shell = loginShell(), resume?: st
       return `${codex} fork --no-alt-screen ${resume}`;
     }
     case "shell":
-      return shell;
+      return flags.shell ? flags.shell(shell) : shell;
     default:
       throw new Error(`not an agent this daemon can start: ${agent}`);
   }
