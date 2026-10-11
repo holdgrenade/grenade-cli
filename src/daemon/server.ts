@@ -5,6 +5,7 @@
  *   relay link (optional)  phones away from the LAN, end-to-end encrypted (src/relay/)
  */
 import { computerWord, daemonOs } from "../platform/computer.js";
+import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -27,6 +28,7 @@ import { aiTitleIn, clipTitle } from "../transcript/aiTitle.js";
 import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
+import { TranscriptFollower } from "../activity/follower.js";
 import { AGENTS, agentInfo } from "../agents/agentCatalog.js";
 import { CodexConversations } from "../conversations/codexConversations.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
@@ -325,6 +327,13 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Codex says when Esc stopped a turn (`Interrupt`), but may write `turn_aborted` to its rollout a moment later:
   // read until it is there.
   const codexStopCatchUp = new CatchUp(async (id, path) => (await readActivity(id, path)).some((e) => e.kind === "stopped"));
+  // Hooks alone left the reply waiting for the next prompt at times: follow a working session's transcript as it is
+  // written, and for a while after its turn ends.
+  const follower = new TranscriptFollower({
+    read: readActivity,
+    size: async (path) => (await stat(path)).size,
+    isWorking: (id) => registry.get(id)?.status === "working",
+  });
   const interrupted = (id: string) => {
     const session = registry.get(id);
     const path = registry.transcriptOf(id);
@@ -335,6 +344,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // each session's next hook, so a phone sees what was said the moment it subscribes.
   for (const { id, path } of registry.transcripts()) {
     readActivity(id, path).catch((e) => log.debug("Could not read the activity from a saved transcript", { session: id, path, error: e }));
+    if (registry.get(id)?.status === "working") follower.follow(id, path);
   }
 
   // Past conversations of every agent that keeps them (PROTOCOL.md "Conversations"). Read only; Grenade's marks live beside sessions.json.
@@ -487,6 +497,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           .catch((e) => log.debug("Could not read the model from a transcript", { session: id, path, error: e }));
         catchUp.cancel(id);
         interruptCatchUp.cancel(id);
+        follower.follow(id, path);
         readActivity(id, path)
           .then((entries) => {
             if (event === "Stop" && !entries.some((e) => e.kind === "said")) catchUp.start(id, path);
@@ -517,6 +528,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           .catch((e) => log.debug("Could not read the usage from a Codex rollout", { session: id, path, error: e }));
         catchUp.cancel(id);
         codexStopCatchUp.cancel(id);
+        follower.follow(id, path);
         readActivity(id, path)
           .then((entries) => {
             if (event === "Stop" && !entries.some((e) => e.kind === "said")) catchUp.start(id, path);
@@ -649,6 +661,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     catchUp.cancel(id);
     interruptCatchUp.cancel(id);
     codexStopCatchUp.cancel(id);
+    follower.forget(id);
   });
   registry.on("updated", (s) => {
     if (s.status === "gone") prompts.closeSession(s.id);
@@ -964,6 +977,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       catchUp.stop();
       interruptCatchUp.stop();
       codexStopCatchUp.stop();
+      follower.stop();
       await discovery?.stop();
       for (const c of wss.clients) c.close(1001, "daemon stopping");
       await Promise.all([closeServer(wss), closeServer(http), closeServer(control)]);
