@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DaemonFrame, TALK_FEED_TEXT_MAX, type ActivityEntry, type Session, type TalkEntry } from "@grenade/protocol";
 import { FeedWatcher } from "../src/talk/feedWatcher.js";
-import { REPLY_WAIT_MS, SENT_TURN_MS, SETTLE_MS, feedText, finishedText, freshReply, isOwnersPrompt, lastRowsBySession, repeatsLast, stillWaiting, waitingKind, workingText } from "../src/talk/talkFeed.js";
+import { REPLY_WAIT_MS, SENT_TURN_MS, SETTLE_MS, feedText, finishedText, freshReply, isOwnersPrompt, lastRowsBySession, repeatsLast, stillFinished, stillWaiting, waitingKind, workingText } from "../src/talk/talkFeed.js";
 import type { NewTalkEntry } from "../src/talk/talkThread.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
@@ -52,6 +52,11 @@ describe("talkFeed rules", () => {
     expect(stillWaiting(done, done)).toBe(true);
     expect(stillWaiting(done, { ...done, status: "working" })).toBe(false);
     expect(stillWaiting(done, { ...done, statusSince: at(1) })).toBe(false);
+    // Looked at (`seen`) or left: the turn still finished. Working again, or an idle from before: it did not.
+    expect(stillFinished(done, { ...done, status: "idle", waitingFor: undefined, statusSince: at(5) })).toBe(true);
+    expect(stillFinished(done, { ...done, status: "working", statusSince: at(5) })).toBe(false);
+    expect(stillFinished(done, { ...done, status: "idle", statusSince: at(-5) })).toBe(false);
+    expect(stillFinished(done, undefined)).toBe(false);
   });
 
   it("takes the turn's own reply, never an earlier turn's, and falls back to the summary", () => {
@@ -180,6 +185,18 @@ describe("FeedWatcher", () => {
     set({ status: "working", statusSince: at(4_300) });
     await advance(SETTLE_MS * 2);
     expect(short(rows)).toEqual(["working:go"]);
+  });
+
+  it("writes finished for a turn the owner was looking at as it ended (seen makes it idle within the settle)", async () => {
+    const { watcher, entries, rows, advance, set } = setup();
+    watcher.asked("gr-api", "go");
+    set({ status: "working", statusSince: at(0) });
+    entries.set("gr-api", [{ kind: "asked", text: "go", at: at(0) }, { kind: "said", text: "Gone.", at: at(5) }]);
+    set({ status: "waiting", waitingFor: "done", statusSince: at(10) });
+    await advance(100);
+    set({ status: "idle", waitingFor: undefined, statusSince: at(110) });
+    await advance(SETTLE_MS * 2);
+    expect(short(rows)).toEqual(["working:go", "finished:Gone."]);
   });
 
   it("writes needsYou with what the card asks, once while the same question stays", async () => {

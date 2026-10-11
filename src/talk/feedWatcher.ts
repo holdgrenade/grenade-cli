@@ -5,7 +5,7 @@
  * what it remembers per session: the previous Session, when its turn started, when Talk last sent to it.
  */
 import type { ActivityEntry, Session, TalkEntry } from "@grenade/protocol";
-import { REPLY_WAIT_MS, SETTLE_MS, feedText, finishedText, freshReply, repeatsLast, stillWaiting, waitingKind, workingText } from "./talkFeed.js";
+import { REPLY_WAIT_MS, SETTLE_MS, feedText, finishedText, freshReply, repeatsLast, stillFinished, stillWaiting, waitingKind, workingText } from "./talkFeed.js";
 import { headingOf } from "./talkSessions.js";
 import type { NewTalkEntry } from "./talkThread.js";
 
@@ -92,7 +92,7 @@ export class FeedWatcher {
 
   private finished(decided: Session, deadline: number): void {
     const current = this.d.registry.get(decided.id);
-    if (!stillWaiting(decided, current)) return;
+    if (!stillFinished(decided, current)) return;
     // A turn this daemon did not see start (one it picked up after a restart) writes nothing.
     const start = this.turnStart.get(decided.id);
     if (start === undefined) return;

@@ -62,6 +62,16 @@ export function stillWaiting(decided: Session, now: Session | undefined): boolea
   return now !== undefined && now.status === "waiting" && now.statusSince === decided.statusSince && eventOf(now) === eventOf(decided);
 }
 
+/**
+ * Whether a `done` the feed decided still stands: still waiting as it was, or since made `idle` by the owner looking at
+ * it (`seen`, sent the moment a session on screen finishes) or by the wait running out. Looking at a turn does not undo
+ * it, so its `finished` row (and the highlights on it) is still written. A new turn shows as `working`.
+ */
+export function stillFinished(decided: Session, now: Session | undefined): boolean {
+  if (stillWaiting(decided, now)) return true;
+  return now !== undefined && now.status === "idle" && Date.parse(now.statusSince) >= Date.parse(decided.statusSince);
+}
+
 /** The newest reply the agent wrote since `since` (ms), or undefined while the transcript has none yet. */
 export function freshReply(entries: readonly ActivityEntry[], since: number): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
