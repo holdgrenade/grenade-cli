@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.94 (2026-10-11)
+
+- Added `grenade browser close`, so an agent can close its browser tab when it finishes. Every session is now told about this command.
+
 ## 1.0.93 (2026-10-11)
 
 - Highlights now cover the whole turn when the agent stops a background task, such as a dev server it started. Before, that stop restarted the turn's window, so a design-and-build turn could lose its boards and screenshots or get no highlights at all.
