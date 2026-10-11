@@ -87,6 +87,17 @@ describe("browser.host on a connection", () => {
     expect(bridge.hasHost).toBe(false);
   });
 
+  it("passes close on to the app", async () => {
+    const bridge = new BrowserBridge({ newId: () => "b-2", setTimer: () => 0, clearTimer: () => {} });
+    const { out, send } = connection(bridge, true);
+    await send(hello);
+    await send({ type: "browser.host" });
+    const answer = bridge.run({ sessionId: "gr-a", action: "close" });
+    expect(out.at(-1)).toMatchObject({ type: "browser.command", id: "b-2", action: "close" });
+    await send({ type: "browser.result", id: "b-2", ok: true });
+    expect(await answer).toEqual({ ok: true });
+  });
+
   it("is refused from anywhere else", async () => {
     const bridge = new BrowserBridge();
     const { out, send } = connection(bridge, false);

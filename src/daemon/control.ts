@@ -258,7 +258,7 @@ async function runBrowser(d: ControlDeps, body: Record<string, unknown>, res: Se
   const session = d.registry.list().find((s) => s.status !== "gone" && (s.id === wanted || s.name === wanted));
   if (!session) return sendJson(res, 404, { error: "not_found", message: `no running session ${wanted}` });
   const action = BrowserAction.safeParse(body["action"]);
-  if (!action.success) return sendJson(res, 400, { error: "bad_request", message: "action is open, screenshot, eval or release" });
+  if (!action.success) return sendJson(res, 400, { error: "bad_request", message: "action is open, screenshot, eval, close or release" });
   const url = typeof body["url"] === "string" ? body["url"] : undefined;
   const script = typeof body["script"] === "string" ? body["script"] : undefined;
   if (action.data === "open" && !(url && /^https?:\/\//i.test(url) && URL.canParse(url))) {

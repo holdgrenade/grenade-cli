@@ -1,5 +1,5 @@
 /**
- * `grenade browser open|screenshot|eval|release`: an agent drives its browser, a tab in the Grenade app's toolbox on
+ * `grenade browser open|screenshot|eval|close|release`: an agent drives its browser, a tab in the Grenade app's toolbox on
  * this computer (PROTOCOL.md "Agent browser"). Run inside a Grenade session, which `GRENADE_SESSION` names; the tab is
  * that session's, in its group. The person sees it dimmed under "Take control" and can take it back at any time.
  */
@@ -40,7 +40,8 @@ export function registerBrowserCommand(program: Command, d: BrowserCommandDeps):
         "  grenade browser eval 'return document.title'",
         "  grenade browser eval 'document.querySelector(\"button\").click()'",
         "  grenade browser eval - < script.js         # the script from stdin",
-        "  grenade browser release                    # give the tab back to the person",
+        "  grenade browser close                      # close the tab when you are done with it",
+        "  grenade browser release                    # give the tab back to the person, still open",
       ].join("\n"),
     );
 
@@ -71,6 +72,11 @@ export function registerBrowserCommand(program: Command, d: BrowserCommandDeps):
     .command("eval <script>")
     .description("run a script in the page, as the body of an async function (`-` reads it from stdin); prints what it returns as JSON")
     .action((script: string) => run({ action: "eval", script: script === "-" ? readFileSync(0, "utf8") : script }, (r) => r.value ?? "undefined"));
+
+  browser
+    .command("close")
+    .description("close the tab, once you are done with it")
+    .action(() => run({ action: "close" }, () => "closed"));
 
   browser
     .command("release")
