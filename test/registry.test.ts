@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session } from "@grenade/protocol";
 import { byGroupOrder, cleanGroupName, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
-import { BadCwdError, SessionRegistry, UnknownGroupError } from "../src/sessions/registry.js";
+import { BadCwdError, MissingAgentError, SessionRegistry, UnknownGroupError } from "../src/sessions/registry.js";
 import type { Tmux } from "../src/tmux/tmux.js";
 import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
 
@@ -53,6 +53,18 @@ describe("SessionRegistry.create", () => {
     await expect(registry.create({ name: "x", cwd: "/nope", agent: "claude" })).rejects.toBeInstanceOf(BadCwdError);
     await expect(registry.create({ name: "x", cwd: "relative", agent: "shell" })).rejects.toBeInstanceOf(BadCwdError);
     expect(created).toEqual([]);
+  });
+
+  it("refuses an agent that is not installed instead of starting a session that ends at once", async () => {
+    const t = fakeTmux();
+    const missingAgent = (agent: string) => (agent === "codex" ? "Codex is not installed on this Mac. Install it with: brew install --cask codex" : null);
+    const registry = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), missingAgent });
+    const refused = registry.create({ name: "x", cwd: "~/app", agent: "codex" });
+    await expect(refused).rejects.toBeInstanceOf(MissingAgentError);
+    await expect(refused).rejects.toThrow("brew install --cask codex");
+    expect(t.created).toEqual([]);
+    await registry.create({ name: "y", cwd: "~/app", agent: "shell" });
+    expect(t.created).toEqual([{ id: "gr-y", cwd: "/Users/me/app" }]);
   });
 });
 

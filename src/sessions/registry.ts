@@ -103,6 +103,8 @@ export class UnknownSessionError extends Error {}
 export class BadCwdError extends Error {}
 /** The group to join has no live session in it. */
 export class UnknownGroupError extends Error {}
+/** The agent's program is not on this computer, so its session would end as it started. */
+export class MissingAgentError extends Error {}
 
 export interface RegistryOptions {
   tmux: Tmux;
@@ -115,6 +117,8 @@ export interface RegistryOptions {
   isDirectory?: (path: string) => boolean;
   /** Makes a fresh group id. Defaults to `g-` plus 6 random hex digits. */
   newGroupId?: () => string;
+  /** Why a session of this agent cannot start (`missingAgent`), or null. Defaults to no check. */
+  missingAgent?: (agent: string) => string | null;
 }
 
 /** The session with this effort level, or with none. */
@@ -140,6 +144,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   private readonly home: string;
   private readonly isDirectory: (path: string) => boolean;
   private readonly newGroupId: () => string;
+  private readonly missingAgent: (agent: string) => string | null;
 
   constructor(opts: RegistryOptions) {
     super();
@@ -150,6 +155,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.home = opts.home ?? homedir();
     this.isDirectory = opts.isDirectory ?? isDirectoryOnDisk;
     this.newGroupId = opts.newGroupId ?? (() => `g-${randomBytes(3).toString("hex")}`);
+    this.missingAgent = opts.missingAgent ?? (() => null);
   }
 
   // ---- reading -------------------------------------------------------------
@@ -229,6 +235,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       throw new SessionExistsError(`session ${id} already exists`);
     }
     if (await this.tmux.hasSession(id)) throw new SessionExistsError(`tmux session ${id} already exists`);
+    const missing = this.missingAgent(input.agent);
+    if (missing) throw new MissingAgentError(missing);
     await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume });
     this.records.delete(id);
     const others = this.list().filter((s) => s.id !== id);

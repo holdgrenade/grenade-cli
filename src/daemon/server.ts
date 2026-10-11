@@ -39,7 +39,7 @@ import { conversationIdOf, heldConversations } from "../conversations/heldConver
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
-import { findAgentSetup } from "../agents/findAgentSetup.js";
+import { findAgentSetup, missingAgent } from "../agents/findAgentSetup.js";
 import { deviceOf, type Device, type Route } from "./devices.js";
 import { startDiscovery } from "./discovery.js";
 import { underSystemd } from "../update/underService.js";
@@ -113,6 +113,8 @@ export interface DaemonOptions {
   advertise?: boolean;
   log?: Logger;
   tmux?: Tmux;
+  /** Why a session of an agent cannot start (`missingAgent`: its program is not on PATH). Default: that check, unless `tmux` is a test's. */
+  missingAgent?: (agent: string) => string | null;
   tokensPath?: string | null;
   /** Where the pairing pause keeps its count (PROTOCOL.md "Pausing after wrong codes"); none when `tokensPath` is null. */
   pairingPausePath?: string;
@@ -211,6 +213,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const registry = new SessionRegistry({
     tmux,
     log,
+    missingAgent: opts.missingAgent ?? (opts.tmux ? () => null : missingAgent),
     ...(opts.sessionsPath === null ? {} : { persistPath: opts.sessionsPath ?? paths.sessions }),
   });
   const summarizer = startSummarizer(registry, log, opts.summaries ?? process.env["GRENADE_SUMMARIES"] !== "off");

@@ -88,3 +88,8 @@ export function agentSetup(check: AgentCheck, name: string, program: string | nu
     signIn: check.signIn,
   };
 }
+
+/** Why a session of this agent cannot start, for `session.create`'s refusal: its program is not on PATH. */
+export function missingAgentMessage(check: AgentCheck, name: string, tool: PackageTool | null, computer: string): string {
+  return `${name} is not installed on this ${computer}. Install it with: ${check.install(tool)}`;
+}

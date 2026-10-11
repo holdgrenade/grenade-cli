@@ -12,7 +12,7 @@ import type { AttachmentStore } from "../attachments/attachmentStore.js";
 import type { Route } from "./devices.js";
 import { SentInputs } from "./sentInputs.js";
 import { isInterrupt } from "../tmux/termPaint.js";
-import { BadCwdError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
+import { BadCwdError, MissingAgentError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
 import type { PlanLimit, VoiceFrame } from "@grenade/protocol";
@@ -396,7 +396,7 @@ export class Connection {
       const id = frame.type === "input" || frame.type === "attachment" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
-      if (e instanceof BadCwdError || e instanceof UnknownGroupError) return this.fail("bad_frame", e.message, frame.type, false, id);
+      if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof MissingAgentError) return this.fail("bad_frame", e.message, frame.type, false, id);
       const msg = e instanceof Error ? e.message : String(e);
       // The tmux session ended before the 1 s sweep marked it gone; the phone just needs to know.
       if (/can't find session/i.test(msg)) {

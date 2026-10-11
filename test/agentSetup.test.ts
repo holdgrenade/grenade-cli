@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_CHECKS, agentSetup, claudeSignedIn, codexSignedIn } from "../src/agents/agentSetup.js";
+import { AGENT_CHECKS, agentSetup, claudeSignedIn, codexSignedIn, missingAgentMessage } from "../src/agents/agentSetup.js";
 import { AGENTS } from "../src/agents/agentCatalog.js";
 
 const check = (kind: string) => {
@@ -62,5 +62,12 @@ describe("agentSetup", () => {
   it("checks every agent the daemon starts but the shell", () => {
     const needing = AGENTS.filter((a) => a.kind !== "shell").map((a) => a.kind);
     expect(AGENT_CHECKS.map((c) => c.kind)).toEqual(needing);
+  });
+});
+
+describe("missingAgentMessage", () => {
+  it("names the agent, the computer and the command that installs it", () => {
+    expect(missingAgentMessage(check("codex"), "Codex", "brew", "Mac")).toBe("Codex is not installed on this Mac. Install it with: brew install --cask codex");
+    expect(missingAgentMessage(check("codex"), "Codex", "pacman", "computer")).toBe("Codex is not installed on this computer. Install it with: npm install -g @openai/codex");
   });
 });
