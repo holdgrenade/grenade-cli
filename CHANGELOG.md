@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.91 (2026-10-11)
+
+- Claude Code and Codex sessions now show what the agent is doing at this moment, such as "Editing a file" or "Running the tests," and mark each step done when it finishes. The step clears when you send a new prompt or the agent's turn ends. Work done by subagents doesn't change it.
+
 ## 1.0.90 (2026-10-11)
 
 - Claude's replies now show in the apps as Claude writes them. Before, a reply could sit unseen until you sent your next prompt.
