@@ -22,6 +22,7 @@ import { highlightIdOf } from "./highlightId.js";
 import { captionFor, entriesInTurn, firstLine } from "./highlightWords.js";
 import type { KeptPicture, PictureStore } from "./pictureStore.js";
 import { isPicturePath, picturesIn } from "./transcriptPictures.js";
+import { isAgentScreenshot, startsTurn } from "./turnRules.js";
 
 /** How long after a `finished` row the turn is looked at: the transcript, the canvas and git have settled by then. */
 export const HIGHLIGHTS_DELAY_MS = 20_000;
@@ -75,8 +76,12 @@ export class HighlightsService {
     this.pending.clear();
   }
 
-  /** A turn starts (a hook's prompt, or the thread's own send): remember when, and how long the transcript was. */
-  turnStarted(sessionId: string): void {
+  /**
+   * A turn starts (a hook's prompt, or the thread's own send): remember when, and how long the transcript was. A prompt
+   * the agent wrote itself (`startsTurn`) is part of the turn already running.
+   */
+  turnStarted(sessionId: string, prompt?: string): void {
+    if (prompt !== undefined && !startsTurn(prompt)) return;
     const at = this.now();
     const path = this.d.registry.transcriptOf(sessionId);
     this.starts.set(sessionId, { at, offset: undefined });
@@ -233,7 +238,7 @@ export class HighlightsService {
     const end = Date.parse(to);
     const tiles: HighlightTile[] = [];
     for (const name of names.sort()) {
-      if (!isPicturePath(name)) continue;
+      if (!isPicturePath(name) || isAgentScreenshot(name)) continue;
       const path = join(folder, name);
       const st = await stat(path).catch(() => null);
       if (!st?.isFile() || st.mtimeMs < start || st.mtimeMs > end) continue;

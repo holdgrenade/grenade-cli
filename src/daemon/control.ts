@@ -59,6 +59,7 @@ import { readBody, sendJson } from "./http.js";
 import { BrowserAction, BROWSER_SCRIPT_MAX } from "@grenade/protocol";
 import type { BrowserBridge } from "../browser/browserBridge.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
+import { AGENT_SCREENSHOT_NAME } from "../highlights/turnRules.js";
 
 export interface ControlDeps {
   registry: SessionRegistry;
@@ -274,7 +275,7 @@ async function runBrowser(d: ControlDeps, body: Record<string, unknown>, res: Se
   });
   const { image, mime, ...rest } = answer;
   if (!image) return sendJson(res, 200, rest);
-  const saved = await d.browser.attachments.save(session.id, "browser", mime ?? "image/png", Buffer.from(image, "base64"));
+  const saved = await d.browser.attachments.save(session.id, AGENT_SCREENSHOT_NAME, mime ?? "image/png", Buffer.from(image, "base64"));
   sendJson(res, 200, { ...rest, path: saved.path });
 }
 

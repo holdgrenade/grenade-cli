@@ -8,6 +8,7 @@ import { highlightIdOf } from "../src/highlights/highlightId.js";
 import { captionFor, entriesInTurn, firstLine, isApproach, plainWords, wordsOf } from "../src/highlights/highlightWords.js";
 import { PictureStore, findResizer } from "../src/highlights/pictureStore.js";
 import { picturesIn, screenshotWrittenBy } from "../src/highlights/transcriptPictures.js";
+import { isAgentScreenshot, startsTurn } from "../src/highlights/turnRules.js";
 import { entriesIn, TalkThread } from "../src/talk/talkThread.js";
 
 const line = (o: object) => JSON.stringify(o);
@@ -188,3 +189,14 @@ it("a caption or a word loses its Markdown marks and keeps its words", () => {
   expect(firstLine("**Bold** start\nmore")).toBe("Bold start");
 });
 
+
+it("a turn starts with the owner's prompt, not a background task's notice; the agent's browser screenshots are not the owner's", () => {
+  expect(startsTurn("Design a pricing card")).toBe(true);
+  expect(startsTurn("/review")).toBe(true);
+  expect(startsTurn('<pasted_content id="1">\nTwo\nlines\n</pasted_content>')).toBe(true);
+  expect(startsTurn("<task-notification>\n<task-id>b1</task-id>\n<status>killed</status>\n</task-notification>")).toBe(false);
+  expect(isAgentScreenshot("20261011-125031-browser.png")).toBe(true);
+  expect(isAgentScreenshot("20261011-125031-browser-2.png")).toBe(true);
+  expect(isAgentScreenshot("20261011-125031-mockup.png")).toBe(false);
+  expect(isAgentScreenshot("20261011-125031-browser-mockup.png")).toBe(false);
+});

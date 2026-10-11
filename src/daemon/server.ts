@@ -488,7 +488,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!prompt.trimStart().startsWith("<task-notification>")) summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
         talk?.noteAsked(id, prompt);
-        highlights?.turnStarted(id);
+        highlights?.turnStarted(id, prompt);
       },
       (id, path, event) => {
         // A resumed session names its copy from the first prompt on: remember it as Grenade's copy.
@@ -519,7 +519,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
         talk?.noteAsked(id, prompt);
-        highlights?.turnStarted(id);
+        highlights?.turnStarted(id, prompt);
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
