@@ -1,7 +1,7 @@
 /**
  * HighlightsService (PROTOCOL.md "Highlights"): once a session's turn has finished, finds what the turn made and puts
- * it on the feed's `finished` row. Everything comes from what the daemon already has: the boards saved on the group's
- * canvas in the turn (`src/canvas`), the pictures the agent took or was shown (its transcript, `transcriptPictures.ts`),
+ * it on the feed's `finished` row. Everything comes from what the daemon already has: the boards the session saved in
+ * the turn (`CanvasWork`'s record, the one its canvas card is made from), the pictures the agent took or was shown (its transcript, `transcriptPictures.ts`),
  * the pictures the owner sent (`attachments/<session>`), the push (`push` activity entries), and the turn's words from
  * the activity (`highlightWords.ts`). No model is asked anything. Copies of pictures live in `PictureStore`.
  *
@@ -14,8 +14,8 @@ import { stat } from "node:fs/promises";
 import { open, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { boardNameOf, boardTitleOf, type ActivityEntry, type HighlightTile, type Highlights, type Session, type TalkEntry } from "@grenade/protocol";
-import { canvasFolderOf, groupFolderOf, normalizeCwd, projectOf, sharedFolder } from "../canvas/canvasAccess.js";
-import { listCanvas, listCanvases, readHead } from "../canvas/canvasFolder.js";
+import { readHead } from "../canvas/canvasFolder.js";
+import type { RecordedBoard } from "../canvas/canvasWork.js";
 import type { Logger } from "../log.js";
 import { gatherHighlights, shippedTiles } from "./gatherHighlights.js";
 import { highlightIdOf } from "./highlightId.js";
@@ -40,11 +40,12 @@ export const PRUNE_EVERY_MS = 24 * 3_600_000;
 export interface HighlightsDeps {
   registry: { get(id: string): Session | undefined; list(): Session[]; transcriptOf(id: string): string | undefined };
   entriesOf(id: string): ActivityEntry[];
+  /** The boards the session saved between two times (ms): `CanvasWork.savedBoards`, the canvas card's record. */
+  boardsOf(sessionId: string, from: number, to: number): RecordedBoard[];
   talk: { setHighlights(rowId: string, highlights: Highlights | undefined): TalkEntry | undefined; row(id: string): TalkEntry | undefined };
   pictures: PictureStore;
   /** `<GRENADE_HOME>/attachments`. */
   attachmentsDir: string;
-  home: string;
   log: Logger;
   now?: () => number;
   /** For tests: run the look at once instead of after the delay. */
@@ -164,39 +165,30 @@ export class HighlightsService {
     return undefined;
   }
 
-  /** The boards saved on the group's canvases in the window, each with its address for `canvas.board`. */
+  /**
+   * The boards the session saved in the window, by the record the canvas card is made from (`CanvasWork`), never
+   * another session's; the newest `BOARDS_MAX`, each with its address for `canvas.board`.
+   */
   private async boards(session: Session, from: string, to: string): Promise<HighlightTile[]> {
-    const members = this.d.registry.list().filter((s) => s.group === session.group);
-    const cwds = members.map((s) => normalizeCwd(s.cwd, this.d.home)).flatMap((c) => (c ? [projectOf(c)] : []));
-    const own = normalizeCwd(session.cwd, this.d.home);
-    const cwd = (cwds.length > 1 ? sharedFolder(cwds) : null) ?? (own ? projectOf(own) : null);
-    if (!cwd || !session.group) return [];
-    const group = session.group;
-    const groupFolder = groupFolderOf(cwd, group);
-    const canvases = await listCanvases(groupFolder, canvasFolderOf(cwd));
-    const start = Date.parse(from);
-    const end = Date.parse(to);
-    // Every board saved in the window, then the newest `BOARDS_MAX`: a long design session keeps its latest boards.
-    const found: { folder: string; canvas: string; file: string; modified: string }[] = [];
-    for (const info of canvases) {
-      const folder = info.canvas === "shared" ? canvasFolderOf(cwd) : join(groupFolder, info.canvas);
-      const { boards } = await listCanvas(folder);
-      for (const board of boards) {
-        const modified = Date.parse(board.modified);
-        if (modified >= start && modified <= end) found.push({ folder, canvas: info.canvas, file: board.file, modified: board.modified });
-      }
+    const saved = this.d.boardsOf(session.id, Date.parse(from), Date.parse(to));
+    // A board saved in several turns of the window is one tile, at its last save.
+    const last = new Map<string, RecordedBoard>();
+    for (const b of saved) {
+      const key = `${b.folder}/${b.file}`;
+      const had = last.get(key);
+      if (!had || Date.parse(b.at) >= Date.parse(had.at)) last.set(key, b);
     }
-    found.sort((a, b) => Date.parse(a.modified) - Date.parse(b.modified));
+    const found = [...last.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const tiles: HighlightTile[] = [];
     for (const board of found.slice(-BOARDS_MAX)) {
       const head = await readHead(board.folder, board.file);
       tiles.push({
         id: highlightIdOf(`board:${board.folder}/${board.file}`),
         kind: "board",
-        at: board.modified,
+        at: board.at,
         caption: (boardTitleOf(head) ?? boardNameOf(board.file).name).slice(0, 200),
-        cwd,
-        group,
+        cwd: board.cwd,
+        group: board.group,
         canvas: board.canvas,
         file: board.file,
       });

@@ -97,6 +97,7 @@ import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
 import { TalkService } from "../talk/talkService.js";
 import { HighlightsService } from "../highlights/highlightsService.js";
+import { CanvasWork } from "../canvas/canvasWork.js";
 import { PictureStore } from "../highlights/pictureStore.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
@@ -279,7 +280,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
         const codexSession = url.searchParams.get("session");
         if (codexSession && registry.get(codexSession)) changes.noteHook(codexSession);
-        const r = applyCodexHook(codexSession, await readBody(req));
+        const codexBody = await readBody(req);
+        const r = applyCodexHook(codexSession, codexBody);
+        noteCanvasHook(codexSession, codexBody);
         return sendJson(res, r.status, r.body);
       }
       if (req.method === "POST" && url.pathname === PROMPT_HOOK_PATH) {
@@ -300,6 +303,20 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   changes.start();
   registry.on("created", (s) => void changes.refresh(s.id));
   registry.on("removed", (id) => changes.forget(id));
+  // Which session saved which board in which turn: the canvas card and Command Center's board tiles (PROTOCOL.md "The canvas card").
+  const canvasWork = new CanvasWork({ registry, activity, home: homedir(), log });
+  registry.on("updated", (s) => canvasWork.statusChanged(s));
+  registry.on("removed", (id) => canvasWork.forget(id));
+  /** A hook's tool call, for the boards it wrote. */
+  const noteCanvasHook = (session: string | null, body: string) => {
+    if (!session || !registry.get(session)) return;
+    try {
+      const p = JSON.parse(body || "{}") as { hook_event_name?: unknown; tool_name?: unknown; tool_input?: unknown; cwd?: unknown };
+      canvasWork.hook(session, p.hook_event_name, p.tool_name, p.tool_input, typeof p.cwd === "string" ? p.cwd : undefined);
+    } catch {
+      // Not JSON: the status hook answers that.
+    }
+  };
   const transcripts = new TranscriptReader();
   /**
    * Reads a session's transcript: new activity into the store, a moved working directory and a new title into the
@@ -478,7 +495,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const applyClaudeHook = (session: string | null, body: string) => {
     if (session) notePlanHook(session, body);
     if (session && registry.get(session)) changes.noteHook(session);
-    return applyClaudeStatusHook(session, body);
+    const result = applyClaudeStatusHook(session, body);
+    noteCanvasHook(session, body);
+    return result;
   };
   const notePlanHook = (session: string, body: string) => {
     try {
@@ -752,10 +771,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     ? new HighlightsService({
         registry,
         entriesOf: (id) => activity.entriesOf(id),
+        boardsOf: (id, from, to) => canvasWork.savedBoards(id, from, to),
         talk,
         pictures: new PictureStore(opts.highlightsDir ?? paths.highlights),
         attachmentsDir: opts.attachmentsDir ?? paths.attachments,
-        home: homedir(),
         log,
       })
     : undefined;

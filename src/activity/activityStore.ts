@@ -130,6 +130,24 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
 
+  /**
+   * The `canvas` entries a turn ended with (PROTOCOL.md "The canvas card"). They go after the turn, before any `push`
+   * entries that came after the turn's last words (pushes from `turnStart` on that end the list), and are then no later
+   * than the first of them; moving them in front of entries the phone has sends the whole list.
+   */
+  noteCanvas(id: string, entries: ActivityEntry[], turnStart: number): void {
+    if (entries.length === 0) return;
+    const t = this.track(id);
+    let at = t.entries.length;
+    while (at > 0 && t.entries[at - 1]!.kind === "push" && Date.parse(t.entries[at - 1]!.at) >= turnStart) at--;
+    const pushes = t.entries.slice(at);
+    const first = pushes[0];
+    const placed = first ? entries.map((e) => (Date.parse(e.at) > Date.parse(first.at) ? { ...e, at: first.at } : e)) : entries;
+    t.entries = [...t.entries.slice(0, at), ...placed, ...pushes].slice(-ACTIVITY_KEEP);
+    if (pushes.length === 0) this.emit("activity", { type: "activity", sessionId: id, entries: placed });
+    else this.emit("activity", { type: "activity", sessionId: id, entries: t.entries, full: true });
+  }
+
   /** The session is gone. */
   forget(id: string): void {
     this.tracks.delete(id);

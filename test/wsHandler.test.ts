@@ -667,6 +667,22 @@ describe("Connection activity", () => {
     expect(out.at(-1)).toEqual({ type: "activity", sessionId: session.id, entries: [stopped] });
   });
 
+  it("sends the canvas card's entries as the fixture has them, and leaves them out for a Chrome extension before 0.6.0", async () => {
+    const card = JSON.parse(fixture("daemon.activity.canvas.json"));
+    const frame = { ...card, sessionId: session.id };
+    const hello = JSON.parse(fixture("client.hello.json"));
+    const phone = connect();
+    await phone.conn.handleMessage(JSON.stringify({ ...hello, client: { ...hello.client, version: "1.0.140" } }));
+    await phone.conn.handleMessage(fixture("client.subscribe.json"));
+    phone.activity.emit("activity", frame);
+    expect(phone.out.at(-1)).toEqual(frame);
+    const chrome = connect();
+    await chrome.conn.handleMessage(fixture("client.hello.chrome.json"));
+    await chrome.conn.handleMessage(fixture("client.subscribe.json"));
+    chrome.activity.emit("activity", frame);
+    expect(chrome.out.at(-1)).toEqual({ ...frame, entries: frame.entries.filter((e: { kind: string }) => e.kind !== "canvas") });
+  });
+
   it("looks for an interrupt after Esc or Ctrl-C, not after other keys", async () => {
     const { conn, events } = connect();
     await conn.handleMessage(fixture("client.hello.json"));

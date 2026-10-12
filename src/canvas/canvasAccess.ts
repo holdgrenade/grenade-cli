@@ -88,3 +88,18 @@ export function groupCanvasFolderOf(cwd: string, group: string, canvas: string):
 export function isListedGroup(group: string, sessions: Session[]): boolean {
   return sessions.some((s) => (s.group ?? s.id) === group);
 }
+
+/**
+ * The folder a session's group shares, whose canvases its boards are on (PROTOCOL.md "Canvas", "Where they are"): the
+ * folder every member's `cwd` (read as its project, `projectOf`) starts with, else the session's own. Null when its
+ * `cwd` is not a path.
+ */
+export function groupCwdOf(session: Session, sessions: readonly Session[], home: string): string | null {
+  const key = session.group ?? session.id;
+  const cwds = sessions
+    .filter((s) => (s.group ?? s.id) === key)
+    .map((s) => normalizeCwd(s.cwd, home))
+    .flatMap((c) => (c ? [projectOf(c)] : []));
+  const own = normalizeCwd(session.cwd, home);
+  return (cwds.length > 1 ? sharedFolder(cwds) : null) ?? (own ? projectOf(own) : null);
+}

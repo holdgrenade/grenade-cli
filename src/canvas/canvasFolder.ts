@@ -163,3 +163,29 @@ export async function readBoard(folder: string, file: string, computer = "Mac"):
     await board.close();
   }
 }
+
+/**
+ * Every board on a group's canvases, with its save time (PROTOCOL.md "The canvas card"): each real `canvas-<n>`
+ * folder of `groupFolder`, then the `shared` canvas, `sharedFolder` itself. Only names and times are read, no file
+ * is opened; a folder that is not there, or is a link, has none.
+ */
+export async function boardsOnDisk(groupFolder: string, sharedFolder: string): Promise<{ path: string; canvas: string; file: string; mtimeMs: number; birthtimeMs: number }[]> {
+  const folders: { folder: string; canvas: string }[] = [];
+  if (await canvasThere(groupFolder).catch(() => false)) {
+    const entries = await readdir(groupFolder, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) if (e.isDirectory() && canvasNumberOf(e.name) !== null) folders.push({ folder: join(groupFolder, e.name), canvas: e.name });
+  }
+  folders.push({ folder: sharedFolder, canvas: CANVAS_SHARED });
+  const out: { path: string; canvas: string; file: string; mtimeMs: number; birthtimeMs: number }[] = [];
+  for (const { folder, canvas } of folders) {
+    if (!(await canvasThere(folder).catch(() => false))) continue;
+    const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (!e.isFile() || !isBoardFile(e.name)) continue;
+      const path = join(folder, e.name);
+      const st = await lstat(path).catch(() => null);
+      if (st?.isFile()) out.push({ path, canvas, file: e.name, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs });
+    }
+  }
+  return out;
+}
