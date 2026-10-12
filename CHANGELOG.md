@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.99 (2026-10-12)
+
+- Command Center rows now get ids that include the date (like 2026-10-12-0069), so rows from different days no longer share an id. Days written before this update keep their old ids, and new rows on those days continue counting from where they left off.
+
 ## 1.0.98 (2026-10-12)
 
 - Agents no longer check canvas boards with headless screenshots or in `grenade browser`. You review each board on the canvas as it's saved and tell the agent what to change. Other pages are still checked for how they look and, in `grenade browser`, how they work.
