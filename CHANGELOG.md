@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.100 (2026-10-12)
+
+- Each session's activity now lists the canvas boards it drew or changed during a turn, such as "Drew 2 boards and changed 1 on Row numbers." The entry appears when the turn ends, before any push that followed the turn's last message.
+- Command Center's board tiles now show only the boards that the session itself saved, instead of every board saved to the group's canvas during the turn.
+
 ## 1.0.99 (2026-10-12)
 
 - Command Center rows now get ids that include the date (like 2026-10-12-0069), so rows from different days no longer share an id. Days written before this update keep their old ids, and new rows on those days continue counting from where they left off.
