@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.101 (2026-10-12)
+
+- You can now give a session your own title. It takes priority over the title the agent picks, and it appears wherever session titles show, including notifications and Talk.
+- Clear your title (set it to empty or null) and the session goes back to the agent's title.
+
 ## 1.0.100 (2026-10-12)
 
 - Each session's activity now lists the canvas boards it drew or changed during a turn, such as "Drew 2 boards and changed 1 on Row numbers." The entry appears when the turn ends, before any push that followed the turn's last message.
