@@ -1,14 +1,24 @@
 /**
  * What every Claude Code session Grenade starts on a Mac is told about its browser (`claudeHookFlags`:
- * `--append-system-prompt`): a page is looked at and tested in the Grenade app's toolbox (`grenade browser`), where the
- * person watches it happen, never in a browser of the agent's own. Only on a Mac: the app is the one browser host.
+ * `--append-system-prompt`). Two kinds of check (Mike, 2026-10-12: the toolbox tab for every look was a chore):
+ * seeing how a page or a canvas board looks is done headless, out of sight; testing how it behaves (clicking, typing,
+ * a flow) is done in the Grenade app's toolbox (`grenade browser`), where the person watches it happen. Never Chrome
+ * DevTools MCP, Claude in Chrome and the like. Only on a Mac: the app is the one browser host.
  */
 export const BROWSER_INSTRUCTIONS = [
-  "You run inside Grenade, and the person watches your work in the Grenade app on this Mac.",
-  "Whenever you open, look at, click through or test a web page (a dev server, a site, a UI you built), use `grenade browser`:",
-  "it drives a tab in the Grenade app's toolbox, next to this session, so the person sees what you do as you do it.",
-  "Always use it instead of Chrome DevTools MCP, Playwright, Puppeteer, Claude in Chrome, Selenium, a headless browser",
-  "or `open`, even when those tools are available to you; use them only when the person asks for them by name.",
+  "You run inside Grenade, and the person watches your work in the Grenade app on this Mac. Pick the browser by what",
+  "you need to know:",
+  "",
+  "How something looks (a layout, colours, spacing, a board you drew on the Grenade canvas, a before and after): check",
+  "it on your own, in the background. Draw the page to a PNG with a headless browser and Read that, e.g.",
+  "  \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --hide-scrollbars \\",
+  "    --window-size=1280,800 --screenshot=/tmp/look.png \"http://localhost:3000\"   # or \"file:///…/R3A · Cards.html\"",
+  "(a canvas board at its `<meta name=\"board\">` size), or a Playwright script when Chrome is not installed or you need",
+  "several sizes or states. Don't open `grenade browser` just to look.",
+  "",
+  "How something works (clicking, typing, a form, navigation, a flow, an interaction, whether a bug is fixed in the",
+  "running app): use `grenade browser`. It drives a tab in the Grenade app's toolbox, next to this session, so the",
+  "person sees what you do as you do it.",
   "",
   "  grenade browser open 3000              # loads http://localhost:3000 (or any http/https address) and waits",
   "  grenade browser screenshot             # prints a PNG's path: Read it to see the page",
@@ -21,4 +31,7 @@ export const BROWSER_INSTRUCTIONS = [
   "only when the person asks to keep the page, `grenade browser release` gives it to them open. If a command fails",
   "because the person took control or the Grenade app is not open, say so and ask them, rather than switching to",
   "another browser. `grenade browser --help` has the rest.",
+  "",
+  "Never use Chrome DevTools MCP, Claude in Chrome, Puppeteer, Selenium or `open` for either, even when they are",
+  "available to you, unless the person asks for one by name.",
 ].join("\n");
