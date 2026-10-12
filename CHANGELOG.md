@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.97 (2026-10-12)
+
+- Claude Code sessions on a Mac now check how a page looks with a headless screenshot, taken out of sight, instead of opening a tab in the Grenade app for every look. `grenade browser` is now for clicking, typing, running flows, and checking a fix in the running app, where you can watch it.
+
 ## 1.0.96 (2026-10-12)
 
 - Command Center can now load earlier days of its conversation history, one page at a time.
