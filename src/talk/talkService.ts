@@ -15,6 +15,7 @@ import type { ActivityEntry, Highlights, Session, TalkEntry, TalkThreadFrame } f
 import type { Logger } from "../log.js";
 import { FeedWatcher } from "./feedWatcher.js";
 import { lastRowsBySession } from "./talkFeed.js";
+import { historyPage, type TalkHistoryPage } from "./talkHistory.js";
 import { failureSentence, isTalkAgentKind, noAgentSentence, type McpLaunch, type TalkAgentKind } from "./talkAgents.js";
 import { isTurnCall, newTurn, type TalkTurn } from "./talkGuard.js";
 import { ENV_PORT, ENV_SECRET, ENV_TURN } from "./talkMcp.js";
@@ -119,6 +120,17 @@ export class TalkService extends EventEmitter<TalkServiceEvents> {
     this.checkDay();
     const agent = this.agent();
     return { type: "talk.thread", date: this.thread.date, entries: this.thread.entries(), busy: this.running, ...(agent ? { agent } : {}) };
+  }
+
+  /**
+   * A page of earlier rows (PROTOCOL.md "Talk by text", "History"): `date`'s rows before `before` (absent: today, from
+   * the day's end), walking back across days. Null when `before` is not a row of that day.
+   */
+  history(date: string | undefined, before: string | undefined): TalkHistoryPage | null {
+    this.checkDay();
+    const memo = new Map<string, readonly TalkEntry[]>();
+    const read = (day: string) => memo.get(day) ?? memo.set(day, this.thread.rowsOf(day)).get(day)!;
+    return historyPage(this.thread.days(), read, date ?? this.thread.date, before);
   }
 
   /** A hook's prompt: the session starts a turn (the feed's `working`). */

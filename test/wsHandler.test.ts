@@ -84,6 +84,10 @@ class FakeTalk extends EventEmitter implements TalkPort {
   frame() {
     return { type: "talk.thread" as const, date: "2026-10-05", entries: [], busy: false, agent: this.agent };
   }
+  history(date: string | undefined, before: string | undefined) {
+    if (before === "t-missing") return null;
+    return { date: date ?? "2026-10-05", entries: [{ id: "t-0001", at: "2026-10-04T09:00:00.000Z", kind: "it", text: "Earlier" }], earlier: { date: "2026-10-03" } };
+  }
   say(id: string, text: string) {
     if (this.said.includes(id)) return false;
     this.said.push(id);
@@ -369,12 +373,25 @@ describe("Connection", () => {
     expect(out).toHaveLength(before);
   });
 
+  it("answers talk.history with a page and its cursor, and a row it does not have with bad_frame and the id", async () => {
+    const talk = new FakeTalk();
+    const { conn, out } = connect({ talk });
+    await conn.handleMessage(fixture("client.talk.history.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.talk.history.json"));
+    expect(out).toEqual([{ type: "talk.history", id: "h-1", date: "2026-10-10", entries: [expect.objectContaining({ id: "t-0001" })], earlier: { date: "2026-10-03" } }]);
+    await conn.handleMessage(JSON.stringify({ type: "talk.history", id: "h-2", before: "t-missing" }));
+    expect(out.at(-1)).toMatchObject({ type: "error", code: "bad_frame", ref: "talk.history", id: "h-2" });
+  });
+
   it("answers the Talk frames with bad_frame when the daemon answers no typed Talk", async () => {
     const { conn, out } = connect();
     await conn.handleMessage(fixture("client.hello.json"));
     out.length = 0;
-    for (const name of ["client.talk.thread.json", "client.talk.say.json", "client.talk.agent.json"]) await conn.handleMessage(fixture(name));
-    expect(out.map((f) => f.type === "error" && f.code === "bad_frame" && f.ref)).toEqual(["talk.thread", "talk.say", "talk.agent"]);
+    for (const name of ["client.talk.thread.json", "client.talk.history.json", "client.talk.say.json", "client.talk.agent.json"]) await conn.handleMessage(fixture(name));
+    expect(out.map((f) => f.type === "error" && f.code === "bad_frame" && f.ref)).toEqual(["talk.thread", "talk.history", "talk.say", "talk.agent"]);
   });
 
   it("keeps a voice key and tells every client that asked; a refused key and a missing one are errors of their own", async () => {

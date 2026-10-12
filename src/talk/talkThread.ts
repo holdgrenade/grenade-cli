@@ -5,9 +5,10 @@
  * again with the same id, and the newest line of an id is the row, in the place of its first. A line that does not
  * decode as a `TalkEntry` is skipped, never an error.
  */
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TALK_TEXT_MAX, TALK_THREAD_MAX, TalkEntry } from "@grenade/protocol";
+import { talkDays } from "./talkHistory.js";
 
 /** The day a moment falls on in this computer's calendar: "2026-10-05". Pure. */
 export function talkDate(now: Date): string {
@@ -80,6 +81,16 @@ export class TalkThread {
 
   has(id: string): boolean {
     return this.ids.has(id);
+  }
+
+  /** The rows of any day, oldest first: today's as kept, another day's read from its file (none when it has no file). */
+  rowsOf(day: string): readonly TalkEntry[] {
+    return day === this.day ? this.rows : this.load(day);
+  }
+
+  /** The days that have a file, as `YYYY-MM-DD`, oldest first. */
+  days(): string[] {
+    return existsSync(this.dir) ? talkDays(readdirSync(this.dir)) : [];
   }
 
   /** Moves to a new day's thread when the calendar has turned. True when it did. */

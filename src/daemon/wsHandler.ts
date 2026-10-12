@@ -24,7 +24,7 @@ import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protoc
 import { PublishError } from "../publish/publisher.js";
 import type { CommentsFrame } from "@grenade/protocol";
 import { CommentError } from "../publish/comments.js";
-import type { TalkEntry, TalkThreadFrame } from "@grenade/protocol";
+import type { TalkEntry, TalkHistoryCursor, TalkThreadFrame } from "@grenade/protocol";
 import { PLAN_SUBSCRIPTIONS_MAX, type PlanFrame } from "@grenade/protocol";
 import { PlanWriteError } from "../plans/planTracker.js";
 import { PlanModeError } from "../plans/claudePlanMode.js";
@@ -181,6 +181,8 @@ export interface OwnerPort {
 /** Typed Talk, the day's thread answered by an agent on this computer (PROTOCOL.md "Talk by text"); `TalkService` in the daemon. */
 export interface TalkPort {
   frame(): TalkThreadFrame;
+  /** A page of earlier rows (`talk.history`). Null when `before` is not a row of that day. */
+  history(date: string | undefined, before: string | undefined): { date: string; entries: TalkEntry[]; earlier?: TalkHistoryCursor } | null;
   /** The owner's words. False when that id was said already. */
   say(id: string, text: string): boolean;
   /** False when that agent cannot answer Talk here. */
@@ -641,6 +643,7 @@ export class Connection {
       case "owner.name":
         return this.handleOwner(frame);
       case "talk.thread":
+      case "talk.history":
       case "talk.say":
       case "talk.agent":
         return this.handleTalk(frame);
@@ -805,9 +808,14 @@ export class Connection {
   }
 
   /** The typed Talk frames (PROTOCOL.md "Talk by text"). `talk.thread` makes this connection watch the thread. */
-  private handleTalk(frame: Extract<ClientFrame, { type: "talk.thread" | "talk.say" | "talk.agent" }>): void {
+  private handleTalk(frame: Extract<ClientFrame, { type: "talk.thread" | "talk.history" | "talk.say" | "talk.agent" }>): void {
     const talk = this.d.talk;
-    if (!talk) return this.fail("bad_frame", "this daemon answers no typed Talk", frame.type);
+    if (!talk) return this.fail("bad_frame", "this daemon answers no typed Talk", frame.type, false, frame.type === "talk.history" ? frame.id : undefined);
+    if (frame.type === "talk.history") {
+      const page = talk.history(frame.date, frame.before);
+      if (!page) return this.fail("bad_frame", "that row is not in that day's thread", frame.type, false, frame.id);
+      return this.send({ type: "talk.history", id: frame.id, ...page });
+    }
     if (frame.type === "talk.thread") {
       if (!this.watchesTalk) {
         talk.on("entry", this.onTalkEntry);
