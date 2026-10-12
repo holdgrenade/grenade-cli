@@ -77,6 +77,7 @@ src/cli/terminalCommand.ts `grenade terminal [kind]`: writes the setting, `POST 
 src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`
 src/terminal/appleTerminal.ts AppleTerminalAdapter: one Terminal.app window per session (`terminal`, or `auto` without iTerm2)
 src/sessions/status.ts     pure status reducer (see below)
+src/sessions/sessionTitle.ts  pure: cleanSessionTitle (the title a user gives a session, trimmed to SESSION_TITLE_MAX; undefined takes it away)
 src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt), a group's name (groupNameOf, named, cleanGroupName)
 src/sessions/groupOrder.ts pure: the order groups are listed in (reconcileGroupOrder: new on top, newest first, gone dropped; placeUnder; moveGroup)
 src/sessions/groupOrderStore.ts GroupOrderStore: that order for every client, follows the registry's `updated`/`removed`, `move` for `group.move`, event `changed` (a `groups` frame), groups.json

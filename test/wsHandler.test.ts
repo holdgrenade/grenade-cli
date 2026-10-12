@@ -9,7 +9,7 @@ import { type PlansPort, type ChangesPort, Connection, type CanvasPort, type Con
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
-import { UnknownGroupError } from "../src/sessions/registry.js";
+import { UnknownGroupError, UnknownSessionError } from "../src/sessions/registry.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
 const fixture = (name: string) => readFileSync(join(fixtures, name), "utf8");
@@ -65,6 +65,17 @@ class FakeRegistry extends EventEmitter {
     const next = name?.trim() || undefined;
     const renamed: Session = next === undefined ? rest : { ...rest, groupName: next };
     this.sessions.set(renamed.id, renamed);
+    if (was !== next) this.emit("updated", renamed);
+    return { session: renamed, changed: was !== next };
+  }
+  renameSession(id: string, title: string | null) {
+    this.calls.push(`title:${id}:${title}`);
+    const before = this.sessions.get(id);
+    if (!before) throw new UnknownSessionError(`no session ${id}`);
+    const { title: was, ...rest } = before;
+    const next = title?.trim() || undefined;
+    const renamed: Session = next === undefined ? rest : { ...rest, title: next };
+    this.sessions.set(id, renamed);
     if (was !== next) this.emit("updated", renamed);
     return { session: renamed, changed: was !== next };
   }
@@ -250,6 +261,21 @@ describe("Connection", () => {
     expect(out[2]).toEqual({ type: "session.updated", session });
     await conn.handleMessage(JSON.stringify({ type: "group.rename", group: "g-nope", name: "x" }));
     expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.rename" });
+  });
+
+  it("renames a session: every client hears it once, a rename that changes nothing still answers, an unknown session is unknown_session", async () => {
+    const { conn, registry, out } = connect();
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.session.rename.json"));
+    expect(registry.calls).toContain(`title:${session.id}:Login rate limit`);
+    expect(out).toEqual([{ type: "session.updated", session: { ...session, title: "Login rate limit" } }]);
+    await conn.handleMessage(fixture("client.session.rename.json"));
+    expect(out).toHaveLength(2);
+    await conn.handleMessage(JSON.stringify({ type: "session.rename", sessionId: session.id, title: null }));
+    expect(out[2]).toEqual({ type: "session.updated", session });
+    await conn.handleMessage(JSON.stringify({ type: "session.rename", sessionId: "gr-nope", title: "x" }));
+    expect(out[3]).toMatchObject({ type: "error", code: "unknown_session", ref: "session.rename" });
   });
 
   it("switches a session's model, and says why when it cannot", async () => {

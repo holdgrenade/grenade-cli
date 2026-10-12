@@ -16,6 +16,7 @@ import type { Logger } from "../log.js";
 import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Screen } from "../tmux/parse.js";
 import type { Tmux } from "../tmux/tmux.js";
 import { nextHistoryMark, type HistoryMark } from "./historyEpoch.js";
+import { cleanSessionTitle } from "./sessionTitle.js";
 import { cleanGroupName, defaultGroupFor, groupNameOf, isJoinableGroup, membersInOrder, named, nextOrder, otherMembers, placeAt } from "./groups.js";
 import { initialStatus, reduceStatus, shownStoppedBecause, shownWaitingFor, type StatusState } from "./status.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
@@ -54,6 +55,8 @@ interface Record_ {
   modelChosenAt: number | undefined;
   /** The Claude Code transcript the last hook named; saved, so the activity comes back after a restart. */
   transcript: string | undefined;
+  /** The title the user gave the session (PROTOCOL.md "Session titles"); beats both others as the session's `title` while set. */
+  userTitle: string | undefined;
   /** Claude Code's title for the conversation; beats `guessedTitle` as the session's `title`. */
   aiTitle: string | undefined;
   /** The summarizer's title, used until Claude Code has written one and for other agents. */
@@ -81,6 +84,8 @@ interface PersistedSession {
   /** The name the user gave the session's group, the same on every member. */
   groupName?: string | undefined;
   summary?: string | undefined;
+  /** The title the user gave the session, kept over the agent's until taken away. */
+  userTitle?: string | undefined;
   aiTitle?: string | undefined;
   guessedTitle?: string | undefined;
   model?: string | undefined;
@@ -206,6 +211,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
         order: meta?.order ?? nextOrder(group, this.list()),
         groupName: meta?.groupName ?? groupNameOf(group, this.list()),
         summary: meta?.summary,
+        userTitle: meta?.userTitle,
         aiTitle: meta?.aiTitle,
         guessedTitle: meta?.guessedTitle,
         model: meta?.model,
@@ -461,12 +467,30 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.updateTitle(r);
   }
 
-  private updateTitle(r: Record_): void {
+  /**
+   * Gives the session the user's title (PROTOCOL.md "Session titles"), or with null or an empty one
+   * takes it away, so the agent's or the summarizer's title shows again. Emits `updated` when the
+   * shown title changed. Returns the session and whether anything changed.
+   */
+  renameSession(id: string, title: string | null): { session: Session; changed: boolean } {
+    const r = this.require(id);
+    const next = cleanSessionTitle(title);
+    if (r.userTitle === next) return { session: r.session, changed: false };
+    r.userTitle = next;
+    this.log.info(next === undefined ? `Session ${id} is titled by its agent again` : `Renamed session ${id}`);
+    const changed = this.updateTitle(r);
+    return { session: r.session, changed };
+  }
+
+  /** Puts the title that wins (the user's, else Claude Code's, else the summarizer's) on the session; true when it changed. */
+  private updateTitle(r: Record_): boolean {
     this.persist();
-    const title = r.aiTitle ?? r.guessedTitle;
-    if (title === undefined || r.session.title === title) return;
-    r.session = { ...r.session, title };
+    const title = r.userTitle ?? r.aiTitle ?? r.guessedTitle;
+    if (r.session.title === title) return false;
+    const { title: _was, ...rest } = r.session;
+    r.session = title === undefined ? rest : { ...rest, title };
     this.emit("updated", r.session);
+    return true;
   }
 
   /** The folder the agent works in now (PROTOCOL.md "Session": `cwd` follows the agent). */
@@ -715,7 +739,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       statusSince: new Date(state.since).toISOString(),
       ...(held.length > 0 ? { background: held.map(shownTask) } : {}),
       lastLine: "",
-      ...((meta.aiTitle ?? meta.guessedTitle) !== undefined ? { title: meta.aiTitle ?? meta.guessedTitle } : {}),
+      ...((meta.userTitle ?? meta.aiTitle ?? meta.guessedTitle) !== undefined ? { title: meta.userTitle ?? meta.aiTitle ?? meta.guessedTitle } : {}),
       ...(meta.summary !== undefined ? { summary: meta.summary } : {}),
       ...(meta.model !== undefined ? { model: meta.model } : {}),
       ...(meta.effort !== undefined ? { effort: meta.effort } : {}),
@@ -726,7 +750,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
-    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map(), planPath: meta.planPath, gitBase: meta.gitBase });
+    this.records.set(meta.id, { session, state, screen: null, hash: "", seq: 0, subscribers: 0, sizedBy: null, floored: false, mark: null, modelChosenAt: meta.modelChosenAt, transcript: meta.transcript, userTitle: meta.userTitle, aiTitle: meta.aiTitle, guessedTitle: meta.guessedTitle, held, shownHeld: held, backgroundStarts: new Map(), planPath: meta.planPath, gitBase: meta.gitBase });
     this.persist();
     this.emit("updated", session);
     return session;
@@ -790,7 +814,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) }));
+      .map(({ session: s, transcript, userTitle, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, userTitle, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) }));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

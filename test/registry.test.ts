@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session } from "@grenade/protocol";
 import { byGroupOrder, cleanGroupName, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
-import { BadCwdError, MissingAgentError, SessionRegistry, UnknownGroupError } from "../src/sessions/registry.js";
+import { BadCwdError, MissingAgentError, SessionRegistry, UnknownGroupError, UnknownSessionError } from "../src/sessions/registry.js";
+import { cleanSessionTitle } from "../src/sessions/sessionTitle.js";
 import type { Tmux } from "../src/tmux/tmux.js";
 import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
 
@@ -337,6 +338,40 @@ describe("session groups", () => {
     const again = make({ live: ["gr-app"], persistPath });
     await again.adopt();
     expect(again.get("gr-app")?.title).toBe("Flaky test fixes");
+  });
+
+  it("titles a session with the user's title over the agent's until it is cleared, and restores it on adopt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-user-title-"));
+    const persistPath = join(dir, "sessions.json");
+    const r = make({ persistPath });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.setAiTitle("gr-app", "Flaky test fixes");
+    const seen: (string | undefined)[] = [];
+    r.on("updated", (s) => seen.push(s.title));
+    expect(r.renameSession("gr-app", "  Login rate limit ")).toMatchObject({ changed: true, session: { title: "Login rate limit" } });
+    // The agent's next title does not take the user's place.
+    r.setAiTitle("gr-app", "Rate limiting");
+    r.setGuessedTitle("gr-app", "A guess");
+    expect(r.get("gr-app")?.title).toBe("Login rate limit");
+    // The same title again changes nothing, and still answers.
+    expect(r.renameSession("gr-app", "Login rate limit").changed).toBe(false);
+    expect(seen).toEqual(["Login rate limit"]);
+    expect(() => r.renameSession("gr-nope", "x")).toThrow(UnknownSessionError);
+    const again = make({ live: ["gr-app"], persistPath });
+    await again.adopt();
+    expect(again.get("gr-app")?.title).toBe("Login rate limit");
+    // Cleared, the agent's newest title shows again; a session without any loses its title.
+    expect(again.renameSession("gr-app", " ")).toMatchObject({ changed: true, session: { title: "Rate limiting" } });
+    await again.create({ name: "zsh", cwd: "~/app", agent: "shell" });
+    expect(again.renameSession("gr-zsh", "Deploys").session.title).toBe("Deploys");
+    expect(again.renameSession("gr-zsh", null).session.title).toBeUndefined();
+  });
+
+  it("cleans a typed session title", () => {
+    expect(cleanSessionTitle("  Login rate limit  ")).toBe("Login rate limit");
+    expect(cleanSessionTitle("   ")).toBeUndefined();
+    expect(cleanSessionTitle(null)).toBeUndefined();
+    expect(cleanSessionTitle("x".repeat(80))).toHaveLength(60);
   });
 
   it("sets, emits and persists a model, and restores it on adopt", async () => {

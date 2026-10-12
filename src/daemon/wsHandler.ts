@@ -61,6 +61,7 @@ export interface RegistryPort {
   create(input: { name: string; cwd: string; agent: Session["agent"]; group?: string | undefined }): Promise<Session>;
   setGroup(id: string, group: string | null, index?: number): Session;
   renameGroup(group: string, name: string | null): { session: Session; changed: boolean };
+  renameSession(id: string, title: string | null): { session: Session; changed: boolean };
   kill(id: string): Promise<void>;
   on(event: "updated", cb: (s: Session) => void): unknown;
   on(event: "removed", cb: (id: string) => void): unknown;
@@ -700,6 +701,12 @@ export class Connection {
       case "group.rename": {
         // The registry emits session.updated for every member it renamed; a rename that changes nothing still gets an answer.
         const renamed = r.renameGroup(frame.group, frame.name);
+        if (!renamed.changed) this.send({ type: "session.updated", session: renamed.session });
+        return;
+      }
+      case "session.rename": {
+        // The registry emits session.updated when the shown title changed; a rename that changes nothing still gets an answer.
+        const renamed = r.renameSession(frame.sessionId, frame.title);
         if (!renamed.changed) this.send({ type: "session.updated", session: renamed.session });
         return;
       }
