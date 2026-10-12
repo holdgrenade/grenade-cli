@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.96 (2026-10-12)
+
+- Command Center can now load earlier days of its conversation history, one page at a time.
+
 ## 1.0.95 (2026-10-11)
 
 - New shell sessions start with a two-line Grenade prompt. The first line shows the folder, git branch, changed-file count, and how far you are ahead or behind. After a failed command it also shows the exit status, how long the command took, and the time. The second line is where you type, and it turns red after a failure.
