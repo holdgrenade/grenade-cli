@@ -39,11 +39,17 @@ export function entriesIn(jsonl: string): TalkEntry[] {
   return entries;
 }
 
-/** The number after `t-` of the daemon's own row ids, so a new row never repeats one. Pure. */
+/** The daemon's own id for a day's row `n`: the day and the number, "2026-10-05-0006", so no two days share one. Pure. */
+export function rowId(day: string, n: number): string {
+  return `${day}-${String(n).padStart(4, "0")}`;
+}
+
+/** The number at the end of the daemon's own row ids ("2026-10-05-0006", or "t-0006" in files from before), so a new
+ *  row never repeats one. Pure. */
 export function lastRowNumber(entries: readonly TalkEntry[]): number {
   let last = 0;
   for (const e of entries) {
-    const m = /^t-(\d+)$/.exec(e.id);
+    const m = /^(?:t|\d{4}-\d{2}-\d{2})-(\d+)$/.exec(e.id);
     if (m) last = Math.max(last, Number(m[1]));
   }
   return last;
@@ -106,7 +112,7 @@ export class TalkThread {
   append(row: NewTalkEntry): TalkEntry {
     const entry: TalkEntry = {
       ...row,
-      id: row.id ?? `t-${String(this.lastNumber + 1).padStart(4, "0")}`,
+      id: row.id ?? rowId(this.day, this.lastNumber + 1),
       at: this.now().toISOString(),
       text: row.text.length > TALK_TEXT_MAX ? `${row.text.slice(0, TALK_TEXT_MAX - 1)}…` : row.text,
     };

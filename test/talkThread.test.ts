@@ -1,10 +1,10 @@
 /** The day's thread on disk: one file per local day, 0600 in a 0700 folder, ids, rollover, and the protocol's fixture. */
 import { describe, expect, it } from "vitest";
-import { appendFileSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonFrame, TALK_TEXT_MAX } from "@grenade/protocol";
-import { TalkThread, entriesIn, lastRowNumber, talkDate } from "../src/talk/talkThread.js";
+import { TalkThread, entriesIn, lastRowNumber, rowId, talkDate } from "../src/talk/talkThread.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
 
@@ -22,17 +22,17 @@ describe("talkThread", () => {
     const you = thread.append({ id: "6f1c", kind: "you", text: "Bump the relay" });
     const sent = thread.append({ kind: "sent", text: "Bump the version.", session: "gr-a1b2c3", title: "Relay version bump" });
     expect(you.id).toBe("6f1c");
-    expect(sent.id).toBe("t-0001");
-    expect(thread.append({ kind: "it", text: "Sent." }).id).toBe("t-0002");
+    expect(sent.id).toBe("2026-10-05-0001");
+    expect(thread.append({ kind: "it", text: "Sent." }).id).toBe("2026-10-05-0002");
     const file = join(dir, "2026-10-05.jsonl");
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     // A line cut short is skipped; the rest is there after a restart, and ids go on from the last.
     appendFileSync(file, '{"id":"t-00\n');
     const again = new TalkThread(dir, () => now);
-    expect(again.entries().map((e) => e.id)).toEqual(["6f1c", "t-0001", "t-0002"]);
+    expect(again.entries().map((e) => e.id)).toEqual(["6f1c", "2026-10-05-0001", "2026-10-05-0002"]);
     expect(again.has("6f1c")).toBe(true);
-    expect(again.append({ kind: "finished", text: "", session: "gr-a1b2c3", title: "Relay version bump" }).id).toBe("t-0003");
+    expect(again.append({ kind: "finished", text: "", session: "gr-a1b2c3", title: "Relay version bump" }).id).toBe("2026-10-05-0003");
     // A new day is a new, empty thread.
     now = new Date(2026, 9, 6, 0, 1);
     expect(again.rollover()).toBe(true);
@@ -57,5 +57,17 @@ describe("talkThread", () => {
     const jsonl = frame.entries.map((e) => JSON.stringify(e)).join("\n");
     expect(entriesIn(jsonl)).toEqual(frame.entries);
     expect(lastRowNumber(frame.entries)).toBe(10);
+  });
+
+  it("names its own rows by the day, so no two days share one, and goes on from a day's t- ids", () => {
+    expect(rowId("2026-10-05", 6)).toBe("2026-10-05-0006");
+    expect(rowId("2026-10-05", 10000)).toBe("2026-10-05-10000");
+    expect(lastRowNumber([{ id: "2026-10-05-0042", at: "", kind: "it", text: "" }])).toBe(42);
+    const dir = join(mkdtempSync(join(tmpdir(), "talk-")), "talk");
+    const now = new Date(2026, 9, 12, 9, 0);
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "2026-10-12.jsonl"), '{"id":"t-0068","at":"2026-10-12T08:00:00.000Z","kind":"it","text":"Before"}\n');
+    const thread = new TalkThread(dir, () => now);
+    expect(thread.append({ kind: "it", text: "After" }).id).toBe("2026-10-12-0069");
   });
 });
