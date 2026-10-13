@@ -166,6 +166,9 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   constructor(opts: RegistryOptions) {
     super();
+    // Every connected app adds its own listeners (`Connection` in wsHandler.ts, removed on close; wsHandler.test.ts
+    // checks that) on top of the daemon's own, so Node's warning at ten was reached with a few phones connected.
+    this.setMaxListeners(0);
     this.tmux = opts.tmux;
     this.log = opts.log;
     this.persistPath = opts.persistPath;
