@@ -2,6 +2,12 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.110 (2026-10-13)
+
+- Summaries now pause after a failed run, so an offline Mac no longer gets a summary process killed every minute. The pause starts at two minutes and doubles with each failure in a row, up to thirty minutes. The first successful summary ends it.
+- The daemon no longer prints a MaxListenersExceededWarning at start when several apps connect, such as the Mac app, a phone and the Chrome extension.
+- An update that hits its ten-minute limit now stops everything it started, including the download step. Retries no longer report "Homebrew was busy" for hours, and a `grenade update` typed by hand works again.
+
 ## 1.0.109 (2026-10-13)
 
 - Long replies are no longer cut off on the activity card. Each entry now holds up to 20,000 characters instead of 4,000, so a long answer shows in full instead of ending with "…".
