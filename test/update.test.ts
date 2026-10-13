@@ -379,7 +379,11 @@ describe("runInstallCommand", () => {
   });
 });
 
-/** Whether no process has `pid` any more (a killed one may be a zombie for a moment until it is reaped). */
+/**
+ * Whether no live process has `pid` any more: none, or a zombie, a killed one nobody has reaped. The orphaned
+ * grandchild is reaped by whoever is PID 1: launchd and systemd do, the CI's Linux container's init never does, so
+ * there it stays a zombie for good, and `kill -0` still finds it.
+ */
 async function gone(pid: number): Promise<boolean> {
   for (let i = 0; i < 40; i++) {
     try {
@@ -387,9 +391,20 @@ async function gone(pid: number): Promise<boolean> {
     } catch {
       return true;
     }
+    if (isZombie(pid)) return true;
     await new Promise((r) => setTimeout(r, 50));
   }
   return false;
+}
+
+/** Linux says a process's state in `/proc/<pid>/stat`, after the bracketed command name; elsewhere there is no such file. */
+function isZombie(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) === "Z";
+  } catch {
+    return false;
+  }
 }
 
 describe("runInstall", () => {
