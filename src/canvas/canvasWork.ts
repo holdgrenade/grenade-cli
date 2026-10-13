@@ -56,6 +56,8 @@ export class CanvasWork {
   private readonly working = new Set<string>();
   private readonly spans = new Map<string, { from: number; to: number | null }[]>();
   private readonly record = new Map<string, RecordedBoard[]>();
+  /** Sessions whose newest turn a hook saw save a board: kept after the turn ends, until the next one starts. */
+  private readonly drew = new Set<string>();
   private readonly now: () => number;
   private readonly scan: (groupFolder: string, sharedFolder: string) => Promise<BoardOnDisk[]>;
   /** The ends of turns still being read, for tests and a clean stop. */
@@ -81,7 +83,10 @@ export class CanvasWork {
         this.working.add(s.id);
         this.spans.set(s.id, [...(this.spans.get(s.id) ?? []).filter((x) => x.to === null || x.to >= now - SPANS_KEEP_MS), { from: now, to: null }]);
       }
-      if (!this.turns.has(s.id)) this.openTurn(s, now);
+      if (!this.turns.has(s.id)) {
+        this.drew.delete(s.id);
+        this.openTurn(s, now);
+      }
       return;
     }
     if (this.working.delete(s.id)) {
@@ -104,6 +109,12 @@ export class CanvasWork {
       this.turns.set(sessionId, turn);
     }
     for (const p of paths) if (!turn.hooked.has(p)) turn.hooked.set(p, now);
+    this.drew.add(sessionId);
+  }
+
+  /** Whether the session's newest turn saved a board, as its hooks said (PROTOCOL.md "Session", `turn`). */
+  drawing(sessionId: string): boolean {
+    return this.drew.has(sessionId);
   }
 
   /** The boards the record says a session saved between `from` and `to` (ms), oldest first. */
@@ -116,6 +127,7 @@ export class CanvasWork {
 
   /** The session is gone. */
   forget(id: string): void {
+    this.drew.delete(id);
     this.turns.delete(id);
     this.working.delete(id);
     this.spans.delete(id);

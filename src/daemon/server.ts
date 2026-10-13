@@ -84,7 +84,7 @@ import { ShareClient, type Fetch } from "../publish/shareClient.js";
 import { CommentService } from "../publish/comments.js";
 import { OwnerName } from "../publish/owner.js";
 import { assetFiles, readAsset } from "../publish/publishFolder.js";
-import { OFFICIAL_SHARE_URL } from "@grenade/protocol";
+import { OFFICIAL_SHARE_URL, turnKindOf } from "@grenade/protocol";
 import { PromptStore } from "../prompts/promptStore.js";
 import { PromptTests } from "../prompts/promptTests.js";
 import { promptText } from "../prompts/promptText.js";
@@ -307,6 +307,22 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Which session saved which board in which turn: the canvas card and Command Center's board tiles (PROTOCOL.md "The canvas card").
   const canvasWork = new CanvasWork({ registry, activity, home: homedir(), log });
   registry.on("updated", (s) => canvasWork.statusChanged(s));
+  /**
+   * What each session's newest turn is doing (PROTOCOL.md "Session", `turn`), so a list can say "Designing" and
+   * "Designed" without the session's activity: worked out again whenever its activity, status, plan, writes or boards
+   * change. `noteTurn` sends nothing when it is the same, so the update it causes ends here.
+   */
+  const refreshTurn = (id: string) => {
+    const s = registry.get(id);
+    if (!s) return;
+    const entries = activity.entriesOf(id);
+    const working = s.status === "working";
+    const turn = entries.length === 0 && !working ? undefined
+      : turnKindOf(entries, { planning: s.plan?.planning === true, drawing: canvasWork.drawing(id), edited: s.edited === true, working });
+    registry.noteTurn(id, turn);
+  };
+  registry.on("updated", (s) => refreshTurn(s.id));
+  activity.on("activity", (frame) => refreshTurn(frame.sessionId));
   registry.on("removed", (id) => canvasWork.forget(id));
   /** A hook of a session's agent, for its git changes: what the tool call wrote or committed is the session's work. */
   const noteChangesHook = (session: string | null, body: string) => {
@@ -326,6 +342,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     try {
       const p = JSON.parse(body || "{}") as { hook_event_name?: unknown; tool_name?: unknown; tool_input?: unknown; cwd?: unknown };
       canvasWork.hook(session, p.hook_event_name, p.tool_name, p.tool_input, typeof p.cwd === "string" ? p.cwd : undefined);
+      refreshTurn(session);
     } catch {
       // Not JSON: the status hook answers that.
     }

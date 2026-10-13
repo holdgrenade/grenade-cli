@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionChanges, SessionContext, SessionPlan, SessionStatus, SessionStep, WaitingFor } from "@grenade/protocol";
+import type { AgentKind, KeyName, ReportedBackgroundTask, Session, SessionChanges, SessionContext, SessionPlan, SessionStatus, SessionStep, TurnKind, WaitingFor } from "@grenade/protocol";
 import type { StepChange } from "../daemon/hooks.js";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
@@ -604,6 +604,15 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (!r || (r.session.edited === true) === edited) return;
     const { edited: _was, ...rest } = r.session;
     r.session = edited ? { ...rest, edited: true } : rest;
+    this.emit("updated", r.session);
+  }
+
+  /** What the session's newest turn is doing (PROTOCOL.md "Session", `turn`), worked out by the daemon. Not saved. */
+  noteTurn(id: string, turn: TurnKind | undefined): void {
+    const r = this.records.get(id);
+    if (!r || r.session.turn === turn) return;
+    const { turn: _was, ...rest } = r.session;
+    r.session = turn ? { ...rest, turn } : rest;
     this.emit("updated", r.session);
   }
 

@@ -185,6 +185,23 @@ describe("CanvasWork", () => {
     expect(kept.map((b) => [b.file, b.canvas, b.group, b.cwd, b.folder])).toEqual([["R2A · Day.html", "canvas-2", "g-1", dir, canvas], ["R1A · Today.html", "canvas-2", "g-1", dir, canvas]]);
   });
 
+  it("says a turn drew while it works and after it ends, until the next turn starts", async () => {
+    const { add, set, save, tick, work } = setup();
+    add("gr-a");
+    set("gr-a", "working");
+    expect(work.drawing("gr-a")).toBe(false);
+    const path = save("R1A · Drawn.html", "<title>Drawn</title>");
+    work.hook("gr-a", "PostToolUse", "Write", { file_path: path }, dir);
+    expect(work.drawing("gr-a")).toBe(true);
+    tick(5_000);
+    set("gr-a", "waiting", "done");
+    expect(work.drawing("gr-a")).toBe(true);
+    set("gr-a", "working");
+    expect(work.drawing("gr-a")).toBe(false);
+    set("gr-a", "waiting", "done");
+    await work.settled();
+  });
+
   it("gives a board no hook named to nobody while another session of the group worked", async () => {
     const { add, set, save, tick, noted, work } = setup();
     add("gr-a");

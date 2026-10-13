@@ -120,3 +120,16 @@ describe("Session.edited from hooks", () => {
     expect(editChangeOf("UserPromptSubmit", undefined)).toBe(false);
   });
 });
+
+describe("Session.turn", () => {
+  it("is sent when it changes, and taken away", async () => {
+    const { registry, updates } = await make();
+    updates.length = 0;
+    registry.noteTurn("gr-api", "design");
+    registry.noteTurn("gr-api", "design");
+    expect(registry.get("gr-api")?.turn).toBe("design");
+    expect(updates).toHaveLength(1);
+    registry.noteTurn("gr-api", undefined);
+    expect(registry.get("gr-api")?.turn).toBeUndefined();
+  });
+});
