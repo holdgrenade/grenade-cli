@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.106 (2026-10-13)
+
+- Sessions waiting on a question or permission prompt now stay marked "Needs you" until you answer. Before, looking at the session or waiting ten minutes could switch it to idle while it was still waiting. Only a finished turn now shows as idle.
+
 ## 1.0.105 (2026-10-13)
 
 - Sessions now show whether a turn changed any files. When Claude Code or Codex writes or edits files in a turn, the apps label it "Building" and then "Built". A turn that only answers a question shows "Answering" and then "Answered".
