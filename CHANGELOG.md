@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.109 (2026-10-13)
+
+- Long replies are no longer cut off on the activity card. Each entry now holds up to 20,000 characters instead of 4,000, so a long answer shows in full instead of ending with "…".
+- The Chrome extension needs version 0.7.0 or later to show the full length. Older versions still cut entries at 4,000 characters.
+
 ## 1.0.108 (2026-10-13)
 
 - Turns that change files through shell commands, such as scripts, `sed`, or git, now show "Building" instead of "Working" and then "Done."
