@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.104 (2026-10-13)
+
+- Sessions from Claude Code and Codex now show no title or summary until you send the first prompt, instead of a guess based on the folder and the welcome screen.
+
 ## 1.0.103 (2026-10-13)
 
 - Push cards now appear only on sessions whose own work was pushed. Before, every session sharing a folder's branch got a push card and a "Pushed" status as soon as any of them pushed. A session counts as pushed when the pushed commits include its edits or the commits it made. Sessions whose work was not pushed keep reading "Built".
