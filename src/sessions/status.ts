@@ -109,8 +109,12 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
       return { ...rest, status: was.status, since: was.since, waitingFor: was.waitingFor, stoppedBecause: was.stoppedBecause };
     }
     case "seen":
-      // A turn that stopped partway is not over because someone looked at it: it waits until the user goes on.
-      return s.status === "waiting" && s.waitingFor !== "stopped" ? set(s, "idle", e.at) : s;
+      // Only a finished turn rests once looked at. A question still needs its answer, and a turn that stopped partway
+      // is not over because someone looked at it: both wait until the user acts, so "Needs you" stays.
+      if (rests(s)) return set(s, "idle", e.at);
+      // A dialog over a finished turn: the turn under it has been seen, and is what the session goes back to.
+      if (s.beforeAsk?.status === "waiting" && (s.beforeAsk.waitingFor ?? "done") === "done") return { ...s, beforeAsk: { ...s.beforeAsk, status: "idle", since: e.at } };
+      return s;
     case "output": {
       let next = e.changed ? { ...s, lastOutputAt: e.at } : s;
       // Only a hook-driven turn can stop partway, so only it keeps the time of the last look (to tell the Mac slept).
@@ -127,10 +131,15 @@ export function reduceStatus(s: StatusState, e: StatusEvent): StatusState {
       if (next.hookDriven && next.status === "working" && !next.background && e.busy === false && e.at - next.lastOutputAt >= STOPPED_QUIET_MS) {
         next = stop(next, next.sleptThisTurn ? "sleep" : "quiet", e.at);
       }
-      if (next.status === "waiting" && next.waitingFor !== "stopped" && e.at - next.since >= WAITING_TO_IDLE_MS) next = set(next, "idle", e.at);
+      if (rests(next) && e.at - next.since >= WAITING_TO_IDLE_MS) next = set(next, "idle", e.at);
       return next;
     }
   }
+}
+
+/** A finished turn waiting to be looked at: the one wait that turns `idle` when seen or after `WAITING_TO_IDLE_MS`. */
+function rests(s: StatusState): boolean {
+  return s.status === "waiting" && (s.waitingFor ?? "done") === "done";
 }
 
 /** The reason to show on the Session: only a waiting session has one. */

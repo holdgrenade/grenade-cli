@@ -83,7 +83,7 @@ describe("why a session waits", () => {
   });
 
   it("only a waiting session shows a reason", () => {
-    const waiting = reduceStatus(initialStatus(0), hook("waiting", 10, "answer"));
+    const waiting = reduceStatus(initialStatus(0), hook("waiting", 10, "done"));
     expect(shownWaitingFor(reduceStatus(waiting, { kind: "seen", at: 20 }))).toBeUndefined();
     expect(shownWaitingFor(reduceStatus(waiting, hook("working", 20)))).toBeUndefined();
     expect(shownWaitingFor(reduceStatus(waiting, { kind: "gone", at: 20 }))).toBeUndefined();
@@ -99,11 +99,12 @@ describe("why a session waits", () => {
     expect(reduceStatus(first, hook("waiting", 6000, "answer"))).toBe(first);
   });
 
-  it("a reason the user has seen does not raise the session again", () => {
+  it("a question stays waiting when seen, and after 10 minutes, and the same question again changes nothing", () => {
     // PermissionRequest, the phone shows it, and six seconds later the Notification for the same prompt.
     const seen = run(initialStatus(0), [hook("waiting", 10, "answer"), { kind: "seen", at: 2000 }]);
-    expect(seen.status).toBe("idle");
-    expect(reduceStatus(seen, hook("waiting", 6000, "answer")).status).toBe("idle");
+    expect(seen).toMatchObject({ status: "waiting", waitingFor: "answer", since: 10 });
+    expect(reduceStatus(seen, hook("waiting", 6000, "answer"))).toBe(seen);
+    expect(reduceStatus(seen, { kind: "output", changed: false, at: 10 + WAITING_TO_IDLE_MS }).status).toBe("waiting");
   });
 
   it("but the next question, after more work, does", () => {
