@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.112 (2026-10-13)
+
+- Small fixes and improvements.
+
 ## 1.0.111 (2026-10-13)
 
 - On macOS, the daemon's login agent now has a new name. After you update, the daemon moves itself to the new name the first time it starts, and your running sessions keep going in tmux.
