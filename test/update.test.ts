@@ -1,12 +1,12 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { silentLogger } from "../src/log.js";
 import { formula } from "../packaging/homebrew/formula.mjs";
 import { parseAuto } from "../src/update/autoSetting.js";
 import { installedVersion } from "../src/update/installedVersion.js";
-import { installError } from "../src/update/installer.js";
+import { installError, runInstall, runInstallCommand } from "../src/update/installer.js";
 import { tarballRoot, TARBALL_INSTALL_SCRIPT } from "../src/update/tarballInstall.js";
 import { underLaunchd, underService, underSystemd } from "../src/update/underService.js";
 import { UpdateChecker } from "../src/update/updateChecker.js";
@@ -358,5 +358,57 @@ describe("UpdateChecker", () => {
     expect(c.current().installed).toBe("0.1.10");
     expect(c.current().restarts).toBe(false);
     expect(checker({ restart: vi.fn() }).c.current().restarts).toBe(true);
+  });
+});
+
+describe("runInstallCommand", () => {
+  beforeEach(() => vi.useRealTimers());
+
+  it("reports what a command printed and whether it succeeded", async () => {
+    expect(await runInstallCommand(["/bin/sh", "-c", "echo hi; echo oops >&2; exit 3"])).toEqual({ ok: false, stdout: "hi\n", stderr: "oops\n" });
+    expect(await runInstallCommand(["/bin/sh", "-c", "echo done"])).toEqual({ ok: true, stdout: "done\n", stderr: "" });
+  });
+
+  it("ends the command's whole process group at the time limit, not only the command", async () => {
+    const r = await runInstallCommand(["/bin/sh", "-c", "sleep 30 & echo $!; wait"], { timeoutMs: 300, killGraceMs: 300 });
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toBe("timed out");
+    const grandchild = Number(r.stdout.trim());
+    expect(grandchild).toBeGreaterThan(0);
+    expect(await gone(grandchild)).toBe(true);
+  });
+});
+
+/** Whether no process has `pid` any more (a killed one may be a zombie for a moment until it is reaped). */
+async function gone(pid: number): Promise<boolean> {
+  for (let i = 0; i < 40; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
+
+describe("runInstall", () => {
+  beforeEach(() => vi.useRealTimers());
+
+  it("links grenade again when an earlier upgrade left bin/grenade missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-brew-"));
+    try {
+      mkdirSync(join(dir, "bin"));
+      const brew = join(dir, "bin", "brew");
+      writeFileSync(brew, `#!/bin/sh\necho "$*" >> "${dir}/calls"\n[ "$1" = link ] && : > "${dir}/bin/grenade"\nexit 0\n`, { mode: 0o755 });
+      const calls = () => readFileSync(join(dir, "calls"), "utf8").trim().split("\n");
+      expect(await runInstall({ method: "brew", brew })).toEqual({ kind: "done" });
+      expect(calls()).toEqual(["list --pinned", "update --quiet", "upgrade grenade", "link grenade"]);
+      rmSync(join(dir, "calls"));
+      expect(await runInstall({ method: "brew", brew })).toEqual({ kind: "done" });
+      expect(calls()).toEqual(["list --pinned", "update --quiet", "upgrade grenade"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
