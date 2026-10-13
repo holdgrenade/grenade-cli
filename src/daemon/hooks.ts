@@ -20,6 +20,8 @@ export interface HookRegistryPort {
   backgroundStarted(id: string, taskId: string): void;
   /** What the agent does this moment changed (PROTOCOL.md "Step"). */
   noteStep?(id: string, change: StepChange): void;
+  /** The turn wrote files (`true`), or a new turn began (`false`) (PROTOCOL.md "Session", `edited`). */
+  noteEdited?(id: string, edited: boolean): void;
 }
 
 /** A tool hook's change to the session's step: a new one, the tool returned, or a new turn without one yet. */
@@ -40,6 +42,18 @@ export function stepChangeOf(event: string, toolName: unknown, toolInput: unknow
     default:
       return null;
   }
+}
+
+/** The tools that write files: Claude Code's, and Codex's patch. */
+const WRITING_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"]);
+
+/**
+ * The change a hook makes to the session's `edited` (PROTOCOL.md "Session"): a new prompt starts a turn that wrote
+ * nothing yet, a tool that wrote files marks it. Null for any other hook. The same for every agent.
+ */
+export function editChangeOf(event: string, toolName: unknown): boolean | null {
+  if (event === "UserPromptSubmit") return false;
+  return event === "PostToolUse" && typeof toolName === "string" && WRITING_TOOLS.has(toolName) ? true : null;
 }
 
 export interface HookResult {
@@ -86,6 +100,9 @@ export function handleClaudeHook(
   // A subagent's tool calls are not what the session does: its own step is the call that started the subagent.
   const step = aside ? null : stepChangeOf(parsed.data.hook_event_name, parsed.data.tool_name, parsed.data.tool_input);
   if (step) registry.noteStep?.(sessionParam, step);
+  // A subagent's writes are the turn's work all the same.
+  const edited = editChangeOf(parsed.data.hook_event_name, parsed.data.tool_name);
+  if (edited !== null) registry.noteEdited?.(sessionParam, edited);
   if (parsed.data.prompt !== undefined) onPrompt?.(sessionParam, parsed.data.prompt);
   if (parsed.data.transcript_path) onTranscript?.(sessionParam, parsed.data.transcript_path, parsed.data.hook_event_name);
   if (waitingFor === "answer" && parsed.data.message) onAsked?.(sessionParam, parsed.data.message);

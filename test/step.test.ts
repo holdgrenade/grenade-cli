@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReportedBackgroundTask, Session } from "@grenade/protocol";
 import { handleCodexHook } from "../src/daemon/codexHooks.js";
-import { handleClaudeHook, stepChangeOf } from "../src/daemon/hooks.js";
+import { editChangeOf, handleClaudeHook, stepChangeOf } from "../src/daemon/hooks.js";
 import { silentLogger } from "../src/log.js";
 import { SessionRegistry } from "../src/sessions/registry.js";
 import type { Tmux } from "../src/tmux/tmux.js";
@@ -90,5 +90,33 @@ describe("Session.step from hooks", () => {
     const { registry } = await make();
     handleCodexHook(registry, "gr-api", hook({ hook_event_name: "PreToolUse", tool_name: "shell", tool_input: { command: ["bash", "-lc", "cargo test"] } }), silentLogger);
     expect(registry.get("gr-api")?.step?.text).toBe("Running cargo test");
+  });
+});
+
+describe("Session.edited from hooks", () => {
+  it("a tool that wrote marks the turn; it stays once the turn ends; a new prompt clears it", async () => {
+    const { registry } = await make();
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "UserPromptSubmit", prompt: "fix it" }), silentLogger);
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: {} }), silentLogger);
+    expect(registry.get("gr-api")?.edited).toBeUndefined();
+    handleClaudeHook(registry, "gr-api", hook({ ...edit, hook_event_name: "PostToolUse" }), silentLogger);
+    expect(registry.get("gr-api")?.edited).toBe(true);
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "Stop" }), silentLogger);
+    expect(registry.get("gr-api")).toMatchObject({ status: "waiting", edited: true });
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "UserPromptSubmit", prompt: "what changed?" }), silentLogger);
+    expect(registry.get("gr-api")?.edited).toBeUndefined();
+  });
+
+  it("Codex's patch marks it too", async () => {
+    const { registry } = await make();
+    handleCodexHook(registry, "gr-api", hook({ hook_event_name: "PostToolUse", tool_name: "apply_patch", tool_input: { input: "*** Begin Patch" } }), silentLogger);
+    expect(registry.get("gr-api")?.edited).toBe(true);
+  });
+
+  it("only writing tools count", () => {
+    expect(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"].map((t) => editChangeOf("PostToolUse", t))).toEqual([true, true, true, true, true]);
+    expect(editChangeOf("PostToolUse", "Bash")).toBeNull();
+    expect(editChangeOf("PreToolUse", "Edit")).toBeNull();
+    expect(editChangeOf("UserPromptSubmit", undefined)).toBe(false);
   });
 });

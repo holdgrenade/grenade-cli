@@ -2,7 +2,7 @@
 import { CodexHookEvent, statusForCodexHook, waitingForCodexHook } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { countedTasks } from "../background/heldTasks.js";
-import { stepChangeOf, type HookRegistryPort, type HookResult } from "./hooks.js";
+import { editChangeOf, stepChangeOf, type HookRegistryPort, type HookResult } from "./hooks.js";
 
 export interface CodexHookListeners {
   /** The user's prompt from an applied `UserPromptSubmit`, for the summary and the activity. */
@@ -34,6 +34,8 @@ export function handleCodexHook(registry: HookRegistryPort, sessionParam: string
   if (!applied) return { status: 404, body: { ok: false, reason: `unknown session ${sessionParam}` } };
   const step = stepChangeOf(event, parsed.data.tool_name, parsed.data.tool_input);
   if (step) registry.noteStep?.(sessionParam, step);
+  const edited = editChangeOf(event, parsed.data.tool_name);
+  if (edited !== null) registry.noteEdited?.(sessionParam, edited);
   if (parsed.data.model) on.onModel?.(sessionParam, parsed.data.model);
   if (parsed.data.prompt !== undefined) on.onPrompt?.(sessionParam, parsed.data.prompt);
   if (parsed.data.transcript_path) on.onTranscript?.(sessionParam, parsed.data.transcript_path, event);

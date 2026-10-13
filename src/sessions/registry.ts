@@ -595,6 +595,18 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
+  /**
+   * Whether the agent wrote files during its current or last turn (PROTOCOL.md "Session", `edited`), from its hooks:
+   * set by a tool that wrote, cleared by a new prompt. Kept after the turn ends, for its word ("Built"). Not saved.
+   */
+  noteEdited(id: string, edited: boolean): void {
+    const r = this.records.get(id);
+    if (!r || (r.session.edited === true) === edited) return;
+    const { edited: _was, ...rest } = r.session;
+    r.session = edited ? { ...rest, edited: true } : rest;
+    this.emit("updated", r.session);
+  }
+
   /** The background tasks that held the session are over, and no hook said so: its turn is done. */
   backgroundOver(id: string): void {
     const r = this.records.get(id);
