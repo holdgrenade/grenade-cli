@@ -266,6 +266,38 @@ export function commitPageOf(remoteUrl: string, hash: string): string | undefine
   return `https://${host}/${parts.join("/")}${page}${hash}`;
 }
 
+/**
+ * The lines each file of a commit gained, from `git show --format= --unified=0`: path (the new one, or the old one for
+ * a deleted file) → its added lines as written. A file that only lost lines is there with none.
+ */
+export function addedLinesOf(diff: string): Map<string, string[]> {
+  const files = new Map<string, string[]>();
+  let oldPath: string | undefined;
+  let current: string[] | undefined;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff ")) {
+      oldPath = undefined;
+      current = undefined;
+    } else if (line.startsWith("--- ") && !current) {
+      oldPath = diffPathOf(line.slice(4));
+    } else if (line.startsWith("+++ ") && !current) {
+      const path = diffPathOf(line.slice(4)) ?? oldPath;
+      if (path) files.set(path, (current = files.get(path) ?? []));
+    } else if (current && line.startsWith("+")) {
+      current.push(line.slice(1));
+    }
+  }
+  return files;
+}
+
+/** `a/x.ts` or `b/x.ts` (quoted by git when odd) → `x.ts`; `/dev/null` → undefined. */
+function diffPathOf(raw: string): string | undefined {
+  let p = raw.trimEnd();
+  if (p === "/dev/null") return undefined;
+  if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+  return /^[ab]\//.test(p) ? p.slice(2) : p;
+}
+
 /** The remote a ref like `origin/main` belongs to: the longest remote name it starts with and a `/`. */
 export function remoteOfRef(ref: string, remotes: readonly string[]): string | undefined {
   return remotes.filter((r) => ref.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];

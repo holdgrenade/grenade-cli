@@ -102,6 +102,7 @@ import { PictureStore } from "../highlights/pictureStore.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 import { ChangesTracker } from "../changes/changesTracker.js";
+import { workOfHook, type HookWork } from "../changes/sessionWork.js";
 import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
 import { shellLaunch, writeShellPrompt } from "../platform/shellPrompt.js";
 
@@ -279,8 +280,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       if (req.method === "POST" && url.pathname === "/hooks/codex") {
         if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: "forbidden" });
         const codexSession = url.searchParams.get("session");
-        if (codexSession && registry.get(codexSession)) changes.noteHook(codexSession);
         const codexBody = await readBody(req);
+        noteChangesHook(codexSession, codexBody);
         const r = applyCodexHook(codexSession, codexBody);
         noteCanvasHook(codexSession, codexBody);
         return sendJson(res, r.status, r.body);
@@ -307,6 +308,18 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const canvasWork = new CanvasWork({ registry, activity, home: homedir(), log });
   registry.on("updated", (s) => canvasWork.statusChanged(s));
   registry.on("removed", (id) => canvasWork.forget(id));
+  /** A hook of a session's agent, for its git changes: what the tool call wrote or committed is the session's work. */
+  const noteChangesHook = (session: string | null, body: string) => {
+    if (!session || !registry.get(session)) return;
+    let work: HookWork | undefined;
+    try {
+      const p = JSON.parse(body || "{}") as { hook_event_name?: unknown; tool_name?: unknown; tool_input?: unknown; tool_response?: unknown; cwd?: unknown };
+      work = workOfHook(p.hook_event_name, p.tool_name, p.tool_input, p.tool_response, typeof p.cwd === "string" ? p.cwd : registry.get(session)?.cwd);
+    } catch {
+      // Not JSON: the status hook answers that; the folder is read all the same.
+    }
+    changes.noteHook(session, work);
+  };
   /** A hook's tool call, for the boards it wrote. */
   const noteCanvasHook = (session: string | null, body: string) => {
     if (!session || !registry.get(session)) return;
@@ -494,7 +507,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   /** One hook event of a session: its plan, status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) => {
     if (session) notePlanHook(session, body);
-    if (session && registry.get(session)) changes.noteHook(session);
+    noteChangesHook(session, body);
     const result = applyClaudeStatusHook(session, body);
     noteCanvasHook(session, body);
     return result;

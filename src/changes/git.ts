@@ -8,6 +8,7 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { CHANGES_COMMITS_MAX, CHANGES_FILES_MAX, type ChangeCommit, type ChangedFile, type DiffLine, type PushFailure, type SessionChanges } from "@grenade/protocol";
 import {
+  addedLinesOf,
   commitPageOf,
   filesWithCounts,
   firstGitLine,
@@ -209,6 +210,15 @@ export async function readDiff(top: string, path: string, commit: string | undef
     return parseUnifiedDiff(r.stdout);
   }
   return { lines: [] };
+}
+
+/**
+ * The lines `commit` added, per file relative to the top (a merge: what it added to its first parent); undefined when
+ * the repository has no such commit.
+ */
+export async function readCommitAdded(top: string, commit: string): Promise<Map<string, string[]> | undefined> {
+  const r = await runGit(top, ["-c", "core.quotePath=false", "show", "--format=", "--unified=0", "--no-color", "--no-ext-diff", "--diff-merges=first-parent", "-M", commit, "--"]);
+  return r.code === 0 ? addedLinesOf(r.stdout) : undefined;
 }
 
 /** How a push went. */

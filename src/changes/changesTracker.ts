@@ -1,12 +1,17 @@
 /**
  * Every session's `Session.changes` (PROTOCOL.md "Changes"): read when a session starts, after its agent's hooks
  * (debounced), after a push and every 10 s; the `changes` and `changes.diff` replies; `git.push`; and a `push`
- * activity entry whenever commits that were waiting reach their upstream, whoever pushed them.
+ * activity entry whenever commits that were waiting reach their upstream, whoever pushed them, for each session whose
+ * own work they carry (`sessionWork.ts`): never for a session that shares the branch but whose work was not in them.
  */
 import { canPush, PUSH_COMMITS_MAX, type ActivityEntry, type ChangesDiffFrame, type ChangesFrame, type SessionChanges } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { pushText } from "./gitParse.js";
 import * as git from "./git.js";
+import { SessionWork, type CommitContent, type HookWork } from "./sessionWork.js";
+
+/** How many commits' contents are kept for the sessions that ask of the same push. */
+const CONTENTS_MAX = 200;
 
 /** A `changes`, `changes.diff` or `git.push` the daemon cannot answer: sent as `bad_frame` with this message. */
 export class ChangesError extends Error {}
@@ -26,7 +31,7 @@ export interface ChangesActivityPort {
 }
 
 /** What git does; `git.ts` unless a test hands in another. */
-export type GitPort = Pick<typeof git, "readSnapshot" | "readFiles" | "readCommits" | "readCommitFiles" | "readDiff" | "pushBranch" | "upstreamHas" | "topOf" | "commitPagesOf">;
+export type GitPort = Pick<typeof git, "readSnapshot" | "readFiles" | "readCommits" | "readCommitFiles" | "readDiff" | "pushBranch" | "upstreamHas" | "topOf" | "commitPagesOf" | "readCommitAdded">;
 
 export interface ChangesTrackerOptions {
   registry: ChangesRegistryPort;
@@ -48,6 +53,8 @@ interface Track {
   upstream: string | undefined;
   changes: SessionChanges | undefined;
   pushing: boolean;
+  /** What the session's agent wrote and committed that no push has carried yet. */
+  work: SessionWork;
   reading: Promise<void> | undefined;
   again: boolean;
   timer: unknown;
@@ -60,6 +67,8 @@ export class ChangesTracker {
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
   private readonly clearTimer: (t: unknown) => void;
   private sweep: ReturnType<typeof setInterval> | undefined;
+  /** Commits read for whose work they carry, by full hash: a commit never changes, and every session asks of the same push. */
+  private readonly contents = new Map<string, CommitContent>();
 
   constructor(private readonly o: ChangesTrackerOptions) {
     this.git = o.git ?? git;
@@ -83,9 +92,10 @@ export class ChangesTracker {
     this.tracks.clear();
   }
 
-  /** A hook of the session's agent came in: read its folder a moment later. */
-  noteHook(id: string): void {
+  /** A hook of the session's agent came in: keep what it wrote or committed, and read its folder a moment later. */
+  noteHook(id: string, work?: HookWork): void {
     const t = this.track(id);
+    if (work) t.work.add(work);
     if (t.timer) this.clearTimer(t.timer);
     t.timer = this.setTimer(() => {
       t.timer = undefined;
@@ -203,8 +213,14 @@ export class ChangesTracker {
     const still = new Set(now.map((c) => c.hash));
     const gone = was.filter((c) => !still.has(c.hash));
     if (gone.length === 0) return;
+    const t = this.track(id);
     const pushed: { hash: string; subject: string }[] = [];
-    for (const c of gone) if (await this.git.upstreamHas(top, upstream, c.hash)) pushed.push(c);
+    for (const c of gone) {
+      if (!(await this.git.upstreamHas(top, upstream, c.hash))) continue;
+      // The branch may carry other sessions' commits: only those with this session's work are its push.
+      const content = await this.contentOf(top, c.hash);
+      if (content && t.work.take(content)) pushed.push(c);
+    }
     if (pushed.length === 0) return;
     this.o.log.info("A session's commits reached their upstream", { session: id, upstream, commits: pushed.length });
     const shown = pushed.slice(0, PUSH_COMMITS_MAX);
@@ -221,6 +237,17 @@ export class ChangesTracker {
     });
   }
 
+  private async contentOf(top: string, hash: string): Promise<CommitContent | undefined> {
+    const known = this.contents.get(hash);
+    if (known) return known;
+    const files = await this.git.readCommitAdded(top, hash);
+    if (!files) return undefined;
+    const content = { hash, files };
+    this.contents.set(hash, content);
+    if (this.contents.size > CONTENTS_MAX) this.contents.delete(this.contents.keys().next().value!);
+    return content;
+  }
+
   private show(id: string, t: Track): void {
     const shown = t.changes && t.pushing ? { ...t.changes, pushing: true as const } : t.changes;
     this.o.registry.setChanges(id, shown);
@@ -235,7 +262,7 @@ export class ChangesTracker {
   private track(id: string): Track {
     let t = this.tracks.get(id);
     if (!t) {
-      t = { waiting: undefined, upstream: undefined, changes: undefined, pushing: false, reading: undefined, again: false, timer: undefined };
+      t = { waiting: undefined, upstream: undefined, changes: undefined, pushing: false, work: new SessionWork(), reading: undefined, again: false, timer: undefined };
       this.tracks.set(id, t);
     }
     return t;
