@@ -8,7 +8,7 @@ export const SERVICE_LABEL = "com.holdgrenade.grenade.daemon";
 /**
  * The agent's label before CLI 1.0.111. An agent still installed under it moves itself to SERVICE_LABEL when it starts
  * (`legacyAgent.ts`), and `grenade service` and `update` find it until then. Remove it, and every use, once no install
- * older than that is left.
+ * older than that is left. This is the one place the old label is written: everything else names the constant.
  */
 export const LEGACY_SERVICE_LABEL = "com.adamchew.grenade.daemon";
 /** launchd waits this long before it starts a job that just exited. */

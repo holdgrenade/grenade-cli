@@ -67,13 +67,13 @@ describe("relabelPlist", () => {
   });
 
   it("finds the Label in a plist whose keys are in another order", () => {
-    const sorted = "<dict>\n\t<key>KeepAlive</key>\n\t<true/>\n\t<key>Label</key>\n\t<string>com.adamchew.grenade.daemon</string>\n</dict>\n";
-    expect(relabelPlist(sorted, LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBe(sorted.replace("com.adamchew.grenade.daemon", "com.holdgrenade.grenade.daemon"));
+    const sorted = (label: string) => `<dict>\n\t<key>KeepAlive</key>\n\t<true/>\n\t<key>Label</key>\n\t<string>${label}</string>\n</dict>\n`;
+    expect(relabelPlist(sorted(LEGACY_SERVICE_LABEL), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBe(sorted("com.holdgrenade.grenade.daemon"));
   });
 
   it("leaves a plist with another label alone", () => {
     expect(relabelPlist(renderPlist({ ...spec, label: `${LEGACY_SERVICE_LABEL}.test` }), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBeNull();
-    expect(relabelPlist(renderPlist({ ...spec, label: "comXadamchew.grenade.daemon" }), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBeNull();
+    expect(relabelPlist(renderPlist({ ...spec, label: LEGACY_SERVICE_LABEL.replace(".", "X") }), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBeNull();
   });
 });
 

@@ -584,7 +584,7 @@ What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), n
 
 ## 0.1.9 (2026-09-30)
 
-- The iPhone app now uses the bundle ID com.holdgrenade.grenade, so it installs as a separate app from the old com.adamchew.grenade build. Push notifications follow the new ID. The Mac daemon's launchd label is unchanged.
+- The iPhone app now uses the bundle ID com.holdgrenade.grenade, so it installs as a separate app from the old build. Push notifications follow the new ID. The Mac daemon's launchd label is unchanged.
 
 ## 0.1.8 (2026-09-30)
 

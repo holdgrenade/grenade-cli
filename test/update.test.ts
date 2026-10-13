@@ -9,6 +9,7 @@ import { installedVersion } from "../src/update/installedVersion.js";
 import { installError, runInstall, runInstallCommand } from "../src/update/installer.js";
 import { tarballRoot, TARBALL_INSTALL_SCRIPT } from "../src/update/tarballInstall.js";
 import { underLaunchd, underService, underSystemd } from "../src/update/underService.js";
+import { LEGACY_SERVICE_LABEL } from "../src/service/launchdPlist.js";
 import { UpdateChecker } from "../src/update/updateChecker.js";
 import {
   compareVersions,
@@ -149,8 +150,8 @@ describe("versions", () => {
   });
 
   it("knows the launchd agent by its job name", () => {
-    expect(underLaunchd({ XPC_SERVICE_NAME: "com.adamchew.grenade.daemon" })).toBe(true);
-    expect(underLaunchd({ XPC_SERVICE_NAME: "com.adamchew.grenade.daemon.test" })).toBe(true);
+    expect(underLaunchd({ XPC_SERVICE_NAME: LEGACY_SERVICE_LABEL })).toBe(true);
+    expect(underLaunchd({ XPC_SERVICE_NAME: `${LEGACY_SERVICE_LABEL}.test` })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "com.holdgrenade.grenade.daemon" })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "com.holdgrenade.grenade.daemon.test" })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "0" })).toBe(false);
