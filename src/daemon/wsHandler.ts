@@ -5,7 +5,7 @@
 import { computerWord } from "../platform/computer.js";
 import { listFolders } from "../folders/listFolders.js";
 import { agentInfo } from "../agents/agentCatalog.js";
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, activityFrames, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, newestWithin, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type BrowserCommandFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
+import { ACTIVITY_FULL_TEXT_MAX, ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, activityFrames, activityText, CLOSE_UNAUTHORIZED, cutEntries, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, newestWithin, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type BrowserCommandFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -84,6 +84,8 @@ export interface PromptsPort {
 /** The slice of ActivityStore a connection needs (PROTOCOL.md "Activity"). */
 export interface ActivityPort {
   entriesOf(id: string): ActivityEntry[];
+  /** The whole text of a cut entry (PROTOCOL.md "Activity"), or null when the daemon no longer holds it. */
+  wholeText(id: string, cut: string): string | null;
   on(event: "activity", cb: (f: ActivityFrame) => void): unknown;
   off(event: "activity", cb: (f: ActivityFrame) => void): unknown;
 }
@@ -401,7 +403,7 @@ export class Connection {
       await this.dispatch(frame);
     } catch (e) {
       // An `input` (or a canvas request, or an `attachment`) with an id gets its id back, so the phone knows which one did not arrive.
-      const id = frame.type === "input" || frame.type === "attachment" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
+      const id = frame.type === "input" || frame.type === "attachment" || frame.type === "activity.text" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
       if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof MissingAgentError) return this.fail("bad_frame", e.message, frame.type, false, id);
@@ -534,6 +536,13 @@ export class Connection {
       case "unsubscribe":
         if (this.subscriptions.delete(frame.sessionId)) r.unsubscribe(frame.sessionId);
         return;
+      case "activity.text": {
+        // The whole text of a cut entry (PROTOCOL.md "Activity"); an id the store has let go answers with an error the phone words.
+        this.requireSession(frame.sessionId);
+        const text = this.d.activity?.wholeText(frame.sessionId, frame.cut) ?? null;
+        if (text === null) return this.fail("bad_frame", "this daemon no longer has that text", frame.type, false, frame.id);
+        return this.send({ type: "activity.text", id: frame.id, sessionId: frame.sessionId, cut: frame.cut, text: activityText(text, ACTIVITY_FULL_TEXT_MAX) });
+      }
       case "input": {
         if (frame.id === undefined) return r.sendText(frame.sessionId, frame.text, frame.submit);
         // With an id the phone may send it again after a dropped connection: type it once, answer every time.
@@ -587,7 +596,8 @@ export class Connection {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         const entries = await this.d.conversations.preview(frame.conversationId);
         if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this ${computerWord()}`, frame.type);
-        return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: newestWithin(this.entriesFor(entries)) });
+        // Read whole from the transcript and cut here, without a `cut` id: a past conversation's text cannot be asked for.
+        return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: newestWithin(this.entriesFor(cutEntries(entries))) });
       }
       case "conversation.delete": {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);

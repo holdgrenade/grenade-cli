@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ACTIVITY_FRAME_MAX_BYTES, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame, type DaemonFrame, type Session } from "@grenade/protocol";
+import { ACTIVITY_FRAME_MAX_BYTES, ACTIVITY_FULL_TEXT_MAX, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame, type DaemonFrame, type Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { BrowserBridge } from "../src/browser/browserBridge.js";
 import { type PlansPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort } from "../src/daemon/wsHandler.js";
@@ -84,7 +84,10 @@ class FakeRegistry extends EventEmitter {
 
 class FakeActivity extends EventEmitter {
   entries = new Map<string, ActivityEntry[]>([[session.id, [{ kind: "said", text: "On it.", at: "2026-09-30T14:02:14.000Z" }]]]);
+  /** Whole texts by `<session>/<cut>`; the client fixture's cut id is held, with the daemon fixture's text. */
+  wholes = new Map<string, string>([[`${session.id}/8f3a1c2e9b4d`, (JSON.parse(fixture("daemon.activity.text.json")) as { text: string }).text]]);
   entriesOf(id: string) { return this.entries.get(id) ?? []; }
+  wholeText(id: string, cut: string) { return this.wholes.get(`${id}/${cut}`) ?? null; }
 }
 
 /** A daemon's voice keys: OpenAI takes any key but "bad", and a token is the key's first letters with a count. */
@@ -666,7 +669,7 @@ describe("Connection activity", () => {
   it("splits a large activity frame under the frame cap: the first part with full on subscribe, every part appended after", async () => {
     const { conn, activity, out } = connect();
     const at = "2026-09-30T14:02:14.000Z";
-    const long = Array.from({ length: 60 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
+    const long = Array.from({ length: 300 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
     activity.entries.set(session.id, long);
     await conn.handleMessage(helloFrom("ios", "1.0.100"));
     out.length = 0;
@@ -685,17 +688,44 @@ describe("Connection activity", () => {
     expect(appended.flatMap((f) => f.entries)).toEqual(long);
   });
 
-  it("sends a long text whole to the apps, and cut at 4000 to a Chrome extension from before it read one", async () => {
+  it("sends a cut entry as it is to every app, and answers activity.text with its whole text", async () => {
     const at = "2026-09-30T14:02:14.000Z";
-    const long = { kind: "said" as const, text: "y".repeat(6000), at };
-    for (const [platform, version, length] of [["ios", "1.0.100", 6000], ["chrome", "0.6.4", 4000], ["chrome", "0.7.0", 6000]] as const) {
+    const cut = { kind: "said" as const, text: `${"y".repeat(ACTIVITY_TEXT_MAX - 1)}…`, at, cut: "8f3a1c2e9b4d" };
+    const whole = "y".repeat(6000);
+    for (const [platform, version] of [["ios", "1.0.100"], ["chrome", "0.6.4"], ["android", "1.0.80"]] as const) {
       const { conn, activity, out } = connect();
-      activity.entries.set(session.id, [long]);
+      activity.entries.set(session.id, [cut]);
+      activity.wholes.set(`${session.id}/${cut.cut}`, whole);
       await conn.handleMessage(helloFrom(platform, version));
       out.length = 0;
       await conn.handleMessage(fixture("client.subscribe.json"));
-      expect(activityFrames(out)[0]?.entries[0]?.text).toHaveLength(length);
+      expect(activityFrames(out)[0]?.entries).toEqual([cut]);
+      out.length = 0;
+      await conn.handleMessage(JSON.stringify({ type: "activity.text", id: "t_1", sessionId: session.id, cut: cut.cut }));
+      expect(out).toEqual([{ type: "activity.text", id: "t_1", sessionId: session.id, cut: cut.cut, text: whole }]);
     }
+  });
+
+  it("answers activity.text for a text the store let go with an error that carries the request's id", async () => {
+    const { conn, out } = connect();
+    await conn.handleMessage(helloFrom("ios", "1.0.100"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "activity.text", id: "t_1", sessionId: session.id, cut: "c0ffee" }));
+    expect(out).toEqual([{ type: "error", code: "bad_frame", message: "this daemon no longer has that text", ref: "activity.text", id: "t_1" }]);
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "activity.text", id: "t_2", sessionId: "gr-zzz", cut: "c1" }));
+    expect(out[0]).toMatchObject({ type: "error", code: "unknown_session", ref: "activity.text", id: "t_2" });
+  });
+
+  it("cuts a whole text over the reply's cap, with an ellipsis", async () => {
+    const { conn, activity, out } = connect();
+    activity.wholes.set(`${session.id}/c1`, "y".repeat(ACTIVITY_FULL_TEXT_MAX + 5));
+    await conn.handleMessage(helloFrom("ios", "1.0.100"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "activity.text", id: "t_1", sessionId: session.id, cut: "c1" }));
+    const text = (out[0] as { text: string }).text;
+    expect(text).toHaveLength(ACTIVITY_FULL_TEXT_MAX);
+    expect(text.endsWith("…")).toBe(true);
   });
 
   it("sends the full activity of a Claude session on subscribe, then forwards new entries", async () => {
@@ -828,7 +858,7 @@ describe("Connection: conversations", () => {
 
   it("keeps a preview's newest entries that fit in a frame", async () => {
     const at = "2026-10-02T14:14:10.000Z";
-    const long = Array.from({ length: 60 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
+    const long = Array.from({ length: 300 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
     const port: ConversationsPort = { ...withConversations().port, async preview() { return long; } };
     const { conn, out } = connect({ conversations: port });
     await conn.handleMessage(hello());
@@ -836,9 +866,22 @@ describe("Connection: conversations", () => {
     await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
     const entries = (out[0] as { entries: ActivityEntry[] }).entries;
     expect(entries.length).toBeGreaterThan(0);
-    expect(entries.length).toBeLessThan(60);
+    expect(entries.length).toBeLessThan(300);
     expect(entries).toEqual(long.slice(-entries.length));
     expect(new TextEncoder().encode(JSON.stringify(entries)).length).toBeLessThanOrEqual(ACTIVITY_FRAME_MAX_BYTES);
+  });
+
+  it("cuts a preview's long text at 4000 without a cut id: a past conversation's whole text cannot be asked for", async () => {
+    const at = "2026-10-02T14:14:10.000Z";
+    const port: ConversationsPort = { ...withConversations().port, async preview() { return [{ kind: "said" as const, text: "y".repeat(6000), at }]; } };
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
+    const entry = (out[0] as { entries: ActivityEntry[] }).entries[0]!;
+    expect(entry.text).toHaveLength(ACTIVITY_TEXT_MAX);
+    expect(entry.text.endsWith("…")).toBe(true);
+    expect(entry.cut).toBeUndefined();
   });
 
   it("leaves stopped out of a preview for an app from before it", async () => {

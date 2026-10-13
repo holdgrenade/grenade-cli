@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVITY_KEEP, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
-import { ActivityStore } from "../src/activity/activityStore.js";
+import { ACTIVITY_KEEP, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
+import { ActivityStore, WHOLE_TEXTS_KEEP } from "../src/activity/activityStore.js";
 
 const at = "2026-09-30T14:02:10.000Z";
 const asked = (text: string, when = at): ActivityEntry => ({ kind: "asked", text, at: when });
@@ -161,6 +161,61 @@ describe("prompts that are pasted or sent while the agent works", () => {
     expect(shown(frames)).toEqual(["said:History.", "asked:one", "asked:two"]);
     s.append("gr-a", [asked("two"), said("Done.")]);
     expect(shown(frames)).toEqual(["said:History.", "asked:one", "asked:two", "said:Done."]);
+  });
+});
+
+describe("a cut entry", () => {
+  const whole = "y".repeat(6000);
+  it("cuts a long reply as it comes in and keeps the whole text under the entry's cut id", () => {
+    const { s, frames } = store();
+    s.append("gr-a", [asked("go"), said(whole)]);
+    const [, entry] = s.entriesOf("gr-a");
+    expect(entry?.text).toHaveLength(ACTIVITY_TEXT_MAX);
+    expect(entry?.text.endsWith("…")).toBe(true);
+    expect(entry?.cut).toMatch(/^[0-9a-f]{12}$/);
+    expect(s.wholeText("gr-a", entry!.cut!)).toBe(whole);
+    expect(s.wholeText("gr-a", "nope")).toBeNull();
+    expect(s.wholeText("gr-b", entry!.cut!)).toBeNull();
+    expect(frames.at(-1)!.entries[1]).toEqual(entry);
+    expect(s.entriesOf("gr-a")[0]?.cut).toBeUndefined();
+  });
+
+  it("cuts a long hook prompt the same way, so the transcript's copy is still known as the same", () => {
+    const { s, frames } = store();
+    s.noteAsked("gr-a", whole, at);
+    const hook = s.entriesOf("gr-a")[0]!;
+    expect(hook.text).toHaveLength(ACTIVITY_TEXT_MAX);
+    expect(s.wholeText("gr-a", hook.cut!)).toBe(whole);
+    s.append("gr-a", [asked(whole), said("On it.")]);
+    expect(s.entriesOf("gr-a")).toEqual([hook, said("On it.")]);
+    expect(frames.at(-1)!.entries).toEqual([said("On it.")]);
+  });
+
+  it("cuts a long error, and what replace brings", () => {
+    const { s } = store();
+    s.noteErrored("gr-a", whole, at);
+    const errored = s.entriesOf("gr-a")[0]!;
+    expect(errored.kind).toBe("errored");
+    expect(errored.text).toHaveLength(ACTIVITY_TEXT_MAX);
+    expect(s.wholeText("gr-a", errored.cut!)).toBe(whole);
+    s.replace("gr-b", [said(whole)]);
+    const replaced = s.entriesOf("gr-b")[0]!;
+    expect(replaced.text).toHaveLength(ACTIVITY_TEXT_MAX);
+    expect(s.wholeText("gr-b", replaced.cut!)).toBe(whole);
+  });
+
+  it("keeps the newest 64 whole texts of a session, and none of a forgotten one", () => {
+    const { s } = store();
+    const ids: string[] = [];
+    for (let i = 0; i < WHOLE_TEXTS_KEEP + 1; i++) {
+      s.append("gr-a", [said(`${i}:${whole}`)]);
+      ids.push(s.entriesOf("gr-a").at(-1)!.cut!);
+    }
+    expect(s.wholeText("gr-a", ids[0]!)).toBeNull();
+    expect(s.wholeText("gr-a", ids[1]!)).toBe(`1:${whole}`);
+    expect(s.wholeText("gr-a", ids.at(-1)!)).toBe(`${WHOLE_TEXTS_KEEP}:${whole}`);
+    s.forget("gr-a");
+    expect(s.wholeText("gr-a", ids.at(-1)!)).toBeNull();
   });
 });
 

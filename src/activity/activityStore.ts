@@ -1,9 +1,11 @@
 /**
  * The activity of every session (PROTOCOL.md "Activity"): what the agent said and was asked, the last 200 entries
- * each, and the `activity` frames that carry new ones to subscribed phones.
+ * each, the whole text of each entry that was cut at `ACTIVITY_TEXT_MAX` (under its `cut` id, for `activity.text`),
+ * and the `activity` frames that carry new ones to subscribed phones.
  */
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { ACTIVITY_KEEP, STOPPED_TEXT, activityText, typedPromptText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
+import { ACTIVITY_KEEP, STOPPED_TEXT, cutEntry, typedPromptText, type ActivityEntry, type ActivityFrame } from "@grenade/protocol";
 
 /**
  * How many hook prompts may wait for the transcript's copy at once: prompts sent while the agent works each wait
@@ -13,6 +15,9 @@ export const PENDING_KEEP = 8;
 
 /** The `text` of an `errored` entry when no message is available. */
 export const ERRORED_TEXT = "An error occurred.";
+
+/** How many cut entries' whole texts a session keeps, newest first (PROTOCOL.md "Activity"): a few MB at most. */
+export const WHOLE_TEXTS_KEEP = 64;
 
 export interface ActivityEvents {
   /** New entries of one session, in order; or, with `full`, everything held, when the order the phone has is wrong. */
@@ -29,6 +34,8 @@ interface Track {
   pending: ActivityEntry[];
   /** A `stopped` entry put in from the screen (`noteStopped`): the transcript's own, if it comes, is not sent again. */
   pendingStop: ActivityEntry | null;
+  /** The whole text of each cut entry under its `cut` id, oldest first; the newest `WHOLE_TEXTS_KEEP` only. */
+  wholes: Map<string, string>;
 }
 
 export class ActivityStore extends EventEmitter<ActivityEvents> {
@@ -39,10 +46,16 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     return this.tracks.get(id)?.entries ?? [];
   }
 
-  /** The entries the transcript yielded since the last read, in order. */
+  /** The whole text of the session's cut entry with that `cut` id, or null when the store no longer has it. */
+  wholeText(id: string, cut: string): string | null {
+    return this.tracks.get(id)?.wholes.get(cut) ?? null;
+  }
+
+  /** The entries the transcript yielded since the last read, in order, each text whole: cut here and kept. */
   append(id: string, entries: ActivityEntry[]): void {
     if (entries.length === 0) return;
     const t = this.track(id);
+    entries = entries.map((e) => this.cut(t, e));
     if (t.pendingStop) {
       t.pendingStop = null;
       const copy = entries.findIndex((e) => e.kind === "stopped");
@@ -78,6 +91,7 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
    */
   replace(id: string, entries: ActivityEntry[]): void {
     const t = this.track(id);
+    entries = entries.map((e) => this.cut(t, e));
     takeCopies(t, entries);
     t.pendingStop = null;
     t.entries = [...entries, ...t.pending].slice(-ACTIVITY_KEEP);
@@ -90,8 +104,8 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
     const text = typedPromptText(prompt);
     // A slash command, or something Claude Code wrote for the agent, is not the user talking.
     if (!text || text.startsWith("/")) return;
-    const entry: ActivityEntry = { kind: "asked", text: activityText(text), at };
     const t = this.track(id);
+    const entry = this.cut(t, { kind: "asked", text, at });
     // The same hook from two places (the launch flags and an older copy in settings.json) is one prompt.
     const last = t.entries.at(-1);
     if (last && t.pending.includes(last) && last.text === entry.text) return;
@@ -115,10 +129,9 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
 
   /** The agent stopped with an error: shown at once as an `errored` card. */
   noteErrored(id: string, message: string, at: string): void {
-    const text = activityText(message.trim() || ERRORED_TEXT);
-    const entry: ActivityEntry = { kind: "errored", text, at };
     const t = this.track(id);
     if (t.entries.at(-1)?.kind === "errored") return;
+    const entry = this.cut(t, { kind: "errored", text: message.trim() || ERRORED_TEXT, at });
     t.entries = [...t.entries, entry].slice(-ACTIVITY_KEEP);
     this.emit("activity", { type: "activity", sessionId: id, entries: [entry] });
   }
@@ -156,10 +169,23 @@ export class ActivityStore extends EventEmitter<ActivityEvents> {
   private track(id: string): Track {
     let t = this.tracks.get(id);
     if (!t) {
-      t = { entries: [], pending: [], pendingStop: null };
+      t = { entries: [], pending: [], pendingStop: null, wholes: new Map() };
       this.tracks.set(id, t);
     }
     return t;
+  }
+
+  /**
+   * An entry as it is sent (the protocol's `cutEntry`): a text over `ACTIVITY_TEXT_MAX` is cut and its whole kept
+   * under a fresh `cut` id, the oldest whole text going once the session has more than `WHOLE_TEXTS_KEEP`.
+   */
+  private cut(t: Track, entry: ActivityEntry): ActivityEntry {
+    return cutEntry(entry, () => {
+      const id = randomBytes(6).toString("hex");
+      t.wholes.set(id, entry.text);
+      while (t.wholes.size > WHOLE_TEXTS_KEEP) t.wholes.delete(t.wholes.keys().next().value!);
+      return id;
+    });
   }
 }
 
