@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ActivityEntry, DaemonFrame, Session } from "@grenade/protocol";
+import { ACTIVITY_FRAME_MAX_BYTES, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame, type DaemonFrame, type Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { BrowserBridge } from "../src/browser/browserBridge.js";
 import { type PlansPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort } from "../src/daemon/wsHandler.js";
@@ -658,6 +658,46 @@ describe("Connection: encryption and unpairing", () => {
 });
 
 describe("Connection activity", () => {
+  const helloFrom = (platform: string, version: string) =>
+    JSON.stringify({ type: "hello", protocol: 1, token: "grt_example_token", client: { name: "Phone", platform, version } });
+  const activityFrames = (out: DaemonFrame[]) => out.filter((f): f is ActivityFrame => f.type === "activity");
+  const bytes = (f: unknown) => new TextEncoder().encode(JSON.stringify(f)).length;
+
+  it("splits a large activity frame under the frame cap: the first part with full on subscribe, every part appended after", async () => {
+    const { conn, activity, out } = connect();
+    const at = "2026-09-30T14:02:14.000Z";
+    const long = Array.from({ length: 60 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
+    activity.entries.set(session.id, long);
+    await conn.handleMessage(helloFrom("ios", "1.0.100"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.subscribe.json"));
+    const parts = activityFrames(out);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[0]?.full).toBe(true);
+    expect(parts.slice(1).every((f) => f.full === undefined)).toBe(true);
+    expect(parts.flatMap((f) => f.entries)).toEqual(long);
+    for (const f of parts) expect(bytes(f)).toBeLessThanOrEqual(ACTIVITY_FRAME_MAX_BYTES);
+    out.length = 0;
+    activity.emit("activity", { type: "activity", sessionId: session.id, entries: long });
+    const appended = activityFrames(out);
+    expect(appended.length).toBeGreaterThan(1);
+    expect(appended.every((f) => f.full === undefined)).toBe(true);
+    expect(appended.flatMap((f) => f.entries)).toEqual(long);
+  });
+
+  it("sends a long text whole to the apps, and cut at 4000 to a Chrome extension from before it read one", async () => {
+    const at = "2026-09-30T14:02:14.000Z";
+    const long = { kind: "said" as const, text: "y".repeat(6000), at };
+    for (const [platform, version, length] of [["ios", "1.0.100", 6000], ["chrome", "0.6.4", 4000], ["chrome", "0.7.0", 6000]] as const) {
+      const { conn, activity, out } = connect();
+      activity.entries.set(session.id, [long]);
+      await conn.handleMessage(helloFrom(platform, version));
+      out.length = 0;
+      await conn.handleMessage(fixture("client.subscribe.json"));
+      expect(activityFrames(out)[0]?.entries[0]?.text).toHaveLength(length);
+    }
+  });
+
   it("sends the full activity of a Claude session on subscribe, then forwards new entries", async () => {
     const { conn, activity, out } = connect();
     await conn.handleMessage(fixture("client.hello.json"));
@@ -784,6 +824,21 @@ describe("Connection: conversations", () => {
     await conn.handleMessage(JSON.stringify({ type: "conversation.archive", conversationId: glass.id, archived: true }));
     expect(calls).toEqual([]);
     expect(out).toEqual([{ type: "conversations", conversations: [glass] }]);
+  });
+
+  it("keeps a preview's newest entries that fit in a frame", async () => {
+    const at = "2026-10-02T14:14:10.000Z";
+    const long = Array.from({ length: 60 }, (_, i) => ({ kind: "said" as const, text: `${i}:${"y".repeat(ACTIVITY_TEXT_MAX - 4)}`, at }));
+    const port: ConversationsPort = { ...withConversations().port, async preview() { return long; } };
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "conversation.preview", conversationId: glass.id }));
+    const entries = (out[0] as { entries: ActivityEntry[] }).entries;
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThan(60);
+    expect(entries).toEqual(long.slice(-entries.length));
+    expect(new TextEncoder().encode(JSON.stringify(entries)).length).toBeLessThanOrEqual(ACTIVITY_FRAME_MAX_BYTES);
   });
 
   it("leaves stopped out of a preview for an app from before it", async () => {

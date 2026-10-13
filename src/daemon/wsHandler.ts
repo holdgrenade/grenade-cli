@@ -5,7 +5,7 @@
 import { computerWord } from "../platform/computer.js";
 import { listFolders } from "../folders/listFolders.js";
 import { agentInfo } from "../agents/agentCatalog.js";
-import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type BrowserCommandFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
+import { ATTACHMENT_MAX_BYTES, type ActivityEntry, type ActivityFrame, activityFor, activityFrames, CLOSE_UNAUTHORIZED, type ClientFrame, type ClientInfo, type Conversation, type DaemonFrame, type DaemonInfo, type ErrorCode, type GroupsFrame, type KeyName, newestWithin, PROTOCOL_VERSION, type PromptClosedFrame, type PromptDecision, type PromptFrame, type PushRegisterFrame, type PushStateFrame, type BoardRegisterFrame, type BoardStateFrame, type BrowserCommandFrame, type Session, parseClientFrame, sessionFor } from "@grenade/protocol";
 import type { HistoryFrame, ScreenFrame } from "../frames.js";
 import type { Logger } from "../log.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
@@ -356,8 +356,13 @@ export class Connection {
   private readonly onActivity = (f: ActivityFrame) => {
     if (!this.subscriptions.has(f.sessionId)) return;
     const entries = this.entriesFor(f.entries);
-    if (entries.length > 0 || f.full) this.send({ ...f, entries });
+    if (entries.length > 0 || f.full) this.sendActivity({ ...f, entries });
   };
+
+  /** An `activity` frame, in as many frames as keep each under `ACTIVITY_FRAME_MAX_BYTES` (PROTOCOL.md "Activity"). */
+  private sendActivity(frame: ActivityFrame): void {
+    for (const part of activityFrames(frame)) this.send(part);
+  }
 
   private readonly sentInputs: SentInputs;
 
@@ -522,7 +527,7 @@ export class Connection {
         if (cached) this.send(cached);
         // Agents with a transcript to read say `activity` (PROTOCOL.md "Agents"); the phone hides the plain view for the rest.
         if (this.d.activity && agentInfo(r.get(frame.sessionId)?.agent ?? "")?.activity) {
-          this.send({ type: "activity", sessionId: frame.sessionId, entries: this.entriesFor(this.d.activity.entriesOf(frame.sessionId)), full: true });
+          this.sendActivity({ type: "activity", sessionId: frame.sessionId, entries: this.entriesFor(this.d.activity.entriesOf(frame.sessionId)), full: true });
         }
         return;
       }
@@ -582,7 +587,7 @@ export class Connection {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         const entries = await this.d.conversations.preview(frame.conversationId);
         if (!entries) return this.fail("bad_frame", `no conversation ${frame.conversationId} on this ${computerWord()}`, frame.type);
-        return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: this.entriesFor(entries) });
+        return this.send({ type: "conversation.preview", conversationId: frame.conversationId, entries: newestWithin(this.entriesFor(entries)) });
       }
       case "conversation.delete": {
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);

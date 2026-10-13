@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "@grenade/protocol";
 import { asksTrust, hasPromptBox, readiness, TRUST_NOTE, ENDED_NOTE, DIALOG_NOTE } from "../src/talk/agentReady.js";
 import { agentForNewSession, checkNewSession, knownProjects, matchProject, projectNames, sessionNameFor } from "../src/talk/talkProjects.js";
-import { clipped, handleOf, recentEntries, resolveSession, sendable, sessionRow, MAX_SEND_CHARACTERS } from "../src/talk/talkSessions.js";
+import { clipped, handleOf, lastWords, recentEntries, resolveSession, sendable, sessionRow, MAX_SEND_CHARACTERS } from "../src/talk/talkSessions.js";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id,
@@ -105,5 +105,14 @@ describe("agentReady", () => {
     expect(readiness("codex", hooks, true)).toEqual({ hold: DIALOG_NOTE });
     expect(readiness("codex", ["╭──────╮", "│ >_ OpenAI Codex │", "", "› Ask Codex to do anything", "", "  ? for shortcuts"], true)).toBe("send");
     expect(readiness("codex", ["Starting…"], true)).toBe("wait");
+  });
+});
+
+describe("lastWords", () => {
+  it("is what the session last said or was asked, clipped as an entry is", () => {
+    const at = "2026-10-05T10:00:00.000Z";
+    expect(lastWords([{ kind: "asked", text: "Fix it", at }, { kind: "stopped", text: "Stopped", at }])).toBe("Fix it");
+    expect(lastWords([{ kind: "said", text: "y".repeat(20_000), at }])).toBe(clipped("y".repeat(20_000)));
+    expect(lastWords([])).toBeUndefined();
   });
 });

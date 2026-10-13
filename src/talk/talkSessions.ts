@@ -76,11 +76,11 @@ export function recentEntries(entries: readonly ActivityEntry[], count: number |
     .map((e) => ({ who: e.kind === "asked" ? "owner" : "agent", seconds_ago: Math.max(0, Math.round((now - Date.parse(e.at)) / 1000)), text: clipped(e.text) }));
 }
 
-/** What a session last said or was asked: what routing may weigh, never read for it. */
+/** What a session last said or was asked, clipped as an entry is: what routing may weigh, never read for it. */
 export function lastWords(entries: readonly ActivityEntry[]): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.kind === "said" || e.kind === "asked") return e.text;
+    if (e.kind === "said" || e.kind === "asked") return clipped(e.text);
   }
   return undefined;
 }
