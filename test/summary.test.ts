@@ -6,7 +6,7 @@ import { claudeSummaryArgs } from "../src/summary/claudeCli.js";
 import { Summarizer } from "../src/summary/summarizer.js";
 import { SUMMARY_MAX, buildSummaryInput, parseSummaryReply } from "../src/summary/summaryPrompt.js";
 import { aiTitleIn, clipTitle } from "../src/transcript/aiTitle.js";
-import { summaryDelay } from "../src/summary/summaryTiming.js";
+import { failurePause, summaryDelay } from "../src/summary/summaryTiming.js";
 
 describe("buildSummaryInput", () => {
   it("keeps the last three prompts on one line each and the tail of the screen", () => {
@@ -92,6 +92,17 @@ describe("summaryDelay", () => {
   it("waits out the minimum gap after the last run", () => {
     expect(summaryDelay(10_000, 0, 0, 60_000)).toBe(50_000);
     expect(summaryDelay(70_000, 0, 0, 60_000)).toBe(0);
+  });
+});
+
+describe("failurePause", () => {
+  it("doubles from two minutes up to thirty", () => {
+    expect(failurePause(0)).toBe(0);
+    expect(failurePause(1)).toBe(120_000);
+    expect(failurePause(2)).toBe(240_000);
+    expect(failurePause(4)).toBe(960_000);
+    expect(failurePause(5)).toBe(1_800_000);
+    expect(failurePause(50)).toBe(1_800_000);
   });
 });
 
@@ -222,7 +233,7 @@ describe("Summarizer", () => {
     expect(s.inputs[0]).toContain("- add a summary to the list rows");
   });
 
-  it("does not run for removed or gone sessions, and retries after a failure", async () => {
+  it("does not run for removed or gone sessions, and retries after a failure once the pause is over", async () => {
     let fail = true;
     const s = setup(async () => {
       if (fail) throw new Error("no login");
@@ -234,6 +245,8 @@ describe("Summarizer", () => {
     fail = false;
     s.update({ status: "working" });
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(s.inputs).toHaveLength(1); // the two-minute pause after a failure, not the minute's gap
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(s.summaries).toEqual(["Back again."]);
 
     s.update({ status: "gone" });
@@ -241,5 +254,30 @@ describe("Summarizer", () => {
     s.remove();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(s.inputs).toHaveLength(2);
+  });
+
+  it("pauses longer with each failure in a row, and not at all after a success", async () => {
+    let fail = true;
+    const s = setup(async () => {
+      if (fail) throw new Error("offline");
+      return "Up again.";
+    });
+    s.update({ status: "waiting" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.inputs).toHaveLength(1); // fails: a two-minute pause
+    s.update({ status: "working" });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(s.inputs).toHaveLength(2); // fails again: four minutes now
+    s.update({ status: "waiting" });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(s.inputs).toHaveLength(2);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(s.inputs).toHaveLength(3);
+    expect(s.summaries).toEqual(["Up again."]);
+    s.setLines(["$ npm run build"]);
+    s.update({ status: "working" });
+    await vi.advanceTimersByTimeAsync(60_000); // only the minute's gap after a success
+    expect(s.inputs).toHaveLength(4);
   });
 });

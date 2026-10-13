@@ -3,13 +3,14 @@
  * short delay, so the screen shows the task), a session starts waiting, and a new user prompt. A Claude Code or Codex
  * session nobody has prompted yet is left alone: its screen is only the agent's welcome, and a guess from it misleads.
  * At most one run per session per minute, one run at a time overall, and none when nothing the
- * model would see has changed since the last run.
+ * model would see has changed since the last run. After a failed run every session waits (`failurePause`), longer
+ * with each failure in a row, so a `claude` that cannot reach the network is not started and killed once a minute.
  */
 import { createHash } from "node:crypto";
 import type { Session } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { buildSummaryInput, parseSummaryReply } from "./summaryPrompt.js";
-import { SUMMARY_WORKING_DELAY_MS, summaryDelay } from "./summaryTiming.js";
+import { SUMMARY_WORKING_DELAY_MS, failurePause, summaryDelay } from "./summaryTiming.js";
 
 const PROMPTS_KEPT = 3;
 
@@ -51,6 +52,8 @@ export class Summarizer {
   private queue: Promise<void> = Promise.resolve();
   private stopped = false;
   private failures = 0;
+  /** No summary starts before this time (after a failed run). */
+  private pausedUntil = 0;
 
   constructor(opts: SummarizerOptions) {
     this.registry = opts.registry;
@@ -111,7 +114,7 @@ export class Summarizer {
   private schedule(id: string, wantDelayMs: number): void {
     const t = this.track(id);
     if (this.stopped || t.timer !== undefined) return;
-    const delay = summaryDelay(this.now(), wantDelayMs, t.lastRunAt);
+    const delay = Math.max(summaryDelay(this.now(), wantDelayMs, t.lastRunAt), this.pausedUntil - this.now());
     t.timer = setTimeout(() => {
       t.timer = undefined;
       this.queue = this.queue.then(() => this.summarize(id));
@@ -143,9 +146,12 @@ export class Summarizer {
       this.log.debug("Summarized session", { session: id, title, summary });
     } catch (e) {
       t.lastInputHash = undefined; // let the next trigger try the same input again
+      this.failures += 1;
+      const pauseMs = failurePause(this.failures);
+      this.pausedUntil = this.now() + pauseMs;
       // Log the first failure in a row as a warning so a broken `claude` is visible, the rest quietly.
-      if (this.failures++ === 0) this.log.warn("Could not summarize a session with claude -p", { session: id, error: e });
-      else this.log.debug("Summary failed again", { session: id, error: e });
+      if (this.failures === 1) this.log.warn("Could not summarize a session with claude -p", { session: id, error: e, nextTryInMs: pauseMs });
+      else this.log.debug("Summary failed again", { session: id, error: e, nextTryInMs: pauseMs });
     }
   }
 }
