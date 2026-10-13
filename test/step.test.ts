@@ -133,3 +133,34 @@ describe("Session.turn", () => {
     expect(registry.get("gr-api")?.turn).toBeUndefined();
   });
 });
+
+describe("Session.edited from git", () => {
+  const changes = (files: number) => ({ branch: "main", ahead: 0, behind: 0, commits: 0, files, added: files, removed: 0 });
+
+  it("a turn whose folder's work moved wrote files, whatever wrote them", async () => {
+    const { registry } = await make();
+    registry.setChanges("gr-api", changes(1));
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "UserPromptSubmit", prompt: "rename it" }), silentLogger);
+    registry.setChanges("gr-api", changes(1));
+    expect(registry.get("gr-api")?.edited).toBeUndefined();
+    // A sed in a Bash tool: no Write hook, but git sees a second file.
+    registry.setChanges("gr-api", changes(2));
+    expect(registry.get("gr-api")?.edited).toBe(true);
+    // The next prompt counts from there.
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "UserPromptSubmit", prompt: "what changed?" }), silentLogger);
+    expect(registry.get("gr-api")?.edited).toBeUndefined();
+  });
+
+  it("not once the turn is long over", async () => {
+    let clock = start;
+    const registry = new SessionRegistry({ tmux: fakeTmux(), log: silentLogger, home: "/Users/me", isDirectory: () => true, now: () => clock });
+    await registry.create({ name: "api", cwd: "~/app", agent: "claude" });
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "UserPromptSubmit", prompt: "look" }), silentLogger);
+    clock += 1000;
+    handleClaudeHook(registry, "gr-api", hook({ hook_event_name: "Stop" }), silentLogger);
+    // A minute later, an edit in the folder (someone else's) is not this turn's.
+    clock += 60_000;
+    registry.setChanges("gr-api", changes(3));
+    expect(registry.get("gr-api")?.edited).toBeUndefined();
+  });
+});

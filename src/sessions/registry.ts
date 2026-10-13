@@ -38,8 +38,21 @@ export interface RegistryEvents {
   captured: [sessionId: string, agent: AgentKind, lines: string[]];
 }
 
+/** How long after a turn ends a read of its folder still counts as the turn's (the read after a `Stop` comes 0.5 s later). */
+const TURN_READ_GRACE_MS = 5_000;
+
+/** What git says of a folder's work, as one string: files and lines not committed, commits made, commits not pushed. */
+function changeSignature(c: SessionChanges | undefined): string {
+  return c ? `${c.files}|${c.added}|${c.removed}|${c.commits}|${c.ahead}` : "none";
+}
+
 interface Record_ {
   session: Session;
+  /**
+   * The folder's git summary when the turn began (`changeSignature`), for `edited`: work done by any tool (a script, a
+   * shell command, a commit) moves it. Undefined until a turn begins or the first read in one.
+   */
+  editBase?: string | undefined;
   state: StatusState;
   screen: Screen | null;
   hash: string;
@@ -601,7 +614,10 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
    */
   noteEdited(id: string, edited: boolean): void {
     const r = this.records.get(id);
-    if (!r || (r.session.edited === true) === edited) return;
+    if (!r) return;
+    // A new turn counts from where git stands now.
+    if (!edited) r.editBase = changeSignature(r.session.changes);
+    if ((r.session.edited === true) === edited) return;
     const { edited: _was, ...rest } = r.session;
     r.session = edited ? { ...rest, edited: true } : rest;
     this.emit("updated", r.session);
@@ -712,6 +728,12 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const { changes: _was, ...rest } = r.session;
     r.session = changes ? { ...rest, changes } : rest;
     this.emit("updated", r.session);
+    // The folder's work moved during the turn (or in the read just after it ended): the turn wrote files, whatever
+    // wrote them. A turn the daemon did not see begin counts from its first read.
+    const inTurn = r.session.status === "working" || this.now() - Date.parse(r.session.statusSince) <= TURN_READ_GRACE_MS;
+    if (!inTurn) return;
+    if (r.editBase === undefined) r.editBase = changeSignature(_was);
+    if (changeSignature(changes) !== r.editBase) this.noteEdited(id, true);
   }
 
   /** The commit the session's git history counts from (PROTOCOL.md "Changes"), once it was read. */
