@@ -164,7 +164,7 @@ describe("CanvasWork", () => {
     save("R1A · Today.html", "<title>Row numbers</title>");
     tick(60_000);
     set("gr-a", "working");
-    await new Promise((r) => setTimeout(r, 20));
+    await work.settled(); // the turn's start has read the canvas folder
     tick(5_000);
     const path = save("R2A · Day.html", "<title>Numbers that carry their day</title>");
     work.hook("gr-a", "PostToolUse", "Write", { file_path: path }, dir);
@@ -208,7 +208,7 @@ describe("CanvasWork", () => {
     add("gr-b");
     set("gr-a", "working");
     set("gr-b", "working");
-    await new Promise((r) => setTimeout(r, 20));
+    await work.settled(); // the turn's start has read the canvas folder
     tick(5_000);
     save("R1A · Script.html", "<title>By a script</title>");
     const path = save("R1B · Hooked.html", "<title>Hooked</title>");

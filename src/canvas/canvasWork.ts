@@ -134,8 +134,9 @@ export class CanvasWork {
     this.record.delete(id);
   }
 
-  /** Resolves once every turn that has ended is read and its entries are out. */
+  /** Resolves once every open turn's start is read, and every turn that has ended is read and its entries are out. */
   async settled(): Promise<void> {
+    await Promise.all([...this.turns.values()].map((t) => t.reading));
     while (this.ending.size > 0) await Promise.all([...this.ending]);
   }
 
