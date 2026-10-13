@@ -1,6 +1,7 @@
 /**
  * Keeps each session's one-sentence `summary` and its few-word `title` fresh. Triggers: a session starts working (after a
- * short delay, so the screen shows the task), a session starts waiting, and a new user prompt.
+ * short delay, so the screen shows the task), a session starts waiting, and a new user prompt. A Claude Code or Codex
+ * session nobody has prompted yet is left alone: its screen is only the agent's welcome, and a guess from it misleads.
  * At most one run per session per minute, one run at a time overall, and none when nothing the
  * model would see has changed since the last run.
  */
@@ -121,6 +122,7 @@ export class Summarizer {
     const t = this.tracks.get(id);
     const session = this.registry.get(id);
     if (this.stopped || !t || !session || session.status === "gone") return;
+    if (unprompted(session, t)) return;
     const input = buildSummaryInput({
       name: session.name,
       agent: session.agent,
@@ -146,4 +148,9 @@ export class Summarizer {
       else this.log.debug("Summary failed again", { session: id, error: e });
     }
   }
+}
+
+/** An agent session with no prompt seen and nothing written about it yet (a restored one keeps its summary). */
+function unprompted(session: Session, t: Track): boolean {
+  return session.agent !== "shell" && t.prompts.length === 0 && session.title === undefined && session.summary === undefined;
 }

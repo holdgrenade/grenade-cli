@@ -115,6 +115,7 @@ describe("Summarizer", () => {
     statusSince: "2026-09-27T12:00:00.000Z",
     lastLine: "",
     createdAt: "2026-09-27T12:00:00.000Z",
+    summary: "Running the tests.",
   };
 
   function setup(reply: () => Promise<string> = async () => "Fixing the tests.") {
@@ -197,6 +198,21 @@ describe("Summarizer", () => {
     s.update({ status: "waiting" });
     await vi.advanceTimersByTimeAsync(120_000);
     expect(s.inputs).toHaveLength(1);
+  });
+
+  it("waits for the first prompt in a new agent session, but not in a shell", async () => {
+    const s = setup();
+    s.update({ summary: undefined, status: "waiting" });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(s.inputs).toHaveLength(0);
+    s.summarizer.notePrompt("gr-a", "fix the login redirect");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(s.inputs).toHaveLength(1);
+
+    const shell = setup();
+    shell.update({ agent: "shell", summary: undefined, status: "waiting" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shell.inputs).toHaveLength(1);
   });
 
   it("includes prompts from hooks", async () => {
