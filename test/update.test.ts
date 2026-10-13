@@ -151,6 +151,8 @@ describe("versions", () => {
   it("knows the launchd agent by its job name", () => {
     expect(underLaunchd({ XPC_SERVICE_NAME: "com.adamchew.grenade.daemon" })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "com.adamchew.grenade.daemon.test" })).toBe(true);
+    expect(underLaunchd({ XPC_SERVICE_NAME: "com.holdgrenade.grenade.daemon" })).toBe(true);
+    expect(underLaunchd({ XPC_SERVICE_NAME: "com.holdgrenade.grenade.daemon.test" })).toBe(true);
     expect(underLaunchd({ XPC_SERVICE_NAME: "0" })).toBe(false);
     expect(underLaunchd({})).toBe(false);
   });

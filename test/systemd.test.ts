@@ -77,7 +77,7 @@ describe("which manager", () => {
   it("is launchd on a Mac and systemd on Linux, each with its own name for the service", () => {
     expect(serviceManager("darwin")).toBe("launchd");
     expect(serviceManager("linux")).toBe("systemd");
-    expect(defaultLabel("darwin")).toBe("com.adamchew.grenade.daemon");
+    expect(defaultLabel("darwin")).toBe("com.holdgrenade.grenade.daemon");
     expect(defaultLabel("linux")).toBe("grenade");
   });
 

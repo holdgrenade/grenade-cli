@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serviceLines } from "../src/cli/serviceCommand.js";
 import { parseLaunchctlPrint } from "../src/service/launchctlOutput.js";
-import { SERVICE_LABEL, domainTarget, plistPath, renderPlist, serviceTarget, stableProgram } from "../src/service/launchdPlist.js";
+import { LEGACY_SERVICE_LABEL, SERVICE_LABEL, domainTarget, plistPath, relabelPlist, renderPlist, serviceTarget, stableProgram } from "../src/service/launchdPlist.js";
 import { servicePath } from "../src/service/servicePath.js";
 
 const spec = {
@@ -17,7 +17,7 @@ describe("renderPlist", () => {
   const plist = renderPlist(spec);
 
   it("runs `grenade daemon` at login", () => {
-    expect(plist).toContain("<key>Label</key>\n\t<string>com.adamchew.grenade.daemon</string>");
+    expect(plist).toContain("<key>Label</key>\n\t<string>com.holdgrenade.grenade.daemon</string>");
     expect(plist).toContain("<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/opt/homebrew/bin/grenade</string>\n\t\t<string>daemon</string>\n\t</array>");
     expect(plist).toContain("<key>RunAtLoad</key>\n\t<true/>");
   });
@@ -60,11 +60,28 @@ describe("renderPlist", () => {
   });
 });
 
+describe("relabelPlist", () => {
+  it("moves an installed plist to the new label and keeps everything else", () => {
+    const old = renderPlist({ ...spec, label: LEGACY_SERVICE_LABEL });
+    expect(relabelPlist(old, LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBe(renderPlist(spec));
+  });
+
+  it("finds the Label in a plist whose keys are in another order", () => {
+    const sorted = "<dict>\n\t<key>KeepAlive</key>\n\t<true/>\n\t<key>Label</key>\n\t<string>com.adamchew.grenade.daemon</string>\n</dict>\n";
+    expect(relabelPlist(sorted, LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBe(sorted.replace("com.adamchew.grenade.daemon", "com.holdgrenade.grenade.daemon"));
+  });
+
+  it("leaves a plist with another label alone", () => {
+    expect(relabelPlist(renderPlist({ ...spec, label: `${LEGACY_SERVICE_LABEL}.test` }), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBeNull();
+    expect(relabelPlist(renderPlist({ ...spec, label: "comXadamchew.grenade.daemon" }), LEGACY_SERVICE_LABEL, SERVICE_LABEL)).toBeNull();
+  });
+});
+
 describe("where the agent lives", () => {
   it("is a file in the user's LaunchAgents, in the login session's domain", () => {
-    expect(plistPath("/Users/adam")).toBe("/Users/adam/Library/LaunchAgents/com.adamchew.grenade.daemon.plist");
+    expect(plistPath("/Users/adam")).toBe("/Users/adam/Library/LaunchAgents/com.holdgrenade.grenade.daemon.plist");
     expect(domainTarget(501)).toBe("gui/501");
-    expect(serviceTarget(501)).toBe("gui/501/com.adamchew.grenade.daemon");
+    expect(serviceTarget(501)).toBe("gui/501/com.holdgrenade.grenade.daemon");
     expect(serviceTarget(501, "test.label")).toBe("gui/501/test.label");
   });
 });
@@ -96,9 +113,9 @@ describe("stableProgram", () => {
 
 describe("parseLaunchctlPrint", () => {
   const running = [
-    "gui/501/com.adamchew.grenade.daemon = {",
+    "gui/501/com.holdgrenade.grenade.daemon = {",
     "\tactive count = 1",
-    "\tpath = /Users/adam/Library/LaunchAgents/com.adamchew.grenade.daemon.plist",
+    "\tpath = /Users/adam/Library/LaunchAgents/com.holdgrenade.grenade.daemon.plist",
     "\tstate = running",
     "\tprogram = /opt/homebrew/bin/grenade",
     "\tpid = 4321",

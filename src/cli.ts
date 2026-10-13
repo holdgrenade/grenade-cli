@@ -22,6 +22,7 @@ import { registerUpdateCommand } from "./cli/updateCommand.js";
 import { registerAppCommand } from "./cli/appCommand.js";
 import { registerTerminalCommand } from "./cli/terminalCommand.js";
 import { RESTART_EXIT_CODE, underService } from "./update/underService.js";
+import { moveLegacyAgent } from "./service/legacyAgent.js";
 import { updateLine, updateNotice, type UpdateStatus } from "./update/versions.js";
 import { startDaemon } from "./daemon/server.js";
 import { isTerminalKind, type TerminalKind } from "./terminal/mirror.js";
@@ -53,6 +54,8 @@ program
   .option("--no-relay", "do not connect to the relay, even when `grenade relay on` was run")
   .option("--allow-plain-lan", "accept phones that have not been updated to encrypt the Wi‑Fi connection")
   .action(async (o: { port: number; name?: string; advertise: boolean; terminal?: TerminalKind; summaries: boolean; relay: boolean; allowPlainLan?: boolean }) => {
+    // An agent still under the old label hands over to one under the new label before it takes the ports.
+    if (await moveLegacyAgent()) return process.exit(0);
     // As the service, an exit with a failure code brings the daemon back (launchd's KeepAlive, systemd's Restart=), now running what is on disk.
     const restart = underService() ? (installed: string) => void d.stop().then(() => process.exit(RESTART_EXIT_CODE)) : undefined;
     const d = await startDaemon({

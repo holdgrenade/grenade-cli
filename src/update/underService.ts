@@ -2,15 +2,19 @@
  * Is this process the service of `grenade service install`, which its manager starts again when it exits with a
  * failure code? Only then can the daemon restart itself into a new version. Pure.
  */
-import { SERVICE_LABEL } from "../service/launchdPlist.js";
+import { LEGACY_SERVICE_LABEL, SERVICE_LABEL } from "../service/launchdPlist.js";
 import { SERVICE_MARKER } from "../service/systemdUnit.js";
 
 /** What the daemon exits with to be restarted into a new version: any failure code makes launchd or systemd start it again. */
 export const RESTART_EXIT_CODE = 75;
 
-/** launchd names its jobs in XPC_SERVICE_NAME. `startsWith`, so a test agent (`com.adamchew.grenade.daemon.test`) counts too. Terminals set other names, or "0". */
+/**
+ * launchd names its jobs in XPC_SERVICE_NAME. `startsWith`, so a test agent (`com.holdgrenade.grenade.daemon.test`)
+ * counts too, and so does an agent that has not yet moved off the old label. Terminals set other names, or "0".
+ */
 export function underLaunchd(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env["XPC_SERVICE_NAME"] ?? "").startsWith(SERVICE_LABEL);
+  const name = env["XPC_SERVICE_NAME"] ?? "";
+  return name.startsWith(SERVICE_LABEL) || name.startsWith(LEGACY_SERVICE_LABEL);
 }
 
 /**

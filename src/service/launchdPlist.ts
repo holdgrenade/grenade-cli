@@ -4,7 +4,13 @@
  */
 import { join } from "node:path";
 
-export const SERVICE_LABEL = "com.adamchew.grenade.daemon";
+export const SERVICE_LABEL = "com.holdgrenade.grenade.daemon";
+/**
+ * The agent's label before CLI 1.0.111. An agent still installed under it moves itself to SERVICE_LABEL when it starts
+ * (`legacyAgent.ts`), and `grenade service` and `update` find it until then. Remove it, and every use, once no install
+ * older than that is left.
+ */
+export const LEGACY_SERVICE_LABEL = "com.adamchew.grenade.daemon";
 /** launchd waits this long before it starts a job that just exited. */
 export const RESTART_DELAY_S = 10;
 
@@ -89,6 +95,15 @@ export function renderPlist(s: ServiceSpec): string {
 export function stableProgram(resolved: string): string {
   const cellar = resolved.match(/^(.*)\/Cellar\/([^/]+)\/[^/]+\//);
   return cellar ? `${cellar[1]}/bin/${cellar[2]}` : resolved;
+}
+
+/**
+ * An installed plist with its Label changed, everything else (PATH, environment, arguments) as it was installed. Null
+ * when its Label is not `from`. Older CLIs wrote the keys in another order, so the Label is found wherever it is.
+ */
+export function relabelPlist(text: string, from: string, to: string): string | null {
+  const label = new RegExp(`(<key>Label</key>\\s*<string>)${from.replace(/\./g, "\\.")}(</string>)`);
+  return label.test(text) ? text.replace(label, `$1${xml(to)}$2`) : null;
 }
 
 function xml(s: string): string {

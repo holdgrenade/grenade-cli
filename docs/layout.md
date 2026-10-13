@@ -17,9 +17,10 @@ src/pairing/pairingWatch.ts pure: what became of the last pair code (none, waiti
 src/pairing/pausedLines.ts pure: what `grenade pair` prints while pairing is paused (`pausedLines`, `remainingWords`)
 src/service/service.ts     `grenade service` on whichever system this is: launchd on a Mac, systemd on Linux; `defaultLabel`, `serviceManager`. `serviceTypes.ts` holds `ServiceOptions` and `ServiceStatus` (`file`, `manager`)
 src/service/servicePath.ts pure: the PATH the service runs with (the login shell's, then the usual homes of node, tmux and claude)
-src/service/launchdPlist.ts pure: label, plist path, `renderPlist`, `stableProgram` (no versioned Cellar path)
+src/service/launchdPlist.ts pure: label (and the old one), plist path, `renderPlist`, `relabelPlist`, `stableProgram` (no versioned Cellar path)
 src/service/launchctlOutput.ts pure: reads `launchctl print` (loaded, running, pid, last exit)
-src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`
+src/service/launchd.ts     installs, removes and inspects the agent: writes the plist, `launchctl bootstrap` / `bootout` / `print` in `gui/<uid>`; an agent under the old label answers for the default one
+src/service/legacyAgent.ts the old agent (`com.adamchew.grenade.daemon`) moves itself to the new label when it starts (fallback, to be removed)
 src/service/systemdUnit.ts pure: the Linux service, `grenade.service` in `~/.config/systemd/user`: `renderUnit` (Restart=on-failure after 10 s, KillMode=process, its marker `GRENADE_SERVICE`), `unitPath`
 src/service/systemctlOutput.ts pure: reads `systemctl --user show` (loaded, running, pid, last exit)
 src/service/systemd.ts     installs, removes and inspects that service with `systemctl --user` (no admin rights); a failed install leaves no unit behind

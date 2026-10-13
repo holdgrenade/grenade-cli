@@ -34,9 +34,9 @@ The release and the launchd agent, without touching the daemon you use (its own 
 ```bash
 npm run release && npm install -g --prefix /tmp/grenade-try ./release/holdgrenade-cli-*.tgz   # `./` matters: npm reads a bare path as a GitHub repo
 export GRENADE_HOME=/tmp/grenade-try/home TMUX_TMPDIR=$(mktemp -d) CLAUDE_CONFIG_DIR=/tmp/grenade-try/claude; unset TMUX
-/tmp/grenade-try/bin/grenade --control-port 7790 service install --label com.adamchew.grenade.daemon.test -- --port 7799 --no-advertise --terminal none
-/tmp/grenade-try/bin/grenade --control-port 7790 setup --label com.adamchew.grenade.daemon.test
-/tmp/grenade-try/bin/grenade --control-port 7790 service remove --label com.adamchew.grenade.daemon.test
+/tmp/grenade-try/bin/grenade --control-port 7790 service install --label com.holdgrenade.grenade.daemon.test -- --port 7799 --no-advertise --terminal none
+/tmp/grenade-try/bin/grenade --control-port 7790 setup --label com.holdgrenade.grenade.daemon.test
+/tmp/grenade-try/bin/grenade --control-port 7790 service remove --label com.holdgrenade.grenade.daemon.test
 ```
 
 Push notifications, with a relay of your own that has no push key (so nothing reaches Apple). Take ports nobody else uses, and a tmux socket of its own (`TMUX_TMPDIR`) so the test daemon does not adopt your sessions:
