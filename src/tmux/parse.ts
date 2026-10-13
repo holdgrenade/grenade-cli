@@ -13,6 +13,22 @@ export function parseSessionList(out: string): string[] {
     .filter((l) => l.length > 0);
 }
 
+/** `list-panes -a` format that `parsePaneFolders` reads: a session's name and its pane's folder, a tab apart. */
+export const PANE_FOLDER_FORMAT = "#{session_name}\t#{pane_current_path}";
+
+/** `tmux list-panes -a -F PANE_FOLDER_FORMAT` → each session's folder (its first pane's), by session name. */
+export function parsePaneFolders(out: string): Map<string, string> {
+  const folders = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const name = line.slice(0, tab);
+    const folder = line.slice(tab + 1).trim();
+    if (folder && !folders.has(name)) folders.set(name, folder);
+  }
+  return folders;
+}
+
 export interface PaneGeometry {
   cursor: Cursor;
   cols: number;

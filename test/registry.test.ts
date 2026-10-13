@@ -19,6 +19,7 @@ function fakeTmux(live: string[] = []) {
   const widths = new Map<string, WindowWidth>();
   const tmux: Tmux = {
     async listSessions() { return live; },
+    async paneFolders() { return new Map(); },
     async hasSession() { return false; },
     async newSession(o) { created.push({ id: o.id, cwd: o.cwd }); },
     async capture() { throw new Error("unused"); },

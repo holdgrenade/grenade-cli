@@ -20,6 +20,7 @@ const { startDaemon } = await import("../src/daemon/server.js");
 
 const tmux: Tmux = {
   async listSessions() { return []; },
+  async paneFolders() { return new Map(); },
   async hasSession() { return false; },
   async newSession() {},
   async capture() { throw new Error("unused"); },

@@ -171,6 +171,7 @@ describe("hooks and background tasks", () => {
 function fakeTmux(live: string[] = []): Tmux {
   return {
     async listSessions() { return live; },
+    async paneFolders() { return new Map(); },
     async hasSession() { return false; },
     async newSession() {},
     async capture() { throw new Error("unused"); },

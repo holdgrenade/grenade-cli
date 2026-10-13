@@ -2,7 +2,8 @@
  * Drives the registry from tmux on a timer:
  * - every 200 ms: capture every subscribed session (live screen on the phone)
  * - every 1 s: list tmux sessions to detect gone ones, capture unsubscribed sessions
- *   so lastLine and the status heuristics stay fresh, and hold too-narrow windows at the width floor.
+ *   so lastLine and the status heuristics stay fresh, follow each shell's folder after a `cd` (`followShellFolders`),
+ *   and hold too-narrow windows at the width floor.
  */
 import type { Logger } from "../log.js";
 import { isGrenadeSession } from "../tmux/parse.js";
@@ -44,6 +45,7 @@ export function startPoller(deps: { tmux: Tmux; registry: SessionRegistry; log: 
       if (ticks % SLOW_EVERY_TICKS === 0) {
         const live = new Set((await tmux.listSessions()).filter(isGrenadeSession));
         for (const id of registry.liveIds()) if (!live.has(id)) registry.markGone(id);
+        await followShellFolders(tmux, registry).catch((e: unknown) => log.debug("Could not read shells' folders", { error: e }));
         await captureAll(registry.liveIds());
         await registry.enforceWidthFloor().catch((e: unknown) => log.debug("Could not check window widths", { error: e }));
       } else {
@@ -59,4 +61,15 @@ export function startPoller(deps: { tmux: Tmux; registry: SessionRegistry; log: 
   const timer = setInterval(() => void tick(), deps.intervalMs ?? FAST_INTERVAL_MS);
   timer.unref();
   return { stop: () => clearInterval(timer), tick };
+}
+
+/** A shell session's `cwd` is the folder its shell is in now (PROTOCOL.md "Session"), so a `cd` shows in its header. */
+export async function followShellFolders(tmux: Tmux, registry: SessionRegistry): Promise<void> {
+  const shells = registry.liveIds().filter((id) => registry.get(id)?.agent === "shell");
+  if (shells.length === 0) return;
+  const folders = await tmux.paneFolders();
+  for (const id of shells) {
+    const folder = folders.get(id);
+    if (folder) registry.setCwd(id, folder);
+  }
 }

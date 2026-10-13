@@ -12,6 +12,8 @@ import {
   inputCommand,
   keyToTmux,
   parsePaneGeometry,
+  PANE_FOLDER_FORMAT,
+  parsePaneFolders,
   parseSessionList,
   splitGeometry,
   tmuxEnv,
@@ -45,6 +47,8 @@ export class TmuxError extends Error {
 
 export interface Tmux {
   listSessions(): Promise<string[]>;
+  /** The folder each session's shell is in now (its first pane's), by session name. Empty when no server is running. */
+  paneFolders(): Promise<Map<string, string>>;
   hasSession(id: string): Promise<boolean>;
   /** `resume`: a Claude Code conversation id to start a copy of (`agentCommand`). */
   newSession(opts: { id: string; cwd: string; agent: AgentKind; resume?: string | undefined }): Promise<void>;
@@ -130,6 +134,14 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         return parseSessionList(await run(["list-sessions", "-F", "#{session_name}"]));
       } catch (e) {
         if (isNoServer(e)) return [];
+        throw e;
+      }
+    },
+    async paneFolders() {
+      try {
+        return parsePaneFolders(await run(["list-panes", "-a", "-F", PANE_FOLDER_FORMAT]));
+      } catch (e) {
+        if (isNoServer(e)) return new Map<string, string>();
         throw e;
       }
     },
