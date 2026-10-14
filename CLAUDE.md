@@ -43,6 +43,7 @@ grenade relay status             # url, relay id, online/offline, public + local
 grenade push on [url] [--key K] [--at-mac S]   # send push notifications, also with remote access off; url = another relay's push route
 grenade push auto                # the default: push while this Mac uses a relay for remote access, none otherwise
 grenade push off | status | test # test sends a notification to every phone that registered
+grenade canvas [--session S]     # the folders the session ($GRENADE_SESSION) draws boards in: its group's canvases, then a new one
 grenade publish                  # canvases published to secret links: address, state, boards, what each shows
 grenade publish off <link>       # take a link down (its address or token); the page stops working at once
 grenade prompt test [session] [--kind permission|question|plan|all] [--wait 120]   # a test card on the phone; prints what it answered

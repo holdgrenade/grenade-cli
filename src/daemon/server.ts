@@ -52,6 +52,7 @@ import { watchScreenBackground } from "../background/screenBackground.js";
 import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
 import { BROWSER_INSTRUCTIONS } from "../browser/browserPrompt.js";
+import { CANVAS_INSTRUCTIONS } from "../canvas/canvasPrompt.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { fromWebPage, isLoopback } from "./loopback.js";
@@ -202,8 +203,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
         // Read as each session starts, so a status line the user set up since is the one it runs.
         get claude() {
-          // On a Mac, the session is told to test web pages in the app's toolbox (`grenade browser`).
-          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), process.platform === "darwin" ? BROWSER_INSTRUCTIONS : undefined);
+          // Every session is told where its group's canvas is (`grenade canvas`); on a Mac, also to test web pages in
+          // the app's toolbox (`grenade browser`).
+          const instructions = process.platform === "darwin" ? `${BROWSER_INSTRUCTIONS}\n\n${CANVAS_INSTRUCTIONS}` : CANVAS_INSTRUCTIONS;
+          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), instructions);
         },
         codex: codexHookFlags(port),
         // Shells start with Grenade's prompt, its files written (again, if a new version changed them) as each starts.
