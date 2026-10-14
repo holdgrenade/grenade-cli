@@ -2,6 +2,12 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.115 (2026-10-14)
+
+- Sessions now have a to-do list kept by the daemon on your computer. The list is saved locally, readable only by your user account, and is the same for every connected app, so a change made on your phone shows up on the Mac app and in Chrome.
+- Each session shows how many of its to-dos are still open.
+- A to-do attached to a prompt is checked off automatically when the turn that prompt started finishes.
+
 ## 1.0.114 (2026-10-14)
 
 - Fixed boards drawn by an agent going missing from the session's canvas card. Boards now land in the session's group canvas, so a turn that draws four boards shows all four.
