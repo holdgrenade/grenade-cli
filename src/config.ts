@@ -17,6 +17,7 @@ export const paths = {
   pairingPause: join(GRENADE_DIR, "pairing-pause.json"),
   sessions: join(GRENADE_DIR, "sessions.json"),
   groups: join(GRENADE_DIR, "groups.json"),
+  todos: join(GRENADE_DIR, "todos.json"),
   daemonId: join(GRENADE_DIR, "daemon-id"),
   log: join(GRENADE_DIR, "daemon.log"),
   relay: join(GRENADE_DIR, "relay.json"),

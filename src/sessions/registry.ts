@@ -388,6 +388,15 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
+  /** How many of the session's to-dos are open (PROTOCOL.md "To-dos"), from the daemon's `TodoStore`; 0 takes it off. */
+  setTodos(id: string, open: number): void {
+    const r = this.records.get(id);
+    if (!r || (r.session.todos ?? 0) === open) return;
+    const { todos: _was, ...rest } = r.session;
+    r.session = open > 0 ? { ...rest, todos: open } : rest;
+    this.emit("updated", r.session);
+  }
+
   /** The saved plan files of the sessions, for the daemon's `PlanTracker` after a restart. */
   planPaths(): { id: string; path: string }[] {
     return [...this.records.values()].flatMap((r) => (r.planPath ? [{ id: r.session.id, path: r.planPath }] : []));

@@ -31,6 +31,8 @@ import { PlanModeError } from "../plans/claudePlanMode.js";
 import type { ChangesDiffFrame, ChangesFrame } from "@grenade/protocol";
 import { ChangesError } from "../changes/changesTracker.js";
 import type { BrowserBridge } from "../browser/browserBridge.js";
+import type { NewTodo, TodosFrame } from "@grenade/protocol";
+import { TodoError } from "../todos/todoStore.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -226,6 +228,18 @@ export interface ChangesPort {
   push(sessionId: string): Promise<void>;
 }
 
+/** Sessions' to-do lists (PROTOCOL.md "To-dos"); `TodoStore` in the daemon. Changes throw `TodoError`. */
+export interface TodosPort {
+  frame(sessionId: string, id?: string): TodosFrame;
+  add(sessionId: string, todos: NewTodo[], id?: string): TodosFrame;
+  update(sessionId: string, todo: string, change: { done?: boolean | undefined; title?: string | undefined; text?: string | undefined }, id?: string): TodosFrame;
+  remove(sessionId: string, todo: string, id?: string): TodosFrame;
+  /** A prompt was typed: its `<todo>` blocks are checked off when the turn it starts ends. */
+  prompted(sessionId: string, text: string): void;
+  on(event: "changed", cb: (f: TodosFrame) => void): unknown;
+  off(event: "changed", cb: (f: TodosFrame) => void): unknown;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -282,6 +296,8 @@ export interface ConnectionDeps {
   owner?: OwnerPort;
   /** Sessions' plans. Absent means this daemon shows none (no `plans: 1`) and answers their frames with `bad_frame`. */
   plans?: PlansPort;
+  /** Sessions' to-do lists. Absent means this daemon keeps none (no `todos: 1`) and answers their frames with `bad_frame`. */
+  todos?: TodosPort;
   /** Git changes and pushes. Absent means this daemon reads none (no `changes: 1`) and answers their frames with `bad_frame`. */
   changes?: ChangesPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
@@ -335,6 +351,8 @@ export class Connection {
     if (this.subscriptions.has(f.sessionId)) this.send(f);
   };
   private readonly onGroups = (f: GroupsFrame) => this.send(f);
+  /** Every client hears of every change to a to-do list (PROTOCOL.md "To-dos"). */
+  private readonly onTodos = (f: TodosFrame) => this.send(f);
   /** This client asked for `voice` once, so it hears of every change (PROTOCOL.md "Voice providers"). */
   private watchesVoice = false;
   private readonly onVoice = (f: VoiceFrame) => this.send(f);
@@ -441,6 +459,7 @@ export class Connection {
       this.d.prompts?.off("closed", this.onPrompt);
       this.d.activity?.off("activity", this.onActivity);
       this.d.groups?.off("changed", this.onGroups);
+      this.d.todos?.off("changed", this.onTodos);
       this.d.voice?.off("changed", this.onVoice);
       this.d.publish?.off("changed", this.onPublished);
       for (const stop of this.commentWatches.values()) stop();
@@ -504,6 +523,7 @@ export class Connection {
     this.d.prompts?.on("closed", this.onPrompt);
     for (const open of this.d.prompts?.list() ?? []) this.send(open);
     this.d.activity?.on("activity", this.onActivity);
+    this.d.todos?.on("changed", this.onTodos);
   }
 
   private async dispatch(frame: ClientFrame): Promise<void> {
@@ -544,9 +564,14 @@ export class Connection {
         return this.send({ type: "activity.text", id: frame.id, sessionId: frame.sessionId, cut: frame.cut, text: activityText(text, ACTIVITY_FULL_TEXT_MAX) });
       }
       case "input": {
-        if (frame.id === undefined) return r.sendText(frame.sessionId, frame.text, frame.submit);
+        // A prompt's `<todo>` blocks are checked off when the turn it starts ends (PROTOCOL.md "To-dos").
+        const type = async () => {
+          await r.sendText(frame.sessionId, frame.text, frame.submit);
+          if (frame.submit) this.d.todos?.prompted(frame.sessionId, frame.text);
+        };
+        if (frame.id === undefined) return type();
         // With an id the phone may send it again after a dropped connection: type it once, answer every time.
-        await this.sentInputs.once(`${this.token}\n${frame.id}`, () => r.sendText(frame.sessionId, frame.text, frame.submit));
+        await this.sentInputs.once(`${this.token}\n${frame.id}`, type);
         return this.send({ type: "input.sent", id: frame.id, sessionId: frame.sessionId });
       }
       case "key":
@@ -674,6 +699,11 @@ export class Connection {
       case "changes.diff":
       case "git.push":
         return this.handleChanges(frame);
+      case "todos":
+      case "todo.add":
+      case "todo.update":
+      case "todo.remove":
+        return this.handleTodos(frame);
       case "session.mode": {
         const session = r.get(frame.sessionId);
         if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
@@ -826,6 +856,31 @@ export class Connection {
           throw e;
         }
         return;
+    }
+  }
+
+  /** The to-do frames (PROTOCOL.md "To-dos"). A change reaches every client, this one too, through `changed`. */
+  private handleTodos(frame: Extract<ClientFrame, { type: "todos" | "todo.add" | "todo.update" | "todo.remove" }>): void {
+    const todos = this.d.todos;
+    if (!todos) return this.fail("bad_frame", "this daemon keeps no to-dos", frame.type, false, frame.id);
+    if (!this.d.registry.get(frame.sessionId)) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type, false, frame.id);
+    try {
+      switch (frame.type) {
+        case "todos":
+          return this.send(todos.frame(frame.sessionId, frame.id));
+        case "todo.add":
+          todos.add(frame.sessionId, frame.todos, frame.id);
+          return;
+        case "todo.update":
+          todos.update(frame.sessionId, frame.todo, { done: frame.done, title: frame.title, text: frame.text }, frame.id);
+          return;
+        case "todo.remove":
+          todos.remove(frame.sessionId, frame.todo, frame.id);
+          return;
+      }
+    } catch (e) {
+      if (e instanceof TodoError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
+      throw e;
     }
   }
 
