@@ -103,6 +103,7 @@ import { PictureStore } from "../highlights/pictureStore.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
 import { TodoStore } from "../todos/todoStore.js";
+import { LibraryStore } from "../library/libraryStore.js";
 import { ChangesTracker } from "../changes/changesTracker.js";
 import { workOfHook, type HookWork } from "../changes/sessionWork.js";
 import { enterClaudePlanMode } from "../plans/claudePlanMode.js";
@@ -198,7 +199,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, todos: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, todos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -439,7 +440,23 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // A group's design canvas (PROTOCOL.md "Canvas"): only the folders of the sessions it lists, read and never written.
   const canvasWatcher = new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) }));
   // A kept group's folder and canvases are served as its sessions' were (PROTOCOL.md "Kept groups").
-  const canvas = new CanvasService(() => [...registry.list(), ...groupOrder.standIns()], canvasWatcher);
+  // Every canvas and plan by project, whatever happened to its group (PROTOCOL.md "Library"), saved beside sessions.json.
+  const library = new LibraryStore({
+    registry,
+    kept: () => groupOrder.frame().kept ?? [],
+    onKeptChanged: (cb) => groupOrder.on("changed", cb),
+    plans,
+    conversationFolders: async () => (await conversationIndex.list(true)).map((c) => c.cwd),
+    claudeDir: opts.claudeDir ?? paths.claudeDir,
+    home: homedir(),
+    log,
+    ...(opts.sessionsPath === null ? {} : { path: opts.sessionsPath ? join(dirname(opts.sessionsPath), "library.json") : paths.library }),
+  });
+  if (opts.sessionsPath !== null) void library.backfill();
+  // A session may be started again in a group the Library remembers, as in a kept group (PROTOCOL.md "Library").
+  registry.keptGroups = { keptGroup: (group) => groupOrder.keptGroup(group) ?? library.rememberedGroup(group) };
+  // A group the Library remembers is served as a kept group is (PROTOCOL.md "Library", "A canvas").
+  const canvas = new CanvasService(() => [...registry.list(), ...groupOrder.standIns(), ...library.standIns()], canvasWatcher);
   // Canvases published to secret links (PROTOCOL.md "Publishing"): the daemon keeps each page up to date as boards are saved.
   // Comments on those links (PROTOCOL.md "Comments"), pulled from the share host, and the owner's name the pages show.
   const shareClient = new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch);
@@ -873,6 +890,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       }),
       limits: planLimits,
       todos,
+      library,
       conversations,
       ...(talk ? { talk } : {}),
       ...(highlights ? { highlights } : {}),
@@ -1040,6 +1058,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       publisher?.stop();
       comments?.stop();
       talk?.stop();
+      library.stop();
       highlights?.stop();
       canvas.stop();
       changes.stop();

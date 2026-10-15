@@ -33,6 +33,8 @@ import { ChangesError } from "../changes/changesTracker.js";
 import type { BrowserBridge } from "../browser/browserBridge.js";
 import type { NewTodo, TodosFrame } from "@grenade/protocol";
 import { TodoError } from "../todos/todoStore.js";
+import type { LibraryFrame, LibraryPlanFrame } from "@grenade/protocol";
+import { LibraryError } from "../library/libraryStore.js";
 
 export const HELLO_TIMEOUT_MS = 5000;
 /** What a daemon that sends no pushes answers to `push.register`. */
@@ -246,6 +248,14 @@ export interface TodosPort {
   off(event: "changed", cb: (f: TodosFrame) => void): unknown;
 }
 
+/** The Library (PROTOCOL.md "Library"); `LibraryStore` in the daemon. `plan` rejects with `LibraryError`. */
+export interface LibraryPort {
+  frame(id?: string): Promise<LibraryFrame>;
+  plan(file: string, id?: string): Promise<LibraryPlanFrame>;
+  /** Sends the list whenever it changes, until the returned function is called. */
+  watch(send: (frame: LibraryFrame) => void): () => void;
+}
+
 export interface ConnectionDeps {
   registry: RegistryPort;
   /** Where `attachment` uploads are written (PROTOCOL.md "Attachments"). */
@@ -304,6 +314,8 @@ export interface ConnectionDeps {
   plans?: PlansPort;
   /** Sessions' to-do lists. Absent means this daemon keeps none (no `todos: 1`) and answers their frames with `bad_frame`. */
   todos?: TodosPort;
+  /** The Library. Absent means this daemon keeps none (no `library: 1`) and answers its frames with `bad_frame`. */
+  library?: LibraryPort;
   /** Git changes and pushes. Absent means this daemon reads none (no `changes: 1`) and answers their frames with `bad_frame`. */
   changes?: ChangesPort;
   /** Typed Talk. Absent means this daemon answers none (no `talk: 1`) and answers its frames with `bad_frame`. */
@@ -344,6 +356,8 @@ export class Connection {
   private readonly canvasWatches = new Map<string, () => void>();
   /** The plans this connection follows, by session. */
   private readonly planFollows = new Map<string, () => void>();
+  /** Stops sending this connection the Library, once it asked for it. */
+  private libraryWatch: (() => void) | undefined;
   private helloTimer: unknown;
   /** This connection said `browser.host`: the agent's browser commands come here (PROTOCOL.md "Agent browser"). */
   private readonly browserHost = { send: (frame: BrowserCommandFrame) => this.send(frame) };
@@ -457,6 +471,8 @@ export class Connection {
     this.canvasWatches.clear();
     for (const stop of this.planFollows.values()) stop();
     this.planFollows.clear();
+    this.libraryWatch?.();
+    this.libraryWatch = undefined;
     if (this.authed) {
       this.d.registry.off("updated", this.onUpdated);
       this.d.registry.off("removed", this.onRemoved);
@@ -710,6 +726,9 @@ export class Connection {
       case "todo.update":
       case "todo.remove":
         return this.handleTodos(frame);
+      case "library":
+      case "library.plan":
+        return this.handleLibrary(frame);
       case "session.mode": {
         const session = r.get(frame.sessionId);
         if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
@@ -871,6 +890,23 @@ export class Connection {
           throw e;
         }
         return;
+    }
+  }
+
+  /** The Library's frames (PROTOCOL.md "Library"): the list, sent again whenever it changes, and a plan's file. */
+  private async handleLibrary(frame: Extract<ClientFrame, { type: "library" | "library.plan" }>): Promise<void> {
+    const library = this.d.library;
+    if (!library) return this.fail("bad_frame", "this daemon keeps no Library", frame.type, false, frame.id);
+    if (frame.type === "library") {
+      this.send(await library.frame(frame.id));
+      this.libraryWatch ??= library.watch((f) => this.send(f));
+      return;
+    }
+    try {
+      this.send(await library.plan(frame.plan, frame.id));
+    } catch (e) {
+      if (e instanceof LibraryError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);
+      throw e;
     }
   }
 
