@@ -2,6 +2,15 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.117 (2026-10-15)
+
+- The Library now indexes every canvas and plan by project, including ones from past conversations and known project folders, so older work shows up without hunting for it.
+- Plans from past Claude Code conversations now appear in the Library too.
+- A plan is marked approved once the agent leaves plan mode with it.
+- Canvases from a group that has ended stay viewable.
+- The Library updates on its own while you're following it, so new canvases and plans appear without reloading.
+- You can start a session again in a group after it has ended.
+
 ## 1.0.116 (2026-10-15)
 
 - A group now stays after its last session is removed. Its folder and name are kept until you close it, so you can still open its toolbox and canvases and start a new session in it.
