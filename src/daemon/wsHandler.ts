@@ -120,10 +120,16 @@ export interface TermOpen {
   closed(reason: "ended" | "failed"): void;
 }
 
-/** The slice of GroupOrderStore a connection needs (PROTOCOL.md "Group order"). */
+/** The slice of GroupOrderStore a connection needs (PROTOCOL.md "Group order", "Kept groups"). */
 export interface GroupsPort {
   frame(): GroupsFrame;
   move(group: string, index: number): boolean;
+  /** The group kept with no session, or undefined. */
+  keptGroup(group: string): unknown;
+  /** Names a kept group; false when nothing changed. */
+  rename(group: string, name: string | null): boolean;
+  /** Drops a kept group; `UnknownGroupError` for any other. */
+  close(group: string): void;
   on(event: "changed", cb: (f: GroupsFrame) => void): unknown;
   off(event: "changed", cb: (f: GroupsFrame) => void): unknown;
 }
@@ -744,6 +750,11 @@ export class Connection {
         return;
       }
       case "group.rename": {
+        // A kept group has no member to carry its name: the store keeps it, and `groups` goes to every client.
+        if (this.d.groups?.keptGroup(frame.group) !== undefined) {
+          if (!this.d.groups.rename(frame.group, frame.name)) this.send(this.d.groups.frame());
+          return;
+        }
         // The registry emits session.updated for every member it renamed; a rename that changes nothing still gets an answer.
         const renamed = r.renameGroup(frame.group, frame.name);
         if (!renamed.changed) this.send({ type: "session.updated", session: renamed.session });
@@ -760,6 +771,10 @@ export class Connection {
         // A change reaches every client through `changed`; a move to where it already is still gets an answer.
         if (!this.d.groups.move(frame.group, frame.index)) this.send(this.d.groups.frame());
         return;
+      case "group.close":
+        if (!this.d.groups) return this.fail("bad_frame", "this daemon keeps no groups", frame.type);
+        // The change reaches every client through `changed`.
+        return this.d.groups.close(frame.group);
       case "session.kill":
         return r.kill(frame.sessionId);
       case "push.register":

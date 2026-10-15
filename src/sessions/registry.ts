@@ -119,7 +119,7 @@ export class SessionExistsError extends Error {}
 export class UnknownSessionError extends Error {}
 /** The requested working directory is not an existing folder. tmux would silently fall back to $HOME. */
 export class BadCwdError extends Error {}
-/** The group to join has no live session in it. */
+/** The group to join has no live session in it, and is not kept (PROTOCOL.md "Kept groups"). */
 export class UnknownGroupError extends Error {}
 /** The agent's program is not on this computer, so its session would end as it started. */
 export class MissingAgentError extends Error {}
@@ -163,6 +163,11 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   private readonly isDirectory: (path: string) => boolean;
   private readonly newGroupId: () => string;
   private readonly missingAgent: (agent: string) => string | null;
+  /**
+   * The groups kept with no session (`GroupOrderStore`, PROTOCOL.md "Kept groups"), which a new or moved session may
+   * join and whose name it then carries. Set once the store exists, as it follows this registry.
+   */
+  keptGroups: { keptGroup(group: string): { name?: string | undefined } | undefined } | undefined;
 
   constructor(opts: RegistryOptions) {
     super();
@@ -250,7 +255,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const id = sessionIdFor(input.name);
     const cwd = expandCwd(input.cwd, this.home);
     if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the ${computerWord()}: ${input.cwd}`);
-    if (input.group !== undefined && !isJoinableGroup(input.group, this.list(), id)) {
+    if (input.group !== undefined && !this.canJoin(input.group, id)) {
       throw new UnknownGroupError(`no live session in group ${input.group}`);
     }
     if (this.records.get(id)?.session.status !== undefined && this.records.get(id)?.session.status !== "gone") {
@@ -266,7 +271,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const order = nextOrder(group, others);
     const createdAt = new Date(this.now()).toISOString();
     const resumed = input.resume !== undefined ? { resumedFrom: input.resume, resumedAt: createdAt } : {};
-    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: groupNameOf(group, others), ...resumed });
+    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: this.groupNameOf(group, others), ...resumed });
     this.log.info(`Started ${input.agent} session ${id}`, { cwd, group });
     this.emit("created", session);
     return session;
@@ -308,10 +313,10 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       return r.session;
     }
     if (group === from && index === undefined) return r.session;
-    if (group !== from && !isJoinableGroup(group, this.list(), id)) throw new UnknownGroupError(`no live session in group ${group}`);
+    if (group !== from && !this.canJoin(group, id)) throw new UnknownGroupError(`no live session in group ${group}`);
     const ids = membersInOrder(group, this.list()).map((s) => s.id);
     const placed = placeAt(ids, id, index ?? ids.length);
-    const name = groupNameOf(group, this.list(), id);
+    const name = this.groupNameOf(group, this.list(), id);
     const changed: Record_[] = [];
     placed.forEach((memberId, order) => {
       const m = this.records.get(memberId);
@@ -325,6 +330,22 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     for (const m of changed) this.emit("updated", m.session);
     this.emit("regrouped", r.session, from);
     return r.session;
+  }
+
+  /**
+   * A session (other than `id`) may join `group`: it has another live member, or it is kept with none, or (with kept
+   * groups) every other member has ended, so a group that ran out of sessions can be started again (PROTOCOL.md
+   * "Kept groups").
+   */
+  private canJoin(group: string, id: string): boolean {
+    if (isJoinableGroup(group, this.list(), id)) return true;
+    if (!this.keptGroups) return false;
+    return this.keptGroups.keptGroup(group) !== undefined || this.list().some((s) => s.id !== id && s.group === group);
+  }
+
+  /** The name a session joining `group` carries: its members', else the kept group's. */
+  private groupNameOf(group: string, sessions: readonly Session[], exceptId?: string): string | undefined {
+    return groupNameOf(group, sessions, exceptId) ?? this.keptGroups?.keptGroup(group)?.name;
   }
 
   /**

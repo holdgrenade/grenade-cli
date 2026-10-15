@@ -188,6 +188,27 @@ describe("session groups", () => {
     expect(r.get("gr-x")).toBeUndefined();
   });
 
+  it("starts or moves a session into a kept group, which it then carries the name of (PROTOCOL.md \"Kept groups\")", async () => {
+    const r = make();
+    r.keptGroups = { keptGroup: (g) => (g === "g-kept" ? { name: "Website" } : undefined) };
+    const web = await r.create({ name: "web", cwd: "~/web", agent: "claude", group: "g-kept" });
+    expect(web).toMatchObject({ group: "g-kept", order: 0, groupName: "Website" });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.keptGroups = { keptGroup: (g) => (g === "g-other" ? {} : undefined) };
+    expect(r.setGroup("gr-app", "g-other")).toMatchObject({ group: "g-other" });
+    expect(r.get("gr-app")?.groupName).toBeUndefined();
+  });
+
+  it("with kept groups, starts a session in a group whose members have all ended", async () => {
+    const tmux = fakeTmux();
+    const r = new SessionRegistry({ tmux: tmux.tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), newGroupId: () => "g-1" });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.markGone("gr-app");
+    await expect(r.create({ name: "two", cwd: "~/app", agent: "claude", group: "g-1" })).rejects.toBeInstanceOf(UnknownGroupError);
+    r.keptGroups = { keptGroup: () => undefined };
+    expect(await r.create({ name: "two", cwd: "~/app", agent: "claude", group: "g-1" })).toMatchObject({ group: "g-1" });
+  });
+
   it("moves a session out and back in, emitting updated and regrouped", async () => {
     const r = make();
     await r.create({ name: "app", cwd: "~/app", agent: "claude" });

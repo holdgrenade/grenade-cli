@@ -9,21 +9,23 @@ import { placeAt } from "./groups.js";
 const groupOf = (s: Session): string => s.group ?? s.id;
 
 /**
- * `order` brought in line with `sessions`: groups without a session are dropped, and groups not
- * placed yet go to the top, newest first (by their oldest member's `createdAt`).
+ * `order` brought in line with `sessions` and the groups kept with no session (`keptGroups`, PROTOCOL.md "Kept
+ * groups"): other groups without a session are dropped, and groups not placed yet go to the top, newest first (by
+ * their oldest member's `createdAt`; a kept group not placed yet first of all).
  */
-export function reconcileGroupOrder(order: readonly string[], sessions: readonly Session[]): string[] {
+export function reconcileGroupOrder(order: readonly string[], sessions: readonly Session[], keptGroups: readonly string[] = []): string[] {
   const born = new Map<string, string>();
+  for (const g of keptGroups) born.set(g, "\uffff");
   for (const s of sessions) {
     const g = groupOf(s);
     const at = born.get(g);
     if (at === undefined || s.createdAt < at) born.set(g, s.createdAt);
   }
-  const kept = [...new Set(order)].filter((g) => born.has(g));
+  const placed = [...new Set(order)].filter((g) => born.has(g));
   const arrivals = [...born.keys()]
-    .filter((g) => !kept.includes(g))
+    .filter((g) => !placed.includes(g))
     .sort((a, b) => (born.get(b) as string).localeCompare(born.get(a) as string) || a.localeCompare(b));
-  return [...arrivals, ...kept];
+  return [...arrivals, ...placed];
 }
 
 /** `order` with `group`, a group a session was just moved out into, right under the group it left. */

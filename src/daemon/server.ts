@@ -198,7 +198,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, todos: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, plans: 1, todos: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -252,6 +252,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Saved beside sessions.json, so a test daemon with its own sessions file keeps its own order too.
   const groupsPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "groups.json") : paths.groups;
   const groupOrder = new GroupOrderStore(registry, log, groupsPath);
+  // A session started in (or moved into) a group kept with no session joins it (PROTOCOL.md "Kept groups").
+  registry.keptGroups = groupOrder;
   const poller: Poller = startPoller({ tmux, registry, log });
   const pinnedTerminal = opts.terminal ?? terminalFromEnv();
   const mirror = new TerminalMirror({ registry, log, terminal: pinnedTerminal ?? (() => readTerminalSetting()) });
@@ -436,7 +438,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   });
   // A group's design canvas (PROTOCOL.md "Canvas"): only the folders of the sessions it lists, read and never written.
   const canvasWatcher = new CanvasWatcher(undefined, undefined, (folder, error) => log.debug("Could not look at a canvas", { folder, error: error instanceof Error ? error.message : String(error) }));
-  const canvas = new CanvasService(() => registry.list(), canvasWatcher);
+  // A kept group's folder and canvases are served as its sessions' were (PROTOCOL.md "Kept groups").
+  const canvas = new CanvasService(() => [...registry.list(), ...groupOrder.standIns()], canvasWatcher);
   // Canvases published to secret links (PROTOCOL.md "Publishing"): the daemon keeps each page up to date as boards are saved.
   // Comments on those links (PROTOCOL.md "Comments"), pulled from the share host, and the owner's name the pages show.
   const shareClient = new ShareClient(opts.shareUrl ?? process.env["GRENADE_SHARE_URL"] ?? OFFICIAL_SHARE_URL, opts.shareFetch);

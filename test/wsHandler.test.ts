@@ -151,7 +151,21 @@ class FakeVoice extends EventEmitter {
 
 class FakeGroups extends EventEmitter {
   order = ["g-7f3a91", "g-0c2d4e"];
-  frame() { return { type: "groups" as const, order: [...this.order] }; }
+  kept = new Map<string, { group: string; cwd: string; name?: string }>();
+  frame() { return { type: "groups" as const, order: [...this.order], ...(this.kept.size > 0 ? { kept: [...this.kept.values()] } : {}) }; }
+  keptGroup(group: string) { return this.kept.get(group); }
+  rename(group: string, name: string | null) {
+    const k = this.kept.get(group)!;
+    if ((k.name ?? null) === name) return false;
+    this.kept.set(group, name === null ? { group, cwd: k.cwd } : { ...k, name });
+    this.emit("changed", this.frame());
+    return true;
+  }
+  close(group: string) {
+    if (!this.kept.delete(group)) throw new UnknownGroupError(`no kept group ${group}`);
+    this.order = this.order.filter((g) => g !== group);
+    this.emit("changed", this.frame());
+  }
   move(group: string, index: number) {
     const rest = this.order.filter((g) => g !== group);
     const next = [...rest.slice(0, index), group, ...rest.slice(index)];
@@ -267,6 +281,24 @@ describe("Connection", () => {
     expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.rename" });
   });
 
+  it("renames and closes a kept group: every client hears it through groups, a group with sessions cannot be closed", async () => {
+    const { conn, groups, registry, out } = connect();
+    groups.order = ["g-5b8e20", ...groups.order];
+    groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "group.rename", group: "g-5b8e20", name: "Website" }));
+    expect(registry.calls.filter((c) => c.startsWith("rename:"))).toEqual([]);
+    expect(out).toEqual([{ type: "groups", order: ["g-5b8e20", "g-7f3a91", "g-0c2d4e"], kept: [{ group: "g-5b8e20", cwd: "/Users/ada/code/web", name: "Website" }] }]);
+    // The same name again: nothing changed, and this client still gets the groups.
+    await conn.handleMessage(JSON.stringify({ type: "group.rename", group: "g-5b8e20", name: "Website" }));
+    expect(out).toHaveLength(2);
+    await conn.handleMessage(fixture("client.group.close.json"));
+    expect(out[2]).toEqual({ type: "groups", order: ["g-7f3a91", "g-0c2d4e"] });
+    await conn.handleMessage(JSON.stringify({ type: "group.close", group: "g-7f3a91" }));
+    expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.close" });
+  });
+
   it("renames a session: every client hears it once, a rename that changes nothing still answers, an unknown session is unknown_session", async () => {
     const { conn, registry, out } = connect();
     await conn.handleMessage(fixture("client.hello.json"));
@@ -362,7 +394,9 @@ describe("Connection", () => {
     const changes: ChangesPort = { async files(sessionId) { return { type: "changes", sessionId, files: [] }; }, async diff(sessionId, path) { return { type: "changes.diff", sessionId, path, lines: [] }; }, async push() {} };
     const todosFrame = (sessionId: string) => ({ type: "todos" as const, sessionId, todos: [] });
     const todos: TodosPort = Object.assign(new EventEmitter(), { frame: todosFrame, add: todosFrame, update: todosFrame, remove: todosFrame, prompted() {} });
-    const { conn, out } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term });
+    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term });
+    // `group.close` names a group kept with no session.
+    groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
     // `voice.key` before `voice.token`: a token needs a key.
     const first = ["client.hello.json", "client.term.open.json", "client.voice.key.json"];
