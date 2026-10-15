@@ -4,7 +4,7 @@
  * folder and talks to the host.
  */
 import { basename } from "node:path";
-import { expiresAt, shareUrlFor, type CanvasBoard, type PublishedLink, type PublishExpiry, type PublishScope, type PublishState } from "@grenade/protocol";
+import { expiresAt, isShareAssetPath, shareUrlFor, type CanvasBoard, type PublishedLink, type PublishExpiry, type PublishScope, type PublishState } from "@grenade/protocol";
 
 /** One link as the daemon keeps it in published.json: the protocol's link, its key, and what the host has. */
 export interface PublishRecord {
@@ -42,9 +42,9 @@ export function boardsInScope(boards: CanvasBoard[], scope: PublishScope): Canva
   return boards.filter((b) => b.revision === newest);
 }
 
-/** A name in the folder that may go up beside the boards: not hidden, not a page. */
+/** A path in the folder that may go up beside the boards: bare names, in a subfolder or not, none hidden; not a page. */
 export function isAssetName(name: string): boolean {
-  return name.length > 0 && name.length <= 255 && !name.startsWith(".") && !/[/\\\0]/.test(name) && !/\.(html?|xhtml|svgz)$/i.test(name);
+  return isShareAssetPath(name) && !/\.(html?|xhtml|svgz)$/i.test(name);
 }
 
 /** The files among `names` that a board's HTML names by a relative address: as written, or percent-encoded. */

@@ -61,7 +61,8 @@ export class ShareClient {
   }
 
   async putFile(token: string, key: string, file: string, bytes: Uint8Array): Promise<void> {
-    await this.call("PUT", `/v1/c/${token}/f/${encodeURIComponent(file)}`, key, bytes, "application/octet-stream");
+    // An asset in a subfolder goes up at its path, each name encoded: `fonts/icons.woff2`.
+    await this.call("PUT", `/v1/c/${token}/f/${file.split("/").map(encodeURIComponent).join("/")}`, key, bytes, "application/octet-stream");
   }
 
   /** A link's comment events after `after` (PROTOCOL.md "Comments"), oldest first, and the newest cursor. */

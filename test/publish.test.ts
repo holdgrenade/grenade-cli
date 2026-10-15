@@ -39,6 +39,10 @@ describe("what a link holds", () => {
     expect(isAssetName("R1A · Hello.html")).toBe(false);
     expect(isAssetName(".DS_Store")).toBe(false);
     expect(isAssetName("current.png")).toBe(true);
+    expect(isAssetName("fonts/icons.woff2")).toBe(true);
+    expect(isAssetName("../icons.woff2")).toBe(false);
+    expect(isAssetName(".cache/icons.woff2")).toBe(false);
+    expect(referencedAssets(["@font-face{src:url(fonts/icons.woff2)}"], ["fonts/icons.woff2", "fonts/other.woff2"])).toEqual(["fonts/icons.woff2"]);
   });
 
   it("title, secrets, expiry, and the link a client sees", () => {
@@ -317,6 +321,29 @@ describe("the publisher", () => {
     await symlink(join(dir, "outside.png"), join(folder, "linked.png"));
     expect((await assetFiles(folder)).map((f) => f.name)).not.toContain("linked.png");
     expect(await readAsset(folder, "linked.png")).toBeNull();
+  });
+
+  it("carries a font a board names in a subfolder, but never one through a linked folder or a hidden one", async () => {
+    await mkdir(join(folder, "fonts"));
+    await writeFile(join(folder, "fonts", "icons.woff2"), "font");
+    await mkdir(join(folder, ".cache"));
+    await writeFile(join(folder, ".cache", "x.png"), "hidden");
+    await mkdir(join(dir, "outside"));
+    await writeFile(join(dir, "outside", "x.png"), "secret");
+    await symlink(join(dir, "outside"), join(folder, "linked"));
+    await writeFile(join(folder, "R2A · Cards.html"), "<style>@font-face{src:url(fonts/icons.woff2)}</style><img src=linked/x.png><img src=.cache/x.png>");
+    const names = (await assetFiles(folder)).map((f) => f.name);
+    expect(names).toContain("fonts/icons.woff2");
+    expect(names).not.toContain("linked/x.png");
+    expect(names).not.toContain(".cache/x.png");
+    expect(await readAsset(folder, "linked/x.png")).toBeNull();
+    const p = make();
+    await p.publishCanvas({ cwd: cwd }, "newest");
+    await settle(p);
+    const link = [...host.links.values()][0]!;
+    expect(link.manifest!.assets.map((a) => a.file)).toEqual(["fonts/icons.woff2"]);
+    expect(link.files.get("fonts/icons.woff2")).toBe("font");
+    expect(host.requests.some((r) => r.endsWith("/f/fonts/icons.woff2"))).toBe(true);
   });
 });
 
