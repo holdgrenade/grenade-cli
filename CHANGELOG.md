@@ -2,6 +2,13 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.116 (2026-10-15)
+
+- A group now stays after its last session is removed. Its folder and name are kept until you close it, so you can still open its toolbox and canvases and start a new session in it.
+- You can close a kept group to remove it for good, and rename it while it's kept.
+- Starting a new session in a kept group, or moving a session into one, keeps the group's name.
+- A group is still removed when you move its last session to another group.
+
 ## 1.0.115 (2026-10-14)
 
 - Sessions now have a to-do list kept by the daemon on your computer. The list is saved locally, readable only by your user account, and is the same for every connected app, so a change made on your phone shows up on the Mac app and in Chrome.
