@@ -13,6 +13,7 @@ import type { Route } from "./devices.js";
 import { SentInputs } from "./sentInputs.js";
 import { isInterrupt } from "../tmux/termPaint.js";
 import { BadCwdError, MissingAgentError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
+import { PortForwards, type ForwardConnect } from "../forward/portForward.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
 import type { PlanLimit, VoiceFrame } from "@grenade/protocol";
@@ -328,6 +329,8 @@ export interface ConnectionDeps {
   local?: boolean;
   /** Starts a live terminal (PROTOCOL.md "Live terminal"). Absent means this daemon streams none (no `term: 1`). */
   openTerm?(open: TermOpen): TermHandle;
+  /** Opens a socket to a port on this computer's loopback address (PROTOCOL.md "Port forwarding"). Absent means this daemon forwards none (no `forward: 1`). */
+  forwardConnect?: ForwardConnect;
   /** The `input` ids already typed, shared by every connection. Absent: this connection keeps its own. */
   sentInputs?: SentInputs;
   daemon: DaemonInfo;
@@ -351,6 +354,8 @@ export class Connection {
   private anyAgentConversations = false;
   /** Live terminals this client has open, by session. */
   private readonly terms = new Map<string, TermHandle>();
+  /** This connection's forwarded streams, made with its first `forward.open`. */
+  private forwards: PortForwards | undefined;
   private stopWatchingPush: (() => void) | undefined;
   /** Canvases this client watches, by `cwd`, `group` and `canvas` as it sent them (`watchKey`; PROTOCOL.md "Canvas", "Watching"). */
   private readonly canvasWatches = new Map<string, () => void>();
@@ -467,6 +472,7 @@ export class Connection {
     for (const id of this.subscriptions) this.d.registry.unsubscribe(id);
     this.subscriptions.clear();
     for (const id of [...this.terms.keys()]) this.closeTerm(id);
+    this.forwards?.closeAll();
     for (const stop of this.canvasWatches.values()) stop();
     this.canvasWatches.clear();
     for (const stop of this.planFollows.values()) stop();
@@ -617,6 +623,14 @@ export class Connection {
         return this.terms.get(frame.sessionId)?.resize(frame.cols, frame.rows);
       case "term.close":
         return this.closeTerm(frame.sessionId);
+      case "forward.open":
+        if (!this.d.forwardConnect) return this.fail("bad_frame", "this daemon forwards no port", frame.type);
+        this.forwards ??= new PortForwards((f) => this.send(f), this.d.forwardConnect);
+        return this.forwards.open(frame.id, frame.port);
+      case "forward.data":
+        return this.forwards?.data(frame.id, frame.data);
+      case "forward.close":
+        return this.forwards?.close(frame.id);
       case "history":
         return this.send(await r.history(frame.sessionId, frame.before, frame.count));
       case "seen":

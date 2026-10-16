@@ -10,6 +10,7 @@ import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
 import { UnknownGroupError, UnknownSessionError } from "../src/sessions/registry.js";
+import type { ForwardConnect } from "../src/forward/portForward.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
 const fixture = (name: string) => readFileSync(join(fixtures, name), "utf8");
@@ -176,7 +177,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -213,6 +214,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.todos ? { todos: opts.todos } : {}),
     ...(opts.library ? { library: opts.library } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
+    ...(opts.forwardConnect ? { forwardConnect: opts.forwardConnect } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
     unpair: (token) => events.push(`unpair:${token}`),
@@ -400,7 +402,7 @@ describe("Connection", () => {
       async plan(plan, id) { return { type: "library.plan", plan, folder: "/Users/ada/.claude/plans", text: "# Plan", modified: new Date(0).toISOString(), ...(id ? { id } : {}) }; },
       watch: () => () => {},
     };
-    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term });
+    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }) });
     // `group.close` names a group kept with no session.
     groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.

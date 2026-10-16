@@ -76,6 +76,7 @@ src/tmux/termPaint.ts      pure: the live terminal's first paint (`firstPaint`: 
 src/sessions/termStream.ts TermStream: one client's live terminal on one session: `tmux -C attach-session`, first paint, output coalesced 8 ms, typed bytes in; sizes the window through the registry
 src/sessions/registry.ts   SessionRegistry: Session objects, status machine driver, screen cache, persistence, events
 src/terminal/mirror.ts     TerminalMirror: one tab or window per live session in the chosen terminal (`none | iterm | terminal | auto`, asked at every event), `status`, `refresh`; `relayoutSteps` pure. Mirrors into nothing where there is no AppleScript (Linux)
+src/forward/portForward.ts PortForwards: one connection's streams to ports on this computer's loopback address (PROTOCOL.md "Port forwarding"): `127.0.0.1` then `::1`, `forward.data` both ways in pieces of at most 256 KiB, at most 64 streams; `connectLoopback` makes the sockets (tests pass a fake)
 src/terminal/terminalSetting.ts ~/.grenade/terminal.json `{ "terminal": "iterm" }`: which terminal; missing or unknown is `none`
 src/cli/terminalCommand.ts `grenade terminal [kind]`: writes the setting, `POST /terminal/reload`; `terminalLines` is pure
 src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`

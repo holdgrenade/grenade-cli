@@ -303,6 +303,35 @@ describe("a page that rebinds its own name to this Mac", () => {
   });
 });
 
+describe("port forwarding", () => {
+  it("says forward: 1 and carries an HTTP request to a server on this computer's loopback address and its answer back, sealed", async () => {
+    const http = await import("node:http");
+    const server = http.createServer((_req, res) => res.end("hello from the mini"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const { d, control, key } = await daemon();
+      expect(d.info.forward).toBe(1);
+      const code = (await control("POST", "/pair-code")).body["code"] as string;
+      const p = await phone(d.port, key, true);
+      p.send({ type: "pair", protocol: 1, code, client });
+      await until(() => p.frames.length >= 1);
+      p.hello((p.frames[0] as { token: string }).token);
+      await until(() => p.types().includes("groups"));
+      p.send({ type: "forward.open", id: "s1", port });
+      p.send({ type: "forward.data", id: "s1", data: Buffer.from(`GET / HTTP/1.1\r\nHost: localhost:${port}\r\nConnection: close\r\n\r\n`).toString("base64") });
+      await until(() => p.frames.some((f) => f.type === "forward.closed"));
+      const got = p.frames.flatMap((f) => (f.type === "forward.data" ? [Buffer.from((f as { data: string }).data, "base64").toString()] : [])).join("");
+      expect(p.frames.find((f) => f.type === "forward.opened")).toEqual({ type: "forward.opened", id: "s1" });
+      expect(got).toContain("hello from the mini");
+      expect(p.frames.find((f) => f.type === "forward.closed")).toEqual({ type: "forward.closed", id: "s1", reason: "ended" });
+      expect(p.raw.join("")).not.toContain("hello from the mini");
+    } finally {
+      server.close();
+    }
+  });
+});
+
 describe("pairing with a typed code", () => {
   it("travels sealed, and the phone it pairs is encrypted from the start", async () => {
     const { d, control, key } = await daemon();
