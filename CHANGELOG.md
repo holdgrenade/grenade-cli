@@ -2,6 +2,12 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.119 (2026-10-16)
+
+- Paired clients can now reach a port on this computer that only listens on localhost, such as a dev server, from the Mac app on another computer, over Wi-Fi or the relay.
+- Forwarding only connects to this computer's own loopback address (127.0.0.1 or ::1). The daemon does not dial other addresses and opens no new network listener.
+- Each connection can have up to 64 forwarded streams open at once. Data moves in chunks of up to 256 KiB, and all streams close when the connection closes.
+
 ## 1.0.118 (2026-10-15)
 
 - Publishing now includes files in subfolders of your canvas folder, up to two levels deep. Icon fonts and other assets that a board loads from a `fonts/` folder now show up correctly on share links instead of appearing as text. Hidden folders and linked folders are skipped, and a publish is capped at 2,000 files. This needs the share service that accepts file paths.
