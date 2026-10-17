@@ -3,9 +3,16 @@ import { WIDTH_FLOOR, onRelease, onSweep, parseWindowWidths } from "../src/sessi
 
 describe("width floor", () => {
   it("gives the width back to the terminals unless they are all narrower than the floor", () => {
-    expect(onRelease(null)).toBe("follow");
-    expect(onRelease(WIDTH_FLOOR)).toBe("follow");
-    expect(onRelease(11)).toBe("floor");
+    expect(onRelease({ width: 151, widest: WIDTH_FLOOR })).toBe("follow");
+    expect(onRelease({ width: 151, widest: 11 })).toBe("floor");
+  });
+
+  it("keeps a wide window's width when no Mac terminal is attached, so the agent goes on writing at it", () => {
+    expect(onRelease({ width: 151, widest: null })).toBe("keep");
+    expect(onRelease({ width: WIDTH_FLOOR, widest: null })).toBe("keep");
+    // A phone's width does not stay behind it.
+    expect(onRelease({ width: 46, widest: null })).toBe("follow");
+    expect(onRelease(undefined)).toBe("follow");
   });
 
   it("sweeps: floors a narrow window, fits the widest terminal, and lets a held window follow once one is wide", () => {

@@ -217,7 +217,8 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       await run(["resize-window", "-t", pane(id), ...size]);
     },
     async releaseSize(id) {
-      // -A drops the manual size: the window fits the largest attached client, or keeps its size when none is.
+      // -A drops the manual size: the window fits the attached clients, or goes back to the size it was made with
+      // when none is (so the registry keeps a wide window as it is then: `onRelease`).
       await run(["resize-window", "-A", "-t", pane(id)]);
     },
     async windowWidths() {

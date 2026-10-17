@@ -444,11 +444,15 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     await this.giveWidthBack(id, r);
   }
 
-  /** The window fits the Mac terminals again, or the floor when they are all narrower (`widthFloor.ts`). */
+  /** The window fits the Mac terminals again, the floor when they are all narrower, or keeps its width when there
+   * are none (`widthFloor.ts`). */
   private async giveWidthBack(id: string, r: Record_): Promise<void> {
-    const widest = (await this.tmux.windowWidths()).get(id)?.widest ?? null;
+    const window = (await this.tmux.windowWidths()).get(id);
     if (r.sizedBy) return; // another client sized it meanwhile
-    if (onRelease(widest) === "floor") {
+    const action = onRelease(window);
+    if (action === "keep") {
+      r.floored = false;
+    } else if (action === "floor") {
       await this.tmux.resize(id, WIDTH_FLOOR);
       r.floored = true;
     } else {

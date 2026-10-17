@@ -19,9 +19,16 @@ export interface WindowWidth {
 /** `floor`: resize the window to `WIDTH_FLOOR`. `follow`: let it fit the terminals again (`resize-window -A`). */
 export type FloorAction = "floor" | "follow" | null;
 
-/** A Grenade client gave the width back: follow the terminals, unless they are all narrower than the floor. */
-export function onRelease(widest: number | null, floor = WIDTH_FLOOR): Exclude<FloorAction, null> {
-  return widest !== null && widest < floor ? "floor" : "follow";
+/**
+ * A Grenade client gave the width back: follow the terminals, unless they are all narrower than the floor. With no
+ * Mac terminal attached, a window at least the floor wide keeps its width (`keep`): `-A` would put it back at the
+ * size it was made with (120), so a Mac pane's terminal of 151 left for activity mode had the agent write at 120,
+ * and back in terminal mode scrolling up showed those rows 120 wide for good. A narrower one (a phone's) follows.
+ */
+export function onRelease(window: WindowWidth | undefined, floor = WIDTH_FLOOR): "floor" | "follow" | "keep" {
+  const widest = window?.widest ?? null;
+  if (widest === null) return window !== undefined && window.width >= floor ? "keep" : "follow";
+  return widest < floor ? "floor" : "follow";
 }
 
 /** The 1 s sweep, for a window no Grenade client sizes. `floored`: it was held at the floor and has not followed since. */
