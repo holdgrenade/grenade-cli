@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.120 (2026-10-17)
+
+- Fixed a problem where a wide terminal on the Mac app would get stuck at 120 columns after you left terminal mode. Now the terminal keeps its width when no Mac terminal is attached, so returning to terminal mode shows the full-width output. A narrower width from a phone still resizes back as before.
+
 ## 1.0.119 (2026-10-16)
 
 - Paired clients can now reach a port on this computer that only listens on localhost, such as a dev server, from the Mac app on another computer, over Wi-Fi or the relay.
