@@ -16,7 +16,7 @@ import { BadCwdError, MissingAgentError, SessionExistsError, UnknownGroupError, 
 import { PortForwards, type ForwardConnect } from "../forward/portForward.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
-import type { PlanLimit, VoiceFrame } from "@grenade/protocol";
+import type { ConnectorsFrame, PlanLimit, VoiceFrame } from "@grenade/protocol";
 import { VoiceError, type MintedToken } from "../voice/voiceProvider.js";
 import { CANVAS_SUBSCRIPTIONS_MAX, type CanvasFrame, type CanvasInfo } from "@grenade/protocol";
 import { CanvasError, type CanvasPick, type CanvasReply } from "../canvas/canvasService.js";
@@ -303,6 +303,8 @@ export interface ConnectionDeps {
   voice?: VoicePort;
   /** Each agent's plan windows (PROTOCOL.md "Usage"). Absent means this daemon reads none and answers `limits` with an empty list. */
   limits?: { list(): PlanLimit[] };
+  /** The apps the agents reach through MCP servers (PROTOCOL.md "Connectors"). Absent means this daemon answers `connectors` with `bad_frame`. */
+  connectors?: { read(refresh?: boolean): Promise<ConnectorsFrame> };
   /** A group's design canvas. Absent means this daemon serves none (no `canvas: 1`) and answers its frames with `bad_frame`. */
   canvas?: CanvasPort;
   /** Canvases published to secret links. Absent means this daemon publishes none (no `publish: 1`) and answers their frames with `bad_frame`. */
@@ -674,6 +676,9 @@ export class Connection {
         return this.send(await listFolders(frame.path));
       case "limits":
         return this.send({ type: "limits", limits: this.d.limits?.list() ?? [] });
+      case "connectors":
+        if (!this.d.connectors) return this.fail("bad_frame", "this daemon reads no connectors", frame.type);
+        return this.send(await this.d.connectors.read(frame.refresh === true));
       case "voice":
         if (!this.d.voice) return this.fail("bad_frame", "this daemon keeps no voice keys", frame.type);
         if (!this.watchesVoice) this.d.voice.on("changed", this.onVoice);

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ACTIVITY_FRAME_MAX_BYTES, ACTIVITY_FULL_TEXT_MAX, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame, type DaemonFrame, type Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { BrowserBridge } from "../src/browser/browserBridge.js";
-import { type PlansPort, type TodosPort, type LibraryPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort } from "../src/daemon/wsHandler.js";
+import { type PlansPort, type TodosPort, type LibraryPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort, type ConnectionDeps } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
 import { silentLogger } from "../src/log.js";
@@ -177,7 +177,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; connectors?: ConnectionDeps["connectors"]; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -213,6 +213,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.plans ? { plans: opts.plans } : {}),
     ...(opts.todos ? { todos: opts.todos } : {}),
     ...(opts.library ? { library: opts.library } : {}),
+    ...(opts.connectors ? { connectors: opts.connectors } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     ...(opts.forwardConnect ? { forwardConnect: opts.forwardConnect } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
@@ -402,7 +403,7 @@ describe("Connection", () => {
       async plan(plan, id) { return { type: "library.plan", plan, folder: "/Users/ada/.claude/plans", text: "# Plan", modified: new Date(0).toISOString(), ...(id ? { id } : {}) }; },
       watch: () => () => {},
     };
-    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }) });
+    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, connectors: { async read() { return { type: "connectors", connectors: [], at: new Date(0).toISOString() }; } }, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }) });
     // `group.close` names a group kept with no session.
     groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.
@@ -416,6 +417,23 @@ describe("Connection", () => {
       const errors = out.slice(before).filter((f) => f.type === "error" && f.code === "bad_frame");
       expect(errors, name).toEqual([]);
     }
+  });
+
+  it("answers connectors from the reader, refreshing when asked, and refuses them without one", async () => {
+    const asked: boolean[] = [];
+    const frame = { type: "connectors" as const, connectors: [{ id: "linear", name: "Linear", agent: "claude", state: "connected" }], at: new Date(0).toISOString() };
+    const { conn, out } = connect({ connectors: { async read(refresh) { asked.push(refresh === true); return frame; } } });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "connectors" }));
+    await conn.handleMessage(fixture("client.connectors.json"));
+    expect(out).toEqual([frame, frame]);
+    expect(asked).toEqual([false, true]);
+    const bare = connect({});
+    await bare.conn.handleMessage(fixture("client.hello.json"));
+    bare.out.length = 0;
+    await bare.conn.handleMessage(fixture("client.connectors.json"));
+    expect(bare.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "connectors" });
   });
 
   it("passes typed Talk on to a client that asked for the thread, and refuses an agent that cannot answer", async () => {
