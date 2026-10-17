@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.122 (2026-10-17)
+
+- The daemon now reports which apps your sessions can reach, currently Linear and Slack, based on Claude's connector list. You can see their status in Settings › Connectors on the Mac app and in ⋯ › Connectors on the iPhone app.
+- Grenade doesn't connect to these apps itself. The status shows what Claude already has set up, and the daemon re-checks it about once a minute or when an app asks for a refresh.
+
 ## 1.0.121 (2026-10-17)
 
 - Shells now keep a command history on your computer, which the Mac app uses to suggest the next command in a toolbox terminal. Lines typed with a leading space are never recorded, and the history is readable only by your user account and trimmed to about 1 MB. Set `GRENADE_HISTORY=off` in your shell's rc file to turn it off. Works with zsh and bash.
