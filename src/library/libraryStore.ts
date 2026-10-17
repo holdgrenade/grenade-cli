@@ -348,7 +348,7 @@ export class LibraryStore {
       this.firstHeads.set(headKey, head);
     }
     const modifiedMs = Math.max(...listing.boards.map((b) => Date.parse(b.modified)));
-    return { folder, cwd, ...(group ? { group } : {}), canvas, title: canvasNameOf(canvas, { file: first.file, head }), files: listing.boards.map((b) => b.file), modifiedMs };
+    return { folder, cwd, ...(group ? { group } : {}), canvas, title: canvasNameOf(canvas, { file: first.file, head }, listing.ownName), files: listing.boards.map((b) => b.file), modifiedMs };
   }
 
   private async readPlan(record: PlanRecord): Promise<FoundPlan | null> {

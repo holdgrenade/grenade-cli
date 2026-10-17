@@ -71,9 +71,12 @@ export class CanvasService {
 
   /** The canvas now, and `onChange` with each change after it until `stop`. */
   async watch(pick: CanvasPick, onChange: (reply: CanvasReply) => void): Promise<{ reply: CanvasReply; stop: () => void }> {
-    const reply = await this.list(pick);
+    const folder = this.folderOf(pick);
+    // The watch starts from the listing with its `.name`, so a canvas that has one is not sent again at once.
+    const listed: CanvasReply = { folder, ...(await listCanvas(folder)) };
+    const reply = await this.named(pick, listed);
     let stopped = false;
-    const stopWatch = this.watcher.watch(reply.folder, reply, (listing) => {
+    const stopWatch = this.watcher.watch(folder, listed, (listing) => {
       // A group's canvas is named after its first board, which may just have changed.
       void this.named(pick, { folder: reply.folder, ...listing }).then((named) => {
         if (!stopped) onChange(named);
@@ -88,8 +91,9 @@ export class CanvasService {
     };
   }
 
-  /** The reply with the canvas's name, for a group's canvas. */
-  private async named(pick: CanvasPick, reply: CanvasReply): Promise<CanvasReply> {
+  /** The reply with the canvas's name, for a group's canvas; `ownName` stays here (it is in `name`). */
+  private async named(pick: CanvasPick, listed: CanvasReply): Promise<CanvasReply> {
+    const { ownName: _, ...reply } = listed;
     if (pick.canvas === undefined) return reply;
     const { name } = await canvasInfoOf(reply.folder, pick.canvas).catch(() => ({ name: undefined }));
     return name ? { ...reply, name } : reply;

@@ -5,8 +5,8 @@
  */
 import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { CANVAS_BOARD_MAX_BYTES, CANVAS_SHARED, CANVASES_MAX, canvasNameOf, canvasNumberOf, type CanvasBoard, type CanvasInfo } from "@grenade/protocol";
+import { basename, dirname, join } from "node:path";
+import { CANVAS_BOARD_MAX_BYTES, CANVAS_NAME_FILE, CANVAS_NAME_FILE_MAX_BYTES, CANVAS_SHARED, CANVASES_MAX, canvasNameOf, canvasNumberOf, canvasOwnNameOf, type CanvasBoard, type CanvasInfo } from "@grenade/protocol";
 import { boardsFrom, boardTooLarge, isBoardFile, type BoardFile } from "./boardListing.js";
 
 /** How much of a board is read for the size it asks for, as the Mac app does. */
@@ -19,6 +19,8 @@ export interface CanvasListing {
   boards: CanvasBoard[];
   missing?: true;
   truncated?: true;
+  /** The name the person gave a `canvas-<n>` (its `.name`), so a watch sees a rename. Never sent as it is. */
+  ownName?: string;
 }
 
 /** What a board's first bytes said, kept while its save time and size stay the same, so a watcher reads each file once. */
@@ -68,6 +70,21 @@ async function openBoard(path: string): Promise<{ read(max: number): Promise<Buf
   };
 }
 
+/**
+ * The name the person gave the canvas in `folder` (PROTOCOL.md "Canvas", "A name of its own"): its `.name`, read
+ * without following a link; null for `shared` (only a `canvas-<n>` has one), or when it is not there or empty.
+ */
+export async function readOwnName(folder: string): Promise<string | null> {
+  if (canvasNumberOf(basename(folder)) === null) return null;
+  const file = await openBoard(join(folder, CANVAS_NAME_FILE));
+  if (!file) return null;
+  try {
+    return canvasOwnNameOf((await file.read(CANVAS_NAME_FILE_MAX_BYTES)).toString("utf8"));
+  } finally {
+    await file.close();
+  }
+}
+
 /** The boards in `folder`, in Finder's order. A folder that is not there is `missing`, not an error. */
 export async function listCanvas(folder: string, heads: HeadCache = new Map()): Promise<CanvasListing> {
   if (!(await canvasThere(folder))) return { boards: [], missing: true };
@@ -96,7 +113,8 @@ export async function listCanvas(folder: string, heads: HeadCache = new Map()): 
   }
   for (const key of heads.keys()) if (!seen.has(key)) heads.delete(key);
   const { boards, truncated } = boardsFrom(files);
-  return { boards, ...(truncated ? { truncated: true as const } : {}) };
+  const ownName = await readOwnName(folder);
+  return { boards, ...(truncated ? { truncated: true as const } : {}), ...(ownName ? { ownName } : {}) };
 }
 
 /** The first 8 KiB of a board, as UTF-8 (what its `<title>` and size are read from); "" when it cannot be read. */
@@ -113,13 +131,13 @@ export async function readHead(folder: string, file: string): Promise<string> {
 
 /** What `canvases` says of one canvas: its name (`canvasNameOf`), how many boards, when the newest was saved. */
 export async function canvasInfoOf(folder: string, canvas: string): Promise<CanvasInfo> {
-  const { boards } = await listCanvas(folder);
+  const { boards, ownName } = await listCanvas(folder);
   const first = boards[0];
   const head = first ? await readHead(folder, first.file) : "";
   const modified = boards.reduce<string | undefined>((latest, b) => (!latest || b.modified > latest ? b.modified : latest), undefined);
   return {
     canvas,
-    name: canvasNameOf(canvas, first ? { file: first.file, head } : undefined),
+    name: canvasNameOf(canvas, first ? { file: first.file, head } : undefined, ownName),
     boards: boards.length,
     ...(modified ? { modified } : {}),
   };

@@ -115,6 +115,7 @@ describe("a board listing", () => {
     expect(listingKey(a)).not.toBe(listingKey(boardsFrom([file("A.html", 2, 10)])));
     expect(listingKey(a)).not.toBe(listingKey(boardsFrom([file("A.html", 1, 11)])));
     expect(listingKey({ boards: [], missing: true })).not.toBe(listingKey({ boards: [] }));
+    expect(listingKey({ ...a, ownName: "Checkout" })).not.toBe(listingKey(a));
   });
 
   it("says why a board is too large", () => {
@@ -284,6 +285,20 @@ describe("a group's canvases", () => {
     ]);
     expect(canvases[2]!.modified).toBeUndefined();
     expect(canvases[0]!.modified).toMatch(/^\d{4}-/);
+  });
+
+  it("names a canvas by its .name first, never one read through a link, and keeps it off the wire", async () => {
+    await writeFile(join(group, "canvas-2", ".name"), "  Checkout   flow \nsecond line");
+    await writeFile(join(project, "elsewhere"), "Not this");
+    await symlink(join(project, "elsewhere"), join(group, "canvas-1", ".name"));
+    await writeFile(join(project, ".grenade", "canvas", ".name"), "Not for shared");
+    const canvases = await listCanvases(group, join(project, ".grenade", "canvas"));
+    expect(canvases.map((c) => c.name)).toEqual(["Pricing page", "Checkout flow", "Canvas 10", "Old boards"]);
+    const service = new CanvasService(() => [session("gr-a", project, "g-1a2b")], new CanvasWatcher(() => () => {}), root);
+    const reply = await service.list({ cwd: project, group: "g-1a2b", canvas: "canvas-2" });
+    expect(reply.name).toBe("Checkout flow");
+    expect(reply).not.toHaveProperty("ownName");
+    expect(reply.boards.map((b) => b.file)).toEqual(["R1A · Welcome.html"]);
   });
 
   it("has none before the group's folder is made, and leaves a linked canvas out", async () => {

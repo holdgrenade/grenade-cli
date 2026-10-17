@@ -33,9 +33,11 @@ export function boardsFrom(files: BoardFile[], max = CANVAS_BOARDS_MAX): { board
 }
 
 /** What a watcher compares between two looks: every board's file, save time and size, and whether the folder is there. */
-export function listingKey(listing: { boards: CanvasBoard[]; missing?: true }): string {
+export function listingKey(listing: { boards: CanvasBoard[]; missing?: true; ownName?: string }): string {
   if (listing.missing) return "missing";
-  return listing.boards.map((b) => `${b.file}\n${b.modified}\n${b.bytes}`).join("\n\n");
+  const boards = listing.boards.map((b) => `${b.file}\n${b.modified}\n${b.bytes}`).join("\n\n");
+  // A rename (the canvas's `.name`) is a change too.
+  return listing.ownName ? `${boards}\n\n.name\n${listing.ownName}` : boards;
 }
 
 /** Megabytes with one decimal, as a person reads them. */
