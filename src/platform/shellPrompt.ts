@@ -11,14 +11,29 @@
  * zsh reads its startup files from `ZDOTDIR`, pointed at Grenade's (`<GRENADE_HOME>/shell/zsh`), which run the
  * user's own and then this prompt. bash starts with `--rcfile`, which runs `~/.bashrc` and then this prompt. Any
  * other shell starts as it is. The files are written under GRENADE_HOME as a session starts (`writeShellPrompt`).
+ *
+ * The same files keep Grenade's command history (`<GRENADE_HOME>/shell/history.tsv`), with any prompt, the user's
+ * own included: each command entered at a prompt, with the folder it ran in, the folder after it, its status and the
+ * shell it ran in, so the Mac app can predict the next command from it (grenade-mac's `CommandHistory`). A line
+ * that begins with a space is never kept (as `HIST_IGNORE_SPACE` and `ignorespace`), and `GRENADE_HISTORY=off` in
+ * the user's rc file turns it off. One line a command, tab-separated: the time (seconds), the shell's pid, the
+ * command's number in that shell (1 for its first), its status, the folder it ran in, the folder after it, and the
+ * command line, with `\` written `\\`, a newline `\n` and a tab as a space. Kept to the last megabyte or so
+ * (`trimShellHistory`).
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, readSync, closeSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { shellQuote } from "../hooks/shellQuote.js";
 
 /** The files under `<dir>` the prompt needs, by path relative to it. Pure. */
 export function shellPromptFiles(): Record<string, string> {
-  return { "zsh/.zshenv": ZSHENV, "zsh/.zshrc": ZSHRC, "zsh/prompt.zsh": ZSH_PROMPT, "bash/rc": BASH_RC };
+  return {
+    "zsh/.zshenv": ZSHENV,
+    "zsh/.zshrc": ZSHRC,
+    "zsh/prompt.zsh": ZSH_PROMPT,
+    "zsh/history.zsh": ZSH_HISTORY,
+    "bash/rc": BASH_RC,
+  };
 }
 
 /**
@@ -38,8 +53,15 @@ export function shellLaunch(shell: string, dir: string, userZdotdir?: string): s
   }
 }
 
-/** Writes the prompt's files into `dir` (`<GRENADE_HOME>/shell`), each only when it differs. */
+/**
+ * Writes the prompt's files into `dir` (`<GRENADE_HOME>/shell`), each only when it differs; makes the history's file,
+ * readable by this user alone, or trims it.
+ */
 export function writeShellPrompt(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const history = join(dir, HISTORY_FILE);
+  closeSync(openSync(history, "a", 0o600));
+  trimShellHistory(history);
   for (const [path, content] of Object.entries(shellPromptFiles())) {
     const file = join(dir, path);
     let current: string | undefined;
@@ -52,6 +74,31 @@ export function writeShellPrompt(dir: string): void {
     mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 });
     writeFileSync(file, content, { mode: 0o600 });
   }
+}
+
+/** The command history's file, under the prompt's folder. */
+export const HISTORY_FILE = "history.tsv";
+
+/** The history is cut back to its last `keep` bytes, from the next whole line, once it is past `limit`. */
+export function trimShellHistory(file: string, limit = 2_000_000, keep = 1_000_000): void {
+  let size: number;
+  try {
+    size = statSync(file).size;
+  } catch {
+    return;
+  }
+  if (size <= limit) return;
+  const fd = openSync(file, "r");
+  const tail = Buffer.alloc(keep);
+  let read: number;
+  try {
+    read = readSync(fd, tail, 0, keep, size - keep);
+  } finally {
+    closeSync(fd);
+  }
+  const text = tail.subarray(0, read);
+  const start = text.indexOf(10) + 1;
+  writeFileSync(file, text.subarray(start), { mode: 0o600 });
 }
 
 const HEADER = "# Grenade's prompt (grenade-cli, src/platform/shellPrompt.ts). grenaded writes this file: edits are replaced.\n";
@@ -71,6 +118,7 @@ ZDOTDIR=$GRENADE_USER_ZDOTDIR
 unset GRENADE_USER_ZDOTDIR
 [[ -r $ZDOTDIR/.zshrc ]] && source $ZDOTDIR/.zshrc
 source $_grenade_zdotdir/prompt.zsh
+source $_grenade_zdotdir/history.zsh
 unset _grenade_zdotdir
 `;
 
@@ -147,6 +195,38 @@ add-zsh-hook preexec _grenade_preexec
 precmd_functions=(_grenade_precmd ${D}{precmd_functions:#_grenade_precmd})
 `;
 
+// After the prompt, and first among the precmd functions: it sees the command's status and hands it on (`return`)
+// to the prompt, which shows it.
+const ZSH_HISTORY = String.raw`# Grenade's command history (grenade-cli, src/platform/shellPrompt.ts). grenaded writes this file: edits are replaced.
+# Each command, with its folder and status, for the Mac app's suggestions; GRENADE_HISTORY=off in your .zshrc turns it off.
+[[ ${D}{GRENADE_HISTORY:-on} == off ]] && return
+zmodload zsh/datetime 2>/dev/null
+typeset -g _grenade_history=${D}{${D}{(%):-%x}:A:h:h}/history.tsv _grenade_line= _grenade_dir=$PWD
+typeset -gi _grenade_seq=0
+
+_grenade_history_preexec() {
+  _grenade_line=${D}{1:-$3}
+}
+
+_grenade_history_precmd() {
+  local code=$? line=$_grenade_line dir=$_grenade_dir tab=$'\t'
+  _grenade_line= _grenade_dir=$PWD
+  if [[ -n ${D}{line//[[:space:]]/} && $line != [[:space:]]* ]]; then
+    (( _grenade_seq++ ))
+    line=${D}{line%$'\n'}
+    line=${D}{line//\\/\\\\}
+    line=${D}{line//$'\n'/\\n}
+    line=${D}{line//$tab/ }
+    print -r -- "$EPOCHSECONDS$tab$$$tab$_grenade_seq$tab$code$tab${D}{dir//$tab/ }$tab${D}{PWD//$tab/ }$tab$line" >>| $_grenade_history 2>/dev/null
+  fi
+  return $code
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _grenade_history_preexec
+precmd_functions=(_grenade_history_precmd ${D}{precmd_functions:#_grenade_history_precmd})
+`;
+
 // bash: the PS1 holds only variables, so a folder named with a backslash or a dollar is shown as it is; the colors
 // are in the variables, between \001 and \002, which tell readline they take no room.
 const BASH_RC = String.raw`# Grenade's prompt (grenade-cli, src/platform/shellPrompt.ts). grenaded writes this file: edits are replaced.
@@ -201,5 +281,33 @@ if [ "${D}{GRENADE_PROMPT:-on}" != off ]; then
       PS1='${D}{_grenade_top}\n${D}{_grenade_arrow} '
       ;;
   esac
+fi
+# Grenade's command history: each command, with its folder and status, for the Mac app's suggestions;
+# GRENADE_HISTORY=off in your .bashrc turns it off. A command is new when the history's number moved, so one that
+# bash does not keep (ignorespace, ignoredups) is not kept here either. First in PROMPT_COMMAND: it hands the status on.
+if [ "${D}{GRENADE_HISTORY:-on}" != off ]; then
+  _grenade_history="$(cd "$(dirname "${D}{BASH_SOURCE[0]}")/.." && pwd)/history.tsv"
+  _grenade_hist_dir=$PWD _grenade_hist_n= _grenade_hist_seq=0
+  _grenade_history_command() {
+    local code=$? n line tab=$'\t'
+    # "   12  the line": the number, a space (a star for a line edited since), a space, the line as typed.
+    line=$(HISTTIMEFORMAT= builtin history 1)
+    line=${D}{line#"${D}{line%%[![:space:]]*}"}
+    n=${D}{line%%[!0-9]*}
+    line=${D}{line#"$n"}; line=${D}{line#?}; line=${D}{line# }
+    if [ -n "$_grenade_hist_n" ] && [ -n "$n" ] && [ "$n" != "$_grenade_hist_n" ]; then
+      if [ -n "${D}{line//[[:space:]]/}" ] && [ "${D}{line#[[:space:]]}" = "$line" ]; then
+        _grenade_hist_seq=$((_grenade_hist_seq + 1))
+        line=${D}{line//\\/\\\\}
+        line=${D}{line//$'\n'/\\n}
+        line=${D}{line//$tab/ }
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${D}{EPOCHSECONDS:-$(date +%s)}" "$$" "$_grenade_hist_seq" "$code" \
+          "${D}{_grenade_hist_dir//$tab/ }" "${D}{PWD//$tab/ }" "$line" >> "$_grenade_history" 2>/dev/null
+      fi
+    fi
+    _grenade_hist_n=${D}{n:-0} _grenade_hist_dir=$PWD
+    return $code
+  }
+  PROMPT_COMMAND="_grenade_history_command${D}{PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 fi
 `;
