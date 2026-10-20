@@ -40,6 +40,8 @@ export interface RegistryEvents {
 
 /** How long after a turn ends a read of its folder still counts as the turn's (the read after a `Stop` comes 0.5 s later). */
 const TURN_READ_GRACE_MS = 5_000;
+/** Sweeps in a row that must miss a session before it is `gone` (`sweep`). */
+export const GONE_AFTER_MISSES = 2;
 
 /** What git says of a folder's work, as one string: files and lines not committed, commits made, commits not pushed. */
 function changeSignature(c: SessionChanges | undefined): string {
@@ -155,6 +157,10 @@ function isDirectoryOnDisk(path: string): boolean {
 
 export class SessionRegistry extends EventEmitter<RegistryEvents> {
   private readonly records = new Map<string, Record_>();
+  /** Sweeps in a row that did not find each live session in tmux (`sweep`). */
+  private readonly misses = new Map<string, number>();
+  /** Sessions `create` is starting: tmux has them before the registry does, and `sweep` leaves them to it. */
+  private readonly creating = new Set<string>();
   private readonly tmux: Tmux;
   private readonly log: Logger;
   private readonly persistPath: string | undefined;
@@ -219,35 +225,43 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const createdAt = (id: string) => persisted.get(id)?.createdAt ?? fallbackAt;
     for (const id of [...live].sort((a, b) => createdAt(a).localeCompare(createdAt(b)))) {
       if (this.records.has(id)) continue;
-      const meta = persisted.get(id);
-      const cwd = meta?.cwd ?? "";
-      const group = meta?.group ?? defaultGroupFor(cwd, this.list()) ?? this.newGroupId();
-      this.add({
-        id,
-        name: meta?.name ?? id.slice(3),
-        agent: meta?.agent ?? "shell",
-        cwd,
-        createdAt: createdAt(id),
-        group,
-        order: meta?.order ?? nextOrder(group, this.list()),
-        groupName: meta?.groupName ?? groupNameOf(group, this.list()),
-        summary: meta?.summary,
-        userTitle: meta?.userTitle,
-        aiTitle: meta?.aiTitle,
-        guessedTitle: meta?.guessedTitle,
-        model: meta?.model,
-        effort: meta?.effort,
-        modelChosenAt: meta?.modelChosenAt,
-        transcript: meta?.transcript,
-        background: meta?.background,
-        resumedFrom: meta?.resumedFrom,
-        resumedAt: meta?.resumedAt,
-        gitBase: meta?.gitBase,
-      });
-      // Sessions started by an older daemon lack mouse mode and the blank fill; set them like `newSession` does.
-      this.tmux.applySessionOptions(id).catch((e) => this.log.debug("Could not set tmux session options", { session: id, error: e }));
+      this.adoptOne(id, persisted.get(id), fallbackAt);
     }
     if (live.length > 0) this.log.info(`Picked up ${live.length} running session${live.length === 1 ? "" : "s"}`, { sessions: live.join(",") });
+  }
+
+  /**
+   * The poller's 1 s check against `tmux list-sessions` (only `gr-*` names). A session is `gone` only when two sweeps
+   * in a row missed it: one listing that comes back wrong (tmux busy, the Mac waking up) must not end every session,
+   * since `gone` is final and the apps then offer its name for a new session, which tmux refuses as taken. A live
+   * `gr-*` session with no live record (marked gone wrongly before, or left by a kill that failed) is taken on again,
+   * as at a restart, so its name is never held by a session nobody can see.
+   */
+  sweep(live: readonly string[]): void {
+    const inTmux = new Set(live);
+    for (const id of this.liveIds()) {
+      if (inTmux.has(id)) {
+        this.misses.delete(id);
+        continue;
+      }
+      const missed = (this.misses.get(id) ?? 0) + 1;
+      if (missed < GONE_AFTER_MISSES) {
+        this.misses.set(id, missed);
+        continue;
+      }
+      this.misses.delete(id);
+      this.markGone(id);
+    }
+    const lost = live.filter((id) => !this.creating.has(id) && (this.records.get(id)?.session.status ?? "gone") === "gone");
+    if (lost.length === 0) return;
+    const persisted = this.loadPersisted();
+    const fallbackAt = new Date(this.now()).toISOString();
+    for (const id of lost) {
+      const r = this.records.get(id);
+      this.records.delete(id);
+      this.adoptOne(id, r ? this.persistedOf(r) : persisted.get(id), fallbackAt);
+    }
+    this.log.info(`Picked up ${lost.length} running session${lost.length === 1 ? "" : "s"} again`, { sessions: lost.join(",") });
   }
 
   /** `resume` starts a copy of that Claude Code conversation (PROTOCOL.md "Conversations"); `agent` must be `claude`. */
@@ -264,7 +278,13 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (await this.tmux.hasSession(id)) throw new SessionExistsError(`tmux session ${id} already exists`);
     const missing = this.missingAgent(input.agent);
     if (missing) throw new MissingAgentError(missing);
-    await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume });
+    this.creating.add(id);
+    try {
+      await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume });
+    } finally {
+      this.creating.delete(id);
+    }
+    this.misses.delete(id);
     this.records.delete(id);
     const others = this.list().filter((s) => s.id !== id);
     const group = input.group ?? defaultGroupFor(cwd, others) ?? this.newGroupId();
@@ -279,14 +299,14 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   async kill(id: string): Promise<void> {
     const r = this.require(id);
-    if (r.session.status !== "gone") {
-      try {
-        await this.tmux.killSession(id);
-      } catch (e) {
-        this.log.warn(`Could not stop tmux session ${id}`, { error: e });
-      }
+    // A `gone` session's tmux session may still run (a sweep may be wrong): kill it too, or its name stays taken.
+    try {
+      await this.tmux.killSession(id);
+    } catch (e) {
+      if (r.session.status !== "gone") this.log.warn(`Could not stop tmux session ${id}`, { error: e });
     }
     this.records.delete(id);
+    this.misses.delete(id);
     this.persist();
     this.log.info(`Ended session ${id}`);
     this.emit("removed", id);
@@ -805,6 +825,36 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   // ---- internals -----------------------------------------------------------
 
+  /** Takes on a live `gr-*` tmux session it has no live record of, with what `sessions.json` kept of it. */
+  private adoptOne(id: string, meta: PersistedSession | undefined, fallbackAt: string): void {
+    const cwd = meta?.cwd ?? "";
+    const group = meta?.group ?? defaultGroupFor(cwd, this.list()) ?? this.newGroupId();
+    this.add({
+      id,
+      name: meta?.name ?? id.slice(3),
+      agent: meta?.agent ?? "shell",
+      cwd,
+      createdAt: meta?.createdAt ?? fallbackAt,
+      group,
+      order: meta?.order ?? nextOrder(group, this.list()),
+      groupName: meta?.groupName ?? groupNameOf(group, this.list()),
+      summary: meta?.summary,
+      userTitle: meta?.userTitle,
+      aiTitle: meta?.aiTitle,
+      guessedTitle: meta?.guessedTitle,
+      model: meta?.model,
+      effort: meta?.effort,
+      modelChosenAt: meta?.modelChosenAt,
+      transcript: meta?.transcript,
+      background: meta?.background,
+      resumedFrom: meta?.resumedFrom,
+      resumedAt: meta?.resumedAt,
+      gitBase: meta?.gitBase,
+    });
+    // Sessions started by an older daemon lack mouse mode and the blank fill; set them like `newSession` does.
+    this.tmux.applySessionOptions(id).catch((e) => this.log.debug("Could not set tmux session options", { session: id, error: e }));
+  }
+
   private add(meta: PersistedSession): Session {
     const at = this.now();
     // A session that background tasks held when the daemon stopped is held again; what ends the hold still applies.
@@ -890,11 +940,15 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     return map;
   }
 
+  private persistedOf({ session: s, transcript, userTitle, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }: Record_): PersistedSession {
+    return { id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, userTitle, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) };
+  }
+
   private persist(): void {
     if (!this.persistPath) return;
     const list: PersistedSession[] = [...this.records.values()]
       .filter((r) => r.session.status !== "gone")
-      .map(({ session: s, transcript, userTitle, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }) => ({ id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, userTitle, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) }));
+      .map((r) => this.persistedOf(r));
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

@@ -1,7 +1,7 @@
 /**
  * Drives the registry from tmux on a timer:
  * - every 200 ms: capture every subscribed session (live screen on the phone)
- * - every 1 s: list tmux sessions to detect gone ones, capture unsubscribed sessions
+ * - every 1 s: list tmux sessions to detect gone ones (and take back live ones it lost, `registry.sweep`), capture unsubscribed sessions
  *   so lastLine and the status heuristics stay fresh, follow each shell's folder after a `cd` (`followShellFolders`),
  *   and hold too-narrow windows at the width floor.
  */
@@ -43,8 +43,7 @@ export function startPoller(deps: { tmux: Tmux; registry: SessionRegistry; log: 
       ticks++;
       const subscribed = new Set(registry.subscribedIds());
       if (ticks % SLOW_EVERY_TICKS === 0) {
-        const live = new Set((await tmux.listSessions()).filter(isGrenadeSession));
-        for (const id of registry.liveIds()) if (!live.has(id)) registry.markGone(id);
+        registry.sweep((await tmux.listSessions()).filter(isGrenadeSession));
         await followShellFolders(tmux, registry).catch((e: unknown) => log.debug("Could not read shells' folders", { error: e }));
         await captureAll(registry.liveIds());
         await registry.enforceWidthFloor().catch((e: unknown) => log.debug("Could not check window widths", { error: e }));

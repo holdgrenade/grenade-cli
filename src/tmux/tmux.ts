@@ -125,8 +125,9 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
     return processTree(table, roots);
   };
 
-  const isNoServer = (e: unknown) =>
-    e instanceof TmuxError && /no server running|No such file or directory|error connecting/i.test(e.message);
+  // tmux says "no server running" when its socket is missing or refuses; "error connecting to … (…)" is any other
+  // failure (a busy server, EAGAIN), which says nothing about whether sessions exist and must not read as none.
+  const isNoServer = (e: unknown) => e instanceof TmuxError && /no server running|No such file or directory/i.test(e.message);
 
   return {
     async listSessions() {

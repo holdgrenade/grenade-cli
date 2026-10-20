@@ -70,6 +70,68 @@ describe("SessionRegistry.create", () => {
   });
 });
 
+describe("SessionRegistry.sweep", () => {
+  const folders = new Set(["/Users/me/app"]);
+  const make = () => {
+    const t = fakeTmux();
+    const killed: string[] = [];
+    t.tmux.killSession = async (id) => { killed.push(id); };
+    const registry = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p) });
+    return { registry, killed, tmux: t.tmux };
+  };
+
+  it("marks a session gone only when two sweeps in a row miss it", async () => {
+    const { registry } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    registry.sweep([]);
+    expect(registry.get("gr-app")?.status).not.toBe("gone");
+    registry.sweep(["gr-app"]);
+    registry.sweep([]);
+    expect(registry.get("gr-app")?.status).not.toBe("gone");
+    registry.sweep([]);
+    expect(registry.get("gr-app")?.status).toBe("gone");
+  });
+
+  it("takes back a session marked gone that tmux still runs, keeping its name and group", async () => {
+    const { registry } = make();
+    await registry.create({ name: "App", cwd: "~/app", agent: "claude" });
+    const group = registry.get("gr-app")?.group;
+    registry.markGone("gr-app");
+    registry.sweep(["gr-app"]);
+    expect(registry.get("gr-app")).toMatchObject({ name: "App", cwd: "/Users/me/app", group });
+    expect(registry.get("gr-app")?.status).not.toBe("gone");
+    expect(registry.liveIds()).toEqual(["gr-app"]);
+  });
+
+  it("takes on a gr-* session it has no record of, so its name is not held by a session nobody sees", () => {
+    const { registry } = make();
+    registry.sweep(["gr-web"]);
+    expect(registry.get("gr-web")).toMatchObject({ name: "web" });
+  });
+
+  it("leaves a session create is still starting to create", async () => {
+    const { registry, tmux } = make();
+    let release = () => {};
+    tmux.newSession = () => new Promise<void>((resolve) => { release = resolve; });
+    const started = registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    await flush();
+    registry.sweep(["gr-app"]);
+    expect(registry.get("gr-app")).toBeUndefined();
+    release();
+    expect(await started).toMatchObject({ name: "app" });
+  });
+
+  it("kills the tmux session of a session marked gone too", async () => {
+    const { registry, killed } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    registry.markGone("gr-app");
+    await registry.kill("gr-app");
+    expect(killed).toEqual(["gr-app"]);
+    registry.sweep([]);
+    expect(registry.get("gr-app")).toBeUndefined();
+  });
+});
+
 describe("phone width", () => {
   const mac = {};
   const phone = {};
