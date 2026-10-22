@@ -131,6 +131,24 @@ async function phone(port: number, key: Buffer, sealed: boolean) {
   return { ws, frames, raw, send, hello, closed: () => closed, types: () => frames.map((f) => f.type) };
 }
 
+describe("a session's to-dos through the control API (grenade todo)", () => {
+  it("adds and lists them, and refuses an unknown session or a bad body", async () => {
+    const { d } = await daemon();
+    const post = (path: string, body: unknown) =>
+      fetch(`http://127.0.0.1:${d.controlPort}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const created = await post("/sessions", { name: "todo", cwd: home, agent: "claude" });
+    const id = ((await created.json()) as { id: string }).id;
+    const added = await post(`/sessions/${id}/todos`, { todos: [{ title: "Trim the email.", text: "Trim the email before checking it." }] });
+    expect(added.status).toBe(200);
+    const list = (await added.json()) as { title: string; done: boolean }[];
+    expect(list.map((t) => [t.title, t.done])).toEqual([["Trim the email.", false]]);
+    const read = await fetch(`http://127.0.0.1:${d.controlPort}/sessions/${id}/todos`);
+    expect(((await read.json()) as unknown[]).length).toBe(1);
+    expect((await post("/sessions/gr-nobody/todos", { todos: [{ title: "x", text: "x" }] })).status).toBe(404);
+    expect((await post(`/sessions/${id}/todos`, { todos: [{ title: "" }] })).status).toBe(400);
+  });
+});
+
 describe("updates through the control API", () => {
   it("reports what installs this copy and refuses a restart it cannot do", async () => {
     const { control } = await daemon();

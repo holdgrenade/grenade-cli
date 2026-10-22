@@ -53,6 +53,7 @@ import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
 import { BROWSER_INSTRUCTIONS } from "../browser/browserPrompt.js";
 import { CANVAS_INSTRUCTIONS } from "../canvas/canvasPrompt.js";
+import { TODO_INSTRUCTIONS } from "../todos/todoPrompt.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { fromWebPage, isLoopback } from "./loopback.js";
@@ -207,9 +208,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
         // Read as each session starts, so a status line the user set up since is the one it runs.
         get claude() {
-          // Every session is told where its group's canvas is (`grenade canvas`); on a Mac, also to test web pages in
-          // the app's toolbox (`grenade browser`).
-          const instructions = process.platform === "darwin" ? `${BROWSER_INSTRUCTIONS}\n\n${CANVAS_INSTRUCTIONS}` : CANVAS_INSTRUCTIONS;
+          // Every session is told where its group's canvas is (`grenade canvas`) and how to add to its to-dos (`grenade
+          // todo`); on a Mac, also to test web pages in the app's toolbox (`grenade browser`).
+          const shared = `${CANVAS_INSTRUCTIONS}\n\n${TODO_INSTRUCTIONS}`;
+          const instructions = process.platform === "darwin" ? `${BROWSER_INSTRUCTIONS}\n\n${shared}` : shared;
           return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), instructions);
         },
         codex: codexHookFlags(port),
@@ -1001,6 +1003,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
 
   const control: Server = createControlServer({
     registry,
+    todos,
     browser: { bridge: browser, attachments },
     codes,
     typedCode: (code) => typedCode(code, e2eKey.publicKey),

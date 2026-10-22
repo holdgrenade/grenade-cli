@@ -56,7 +56,7 @@ import type { TerminalStatus } from "../terminal/mirror.js";
 import type { AgentSetup } from "../agents/agentSetup.js";
 import { PROMPT_TEST_WAIT_MAX_S, PROMPT_TEST_WAIT_S, type PromptTestResult } from "../prompts/promptTests.js";
 import { readBody, sendJson } from "./http.js";
-import { BrowserAction, BROWSER_SCRIPT_MAX } from "@grenade/protocol";
+import { BrowserAction, BROWSER_SCRIPT_MAX, type NewTodo, TodoAddFrame, type TodosFrame } from "@grenade/protocol";
 import type { BrowserBridge } from "../browser/browserBridge.js";
 import type { AttachmentStore } from "../attachments/attachmentStore.js";
 import { AGENT_SCREENSHOT_NAME } from "../highlights/turnRules.js";
@@ -107,6 +107,11 @@ export interface ControlDeps {
     say(id: string, text: string): boolean;
     setAgent(agent: string): boolean;
     tool(turn: unknown, secret: unknown, name: string, args: Record<string, unknown>): Promise<{ ok: true; text: string; isError: boolean } | { ok: false; message: string }>;
+  };
+  /** Sessions' to-do lists (PROTOCOL.md "To-dos"), for `grenade todo`: an agent adds what the person asked it to. */
+  todos?: {
+    frame(sessionId: string): TodosFrame;
+    add(sessionId: string, todos: NewTodo[]): TodosFrame;
   };
   /** Inject a test activity entry. */
   activityTests?: {
@@ -166,6 +171,20 @@ async function route(d: ControlDeps, req: IncomingMessage, res: ServerResponse):
     if (!body.success) return sendJson(res, 400, { error: "bad_request", message: body.error.message });
     try {
       return sendJson(res, 201, await d.registry.create(body.data));
+    } catch (e) {
+      return sendJson(res, 409, { error: "conflict", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  // A session's to-dos (`grenade todo`): GET lists them, POST adds `{todos: [{title, text}]}`, as `todo.add` does.
+  const todoPath = url.pathname.match(/^\/sessions\/([^/]+)\/todos$/);
+  if (todoPath?.[1] && d.todos && (method === "GET" || method === "POST")) {
+    const id = decodeURIComponent(todoPath[1]);
+    if (!d.registry.get(id)) return sendJson(res, 404, { error: "unknown_session", message: `no session ${id}` });
+    if (method === "GET") return sendJson(res, 200, d.todos.frame(id).todos);
+    const body = TodoAddFrame.pick({ todos: true }).safeParse(JSON.parse((await readBody(req)) || "{}"));
+    if (!body.success) return sendJson(res, 400, { error: "bad_request", message: body.error.message });
+    try {
+      return sendJson(res, 200, d.todos.add(id, body.data.todos).todos);
     } catch (e) {
       return sendJson(res, 409, { error: "conflict", message: e instanceof Error ? e.message : String(e) });
     }
