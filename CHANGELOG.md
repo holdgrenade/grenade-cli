@@ -2,6 +2,14 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.123 (2026-10-22)
+
+- To-dos now survive ending a session. They're kept with the session's Claude conversation, so resuming that conversation brings back its full list, done and open, on every device. Lists that no session resumes within 60 days are dropped.
+- Resuming a Claude conversation no longer loses the to-dos it had before, which used to happen every time a session ended.
+- New `grenade todo add "<title>" --text "<detail>"` command adds a to-do to the session you run it in.
+- New `grenade todo list` command prints the current session's to-dos.
+- Claude sessions Grenade starts now know about the to-do commands, so the agent can add to-dos itself.
+
 ## 1.0.122 (2026-10-17)
 
 - The daemon now reports which apps your sessions can reach, currently Linear and Slack, based on Claude's connector list. You can see their status in Settings › Connectors on the Mac app and in ⋯ › Connectors on the iPhone app.
