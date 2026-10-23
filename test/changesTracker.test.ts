@@ -187,7 +187,7 @@ describe("ChangesTracker", () => {
       log: silentLogger,
     });
     await tracker.refresh("gr-w");
-    expect(shown.at(-1)).toMatchObject({ branch: "feature/y", repo: "work", worktree: realpathSync(tree) });
+    expect(shown.at(-1)).toMatchObject({ branch: "feature/y", repo: "work", worktree: realpathSync(tree), linked: true });
     tracker.stop();
   });
 
