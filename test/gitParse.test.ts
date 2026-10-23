@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commitPageOf, filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText, remoteOfRef } from "../src/changes/gitParse.js";
+import { commitPageOf, filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText, remoteOfRef, repoNameOf } from "../src/changes/gitParse.js";
 
 describe("parseStatusV2", () => {
   it("reads the branch, its upstream and the files", () => {
@@ -154,6 +154,15 @@ describe("pushes", () => {
     expect(pushRemoteOf(["fork"])).toBe("fork");
     expect(pushRemoteOf(["a", "b"])).toBeUndefined();
     expect(pushRemoteOf([])).toBeUndefined();
+  });
+});
+
+describe("repoNameOf", () => {
+  it("names the repository a working tree belongs to", () => {
+    expect(repoNameOf("/Users/adam/workspace/grenade/.git\n")).toBe("grenade");
+    expect(repoNameOf("/srv/git/grenade.git")).toBe("grenade");
+    expect(repoNameOf("/srv/git/grenade/")).toBe("grenade");
+    expect(repoNameOf("")).toBeUndefined();
   });
 });
 

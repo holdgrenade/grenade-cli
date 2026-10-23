@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -71,7 +71,7 @@ describe("ChangesTracker", () => {
   it("follows a session's work from changed to committed to pushed, with a card", async () => {
     const { tracker, last, pushes, base, wrote } = setup();
     await tracker.refresh("gr-x");
-    expect(last()).toEqual({ branch: "main", upstream: "origin/main", remote: "origin", ahead: 0, behind: 0, commits: 0, files: 0, added: 0, removed: 0 });
+    expect(last()).toEqual({ branch: "main", upstream: "origin/main", remote: "origin", repo: "work", worktree: realpathSync(work), ahead: 0, behind: 0, commits: 0, files: 0, added: 0, removed: 0 });
     expect(base()).toMatch(/^[0-9a-f]{40}$/);
 
     wrote("a.txt", "one\n2\nthree\n");
@@ -170,10 +170,24 @@ describe("ChangesTracker", () => {
     git(work, "add", ".");
     git(work, "commit", "-q", "-m", "G");
     await tracker.refresh("gr-x");
-    expect(last()).toEqual({ branch: "feature/x", remote: "origin", ahead: 0, behind: 0, commits: 1, files: 0, added: 0, removed: 0 });
+    expect(last()).toEqual({ branch: "feature/x", remote: "origin", repo: "work", worktree: realpathSync(work), ahead: 0, behind: 0, commits: 1, files: 0, added: 0, removed: 0 });
     await tracker.push("gr-x");
     expect(last()).toMatchObject({ upstream: "origin/feature/x", ahead: 0 });
     expect(pushes.map((p) => p.text)).toEqual(["Pushed 1 commit to origin/feature/x"]);
+    tracker.stop();
+  });
+
+  it("names the repository a linked worktree belongs to, and the worktree's own folder", async () => {
+    const tree = join(root, "work-tree");
+    git(work, "worktree", "add", "-q", "-b", "feature/y", tree);
+    const shown: (SessionChanges | undefined)[] = [];
+    const tracker = new ChangesTracker({
+      registry: { liveIds: () => ["gr-w"], get: () => ({ cwd: tree }), setChanges: (_, c) => shown.push(c), gitBaseOf: () => undefined, setGitBase: () => {} },
+      activity: { notePush: () => {} },
+      log: silentLogger,
+    });
+    await tracker.refresh("gr-w");
+    expect(shown.at(-1)).toMatchObject({ branch: "feature/y", repo: "work", worktree: realpathSync(tree) });
     tracker.stop();
   });
 

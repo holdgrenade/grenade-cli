@@ -22,6 +22,7 @@ import {
   pushFailureOf,
   pushRemoteOf,
   remoteOfRef,
+  repoNameOf,
   type LoggedCommit,
 } from "./gitParse.js";
 
@@ -79,20 +80,24 @@ export interface GitSnapshot {
 export async function readSnapshot(cwd: string, base: string | undefined): Promise<GitSnapshot | undefined> {
   const top = await topOf(cwd);
   if (!top) return undefined;
-  const [status, remotes] = await Promise.all([
+  const [status, remotes, common] = await Promise.all([
     runGit(top, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
     runGit(top, ["remote"]),
+    runGit(top, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
   ]);
   if (status.code !== 0) return undefined;
   const report = parseStatusV2(status.stdout);
   const files = await countedFiles(top, report.head, report.files);
   const remote = pushRemoteOf(remotes.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  const repo = common.code === 0 ? repoNameOf(common.stdout) : undefined;
   const waiting = report.head ? await waitingCommits(top, base, report.upstream !== undefined) : [];
   const commits = report.head && base ? await sessionWaitingCount(top, base, report.upstream !== undefined) : report.upstream ? 0 : waiting.length;
   const changes: SessionChanges = {
     ...(report.branch ? { branch: report.branch } : {}),
     ...(report.upstream ? { upstream: report.upstream } : {}),
     ...(remote ? { remote } : {}),
+    ...(repo ? { repo } : {}),
+    worktree: top,
     ahead: report.upstream ? report.ahead : 0,
     behind: report.upstream ? report.behind : 0,
     commits,

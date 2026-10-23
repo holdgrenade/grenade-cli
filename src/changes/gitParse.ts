@@ -309,6 +309,19 @@ export function pushRemoteOf(remotes: readonly string[]): string | undefined {
   return remotes.length === 1 ? remotes[0] : undefined;
 }
 
+/**
+ * The repository's name, from its common git folder (`git rev-parse --path-format=absolute --git-common-dir`): the
+ * folder holding `.git`, which every linked worktree of the repository shares, or a bare repository's own folder
+ * without `.git`. Undefined for an empty answer.
+ */
+export function repoNameOf(commonDir: string): string | undefined {
+  const parts = commonDir.trim().replace(/\/+$/, "").split("/").filter(Boolean);
+  const last = parts.at(-1);
+  if (!last) return undefined;
+  if (last === ".git") return parts.at(-2);
+  return last.endsWith(".git") && last.length > 4 ? last.slice(0, -4) : last;
+}
+
 function clip(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max - 1) + "…";
 }
