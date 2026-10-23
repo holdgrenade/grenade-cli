@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commitPageOf, filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText, remoteOfRef, repoNameOf } from "../src/changes/gitParse.js";
+import { commitPageOf, filesWithCounts, linesIn, parseLog, parseNameStatus, parseNumstat, parseStatusV2, parseUnifiedDiff, pushFailureOf, pushRemoteOf, pushText, remoteOfRef, remoteRepoOf, repoNameOf } from "../src/changes/gitParse.js";
 
 describe("parseStatusV2", () => {
   it("reads the branch, its upstream and the files", () => {
@@ -163,6 +163,21 @@ describe("repoNameOf", () => {
     expect(repoNameOf("/srv/git/grenade.git")).toBe("grenade");
     expect(repoNameOf("/srv/git/grenade/")).toBe("grenade");
     expect(repoNameOf("")).toBeUndefined();
+  });
+});
+
+describe("remoteRepoOf", () => {
+  it("reads the owner and name on any host, in every form", () => {
+    for (const url of ["git@github.com:AgreeHQ/web.git", "https://github.com/AgreeHQ/web", "ssh://git@github.com/AgreeHQ/web.git", "https://x-access-token:ghp_secret@github.com/AgreeHQ/web.git/\n", "git@git.example.com:AgreeHQ/web.git"]) {
+      expect(remoteRepoOf(url)).toBe("AgreeHQ/web");
+    }
+    expect(remoteRepoOf("git@gitlab.com:group/sub/web.git")).toBe("group/sub/web");
+  });
+  it("has none for a local path or an odd path", () => {
+    expect(remoteRepoOf("/tmp/remote.git")).toBeUndefined();
+    expect(remoteRepoOf("file:///tmp/remote.git")).toBeUndefined();
+    expect(remoteRepoOf("https://github.com/owner")).toBeUndefined();
+    expect(remoteRepoOf("https://github.com/owner/repo%3Fx")).toBeUndefined();
   });
 });
 

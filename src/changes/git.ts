@@ -22,6 +22,7 @@ import {
   pushFailureOf,
   pushRemoteOf,
   remoteOfRef,
+  remoteRepoOf,
   repoNameOf,
   type LoggedCommit,
 } from "./gitParse.js";
@@ -88,8 +89,10 @@ export async function readSnapshot(cwd: string, base: string | undefined): Promi
   if (status.code !== 0) return undefined;
   const report = parseStatusV2(status.stdout);
   const files = await countedFiles(top, report.head, report.files);
-  const remote = pushRemoteOf(remotes.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  const remoteNames = remotes.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  const remote = pushRemoteOf(remoteNames);
   const repo = common.code === 0 ? repoNameOf(common.stdout) : undefined;
+  const remoteRepo = await remoteRepoIn(top, (report.upstream && remoteOfRef(report.upstream, remoteNames)) ?? remote);
   const waiting = report.head ? await waitingCommits(top, base, report.upstream !== undefined) : [];
   const commits = report.head && base ? await sessionWaitingCount(top, base, report.upstream !== undefined) : report.upstream ? 0 : waiting.length;
   const changes: SessionChanges = {
@@ -97,6 +100,7 @@ export async function readSnapshot(cwd: string, base: string | undefined): Promi
     ...(report.upstream ? { upstream: report.upstream } : {}),
     ...(remote ? { remote } : {}),
     ...(repo ? { repo } : {}),
+    ...(remoteRepo ? { remoteRepo } : {}),
     worktree: top,
     ahead: report.upstream ? report.ahead : 0,
     behind: report.upstream ? report.behind : 0,
@@ -106,6 +110,13 @@ export async function readSnapshot(cwd: string, base: string | undefined): Promi
     removed: files.reduce((n, f) => n + (f.removed ?? 0), 0),
   };
   return { top, head: report.head, changes, waiting };
+}
+
+/** The repository's path on the host of `remote` (the upstream's, else where a new branch goes), or undefined. */
+async function remoteRepoIn(top: string, remote: string | undefined): Promise<string | undefined> {
+  if (!remote) return undefined;
+  const url = await runGit(top, ["remote", "get-url", "--", remote]);
+  return url.code === 0 ? remoteRepoOf(url.stdout) : undefined;
 }
 
 /** The commit checked out in `cwd`'s repository, or undefined (no repository, no commit yet). */

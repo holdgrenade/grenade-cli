@@ -235,12 +235,11 @@ export function pushText(push: { upstream: string; commits: number } | { upstrea
 const COMMIT_PAGES: Record<string, string> = { "github.com": "/commit/", "gitlab.com": "/-/commit/", "bitbucket.org": "/commits/" };
 
 /**
- * A commit's page on its remote's website (PROTOCOL.md "The push card"), from the remote's URL in any of git's forms
- * (`https://`, `ssh://`, `git@host:path`) and the full hash. Only for the hosts in `COMMIT_PAGES`; built from the host
- * and path alone, so a user name or token in the URL never reaches it. Undefined for anything else.
+ * A remote's host and path from its URL in any of git's forms (`https://`, `ssh://`, `git@host:path`): the host in lower
+ * case without `www.`, and the path's parts without `.git`, each a plain name, at least two. The URL's user name or
+ * token is never part of it. Undefined for a local path, `file://`, or an odd path.
  */
-export function commitPageOf(remoteUrl: string, hash: string): string | undefined {
-  if (!/^[0-9a-f]{7,64}$/.test(hash)) return undefined;
+function remotePathOf(remoteUrl: string): { host: string; parts: string[] } | undefined {
   const url = remoteUrl.trim();
   let host: string;
   let path: string;
@@ -258,12 +257,30 @@ export function commitPageOf(remoteUrl: string, hash: string): string | undefine
     host = scp[1]!;
     path = scp[2]!;
   } else return undefined;
-  host = host.toLowerCase().replace(/^www\./, "");
-  const page = COMMIT_PAGES[host];
-  if (!page) return undefined;
   const parts = path.replace(/\.git\/?$/, "").split("/").filter(Boolean);
   if (parts.length < 2 || parts.some((p) => !/^[A-Za-z0-9._-]+$/.test(p) || p === "." || p === "..")) return undefined;
-  return `https://${host}/${parts.join("/")}${page}${hash}`;
+  return { host: host.toLowerCase().replace(/^www\./, ""), parts };
+}
+
+/**
+ * A commit's page on its remote's website (PROTOCOL.md "The push card"), from the remote's URL (`remotePathOf`) and the
+ * full hash. Only for the hosts in `COMMIT_PAGES`. Undefined for anything else.
+ */
+export function commitPageOf(remoteUrl: string, hash: string): string | undefined {
+  if (!/^[0-9a-f]{7,64}$/.test(hash)) return undefined;
+  const remote = remotePathOf(remoteUrl);
+  const page = remote && COMMIT_PAGES[remote.host];
+  if (!remote || !page) return undefined;
+  return `https://${remote.host}/${remote.parts.join("/")}${page}${hash}`;
+}
+
+/**
+ * The repository's path on its remote's host, owner first (`AgreeHQ/web`, `group/sub/web`), from the remote's URL
+ * (`remotePathOf`), on any host (PROTOCOL.md "Changes", `remoteRepo`). Undefined for a local path or an odd URL.
+ */
+export function remoteRepoOf(remoteUrl: string): string | undefined {
+  const path = remotePathOf(remoteUrl)?.parts.join("/");
+  return path && path.length <= 255 ? path : undefined;
 }
 
 /**
