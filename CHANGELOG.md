@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.125 (2026-10-23)
+
+- Sessions now show the repository's owner and name next to the branch, such as `AgreeHQ/web:main`, in the Mac sidebar and the iPhone Sessions list. The name comes from the remote's URL, from the upstream remote if there is one, otherwise from the remote a new branch would use. It works with any git URL form and any host.
+- Credentials in a remote URL, such as a user name or token, are never shown. Repositories with only a local remote show no name.
+
 ## 1.0.124 (2026-10-23)
 
 - Sessions now record which repository and worktree they work in. For a linked git worktree, the repository is the main checkout it belongs to, not the worktree's own folder.
