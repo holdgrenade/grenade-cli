@@ -2,6 +2,13 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.127 (2026-10-26)
+
+- To-do lists now belong to the project, the folder a group's sessions share. Every session in that project shows the same list and count, and the list stays after the sessions end.
+- A new session in the same folder picks up the project's existing to-do list.
+- Moving a session to another project shows that project's list. If a group's shared folder changes, the group's list moves with it.
+- Your existing to-do lists are merged into their projects once, on upgrade. Each new to-do now records the session that added it.
+
 ## 1.0.126 (2026-10-23)
 
 - Sessions working in a git linked worktree (one made with `git worktree add`) are now labelled as such. The Mac sidebar and the iPhone Sessions list show the worktree under the branch name with a tree icon beside it, and the main repository folder stays on one line.
