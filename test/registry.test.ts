@@ -271,6 +271,15 @@ describe("session groups", () => {
     expect(await r.create({ name: "two", cwd: "~/app", agent: "claude", group: "g-1" })).toMatchObject({ group: "g-1" });
   });
 
+  it("with kept groups, starts a session in a group whose only, ended member had its name", async () => {
+    const tmux = fakeTmux();
+    const r = new SessionRegistry({ tmux: tmux.tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), newGroupId: () => "g-1" });
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    r.markGone("gr-app");
+    r.keptGroups = { keptGroup: () => undefined };
+    expect(await r.create({ name: "app", cwd: "~/app", agent: "claude", group: "g-1" })).toMatchObject({ id: "gr-app", group: "g-1" });
+  });
+
   it("moves a session out and back in, emitting updated and regrouped", async () => {
     const r = make();
     await r.create({ name: "app", cwd: "~/app", agent: "claude" });

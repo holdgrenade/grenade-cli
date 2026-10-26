@@ -360,7 +360,10 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   private canJoin(group: string, id: string): boolean {
     if (isJoinableGroup(group, this.list(), id)) return true;
     if (!this.keptGroups) return false;
-    return this.keptGroups.keptGroup(group) !== undefined || this.list().some((s) => s.id !== id && s.group === group);
+    // An ended member counts even when the new session takes its name (and so its id): it is the one being replaced,
+    // and was the group's last (Jeff, 2026-10-26: New Session in a project whose only session had ended, in the same
+    // folder, said "no live session in group").
+    return this.keptGroups.keptGroup(group) !== undefined || this.list().some((s) => s.group === group && (s.id !== id || s.status === "gone"));
   }
 
   /** The name a session joining `group` carries: its members', else the kept group's. */
