@@ -1,5 +1,5 @@
 /**
- * `grenade todo`: the to-do list of the session it runs in (PROTOCOL.md "To-dos"), for an agent the person asked to
+ * `grenade todo`: the to-do list of the project of the session it runs in (PROTOCOL.md "To-dos"), for an agent the person asked to
  * keep something for later ("add these as to-dos"). `add` adds one, `list` prints the list. Every client shows the
  * change at once, as when the person adds one. Run inside a Grenade session, which `GRENADE_SESSION` names.
  */
@@ -32,7 +32,7 @@ export function todoLines(todos: readonly Todo[]): string[] {
 }
 
 export function registerTodoCommand(program: Command, d: TodoCommandDeps): void {
-  const todo = program.command("todo").description("the to-do list of the Grenade session it runs in: add to it, or list it");
+  const todo = program.command("todo").description("the to-do list of the project of the Grenade session it runs in: add to it, or list it");
   const sessionOf = (o: { session?: string }) => {
     const id = o.session ?? d.session;
     if (!id) throw new Error("run this inside a Grenade session, or name one with --session");
@@ -40,7 +40,7 @@ export function registerTodoCommand(program: Command, d: TodoCommandDeps): void 
   };
   todo
     .command("add <title>")
-    .description("add a to-do to this session's list, which the person sees in Grenade")
+    .description("add a to-do to this project's list, which the person sees in Grenade")
     .option("--text <text>", "the whole item, when there is more to it than the title")
     .option("--session <name>", "the session (default: $GRENADE_SESSION)")
     .addHelpText(
@@ -59,7 +59,7 @@ export function registerTodoCommand(program: Command, d: TodoCommandDeps): void 
     });
   todo
     .command("list")
-    .description("print this session's to-dos")
+    .description("print this project's to-dos")
     .option("--session <name>", "the session (default: $GRENADE_SESSION)")
     .action(async (o: { session?: string }) => {
       const id = sessionOf(o);

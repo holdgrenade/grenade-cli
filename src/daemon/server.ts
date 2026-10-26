@@ -5,6 +5,7 @@
  *   relay link (optional)  phones away from the LAN, end-to-end encrypted (src/relay/)
  */
 import { computerWord, daemonOs } from "../platform/computer.js";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -202,7 +203,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -253,7 +254,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   registry.on("removed", (id) => plans.forget(id));
   // Each session's to-do list (PROTOCOL.md "To-dos"), saved beside sessions.json as groups.json is.
   const todosPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "todos.json") : paths.todos;
-  const todos = new TodoStore(registry, log, todosPath);
+  // A conversation's folder, for a to-do list kept with it from before lists were the project's: its transcript's `cwd`.
+  const conversationFolder = (conversation: string): string | undefined => {
+    try {
+      const projects = join(paths.claudeDir, "projects");
+      for (const dir of readdirSync(projects)) {
+        const file = join(projects, dir, `${conversation}.jsonl`);
+        if (!existsSync(file)) continue;
+        return /"cwd":"((?:[^"\\]|\\.)*)"/.exec(readFileSync(file, "utf8").slice(0, 200_000))?.[1];
+      }
+    } catch {
+      // No Claude Code folder: the list waits for a session that resumes it.
+    }
+    return undefined;
+  };
+  const todos = new TodoStore(registry, log, todosPath, undefined, undefined, todosPath ? conversationFolder : undefined);
   // Saved beside sessions.json, so a test daemon with its own sessions file keeps its own order too.
   const groupsPath = opts.sessionsPath === null ? undefined : opts.sessionsPath ? join(dirname(opts.sessionsPath), "groups.json") : paths.groups;
   const groupOrder = new GroupOrderStore(registry, log, groupsPath);

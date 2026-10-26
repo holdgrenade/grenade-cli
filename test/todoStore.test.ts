@@ -1,6 +1,6 @@
-/** Sessions' to-do lists (PROTOCOL.md "To-dos"): the store, and a Connection with it. */
+/** Projects' to-do lists (PROTOCOL.md "To-dos"): the store, and a Connection with it. */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,15 +9,13 @@ import { Connection } from "../src/daemon/wsHandler.js";
 import { silentLogger } from "../src/log.js";
 import { TodoError, TodoStore } from "../src/todos/todoStore.js";
 
-const session = (id: string): Session => ({ id, name: id, agent: "claude", cwd: "/w", status: "idle", statusSince: "2026-10-13T16:00:00.000Z", lastLine: "", createdAt: "2026-10-13T16:00:00.000Z" });
+const session = (id: string, cwd = "/w", group?: string): Session => ({ id, name: id, agent: "claude", cwd, status: "idle", statusSince: "2026-10-13T16:00:00.000Z", lastLine: "", createdAt: "2026-10-13T16:00:00.000Z", ...(group ? { group } : {}) });
 
+/** gr-a in the project /w, gr-b in /v. */
 class FakeRegistry extends EventEmitter {
-  readonly sessions = [session("gr-a"), session("gr-b")];
+  readonly sessions = [session("gr-a"), session("gr-b", "/v")];
   readonly counts = new Map<string, number>();
   readonly typed: string[] = [];
-  /** Each session's transcript, as its hooks named it. */
-  readonly transcripts = new Map<string, string>();
-  transcriptOf(id: string) { return this.transcripts.get(id); }
   list() { return this.sessions; }
   get(id: string) { return this.sessions.find((s) => s.id === id); }
   setTodos(id: string, open: number) { this.counts.set(id, open); }
@@ -25,7 +23,7 @@ class FakeRegistry extends EventEmitter {
   async sendText(_id: string, text: string) { this.typed.push(text); }
   /** The session's status changes, as the registry says it. */
   status(id: string, status: Session["status"], waitingFor?: Session["waitingFor"]) {
-    const s = { ...session(id), status, ...(waitingFor ? { waitingFor } : {}) };
+    const s = { ...this.get(id)!, status, ...(waitingFor ? { waitingFor } : {}) };
     this.emit("updated", s);
   }
 }
@@ -34,7 +32,7 @@ const item = (title: string) => ({ title, text: `${title} And the rest of it.`, 
 
 function store(path?: string, registry = new FakeRegistry(), start = "2026-10-13T16:00:00.000Z") {
   let t = Date.parse(start);
-  const todos = new TodoStore(registry, silentLogger, path, () => new Date((t += 1000)));
+  const todos = new TodoStore(registry, silentLogger, path, () => new Date((t += 1000)), "/home");
   const frames: unknown[] = [];
   todos.on("changed", (f) => frames.push(f));
   return { registry, todos, frames };
@@ -47,6 +45,8 @@ describe("TodoStore", () => {
     expect(f.id).toBe("t-1");
     expect(f.todos.map((t) => t.title)).toEqual(["One.", "Two."]);
     expect(f.todos.every((t) => /^td-[0-9a-f]{8}$/.test(t.id) && !t.done && t.from === "2026-10-13T15:12:40.000Z")).toBe(true);
+    // Which session it was added in, for the project's list.
+    expect(f.todos[0]).toMatchObject({ session: "gr-a", sessionName: "gr-a" });
     expect(registry.counts.get("gr-a")).toBe(2);
     expect(frames).toHaveLength(1);
   });
@@ -107,62 +107,94 @@ describe("TodoStore", () => {
     expect(todos.frame("gr-a").todos[0]!.done).toBe(false);
   });
 
-  it("forgets a removed session's list when its conversation is not known", () => {
-    const { registry, todos } = store();
-    todos.add("gr-a", [item("One.")]);
-    registry.emit("removed", "gr-a");
-    expect(todos.frame("gr-a").todos).toEqual([]);
-  });
-
-  it("keeps a removed session's list with its conversation, and gives it to the session that resumes it", () => {
+  it("keeps one list per project: every session in its folder sees it, and gets each change", () => {
     const { registry, todos, frames } = store();
-    registry.transcripts.set("gr-a", "/home/.claude/projects/-w/conv-1.jsonl");
-    todos.add("gr-a", [item("One."), item("Two.")]);
-    todos.update("gr-a", todos.frame("gr-a").todos[1]!.id, { done: true });
-    registry.sessions.splice(0, 1);
-    registry.emit("removed", "gr-a");
-    expect(todos.frame("gr-a").todos).toEqual([]);
-    expect(todos.keptFor("conv-1")?.map((t) => t.title)).toEqual(["One.", "Two."]);
-    // A session that resumes another conversation takes nothing; the one that resumes conv-1 takes the list, done and all.
-    const other = { ...session("gr-c"), resumedFrom: "conv-9" };
-    registry.sessions.push(other);
-    registry.emit("created", other);
-    expect(todos.frame("gr-c").todos).toEqual([]);
-    const resumed = { ...session("gr-d"), resumedFrom: "conv-1" };
-    registry.sessions.push(resumed);
+    const c = session("gr-c", "/w/app", "g-1");
+    const a = { ...registry.sessions[0]!, group: "g-1" };
+    registry.sessions[0] = a;
+    registry.sessions.push(c);
+    registry.emit("created", c);
     frames.length = 0;
-    registry.emit("created", resumed);
-    expect(todos.frame("gr-d").todos.map((t) => [t.title, t.done])).toEqual([["One.", false], ["Two.", true]]);
+    // gr-a (/w) and gr-c (/w/app) share g-1, whose folder is /w; gr-b is another project.
+    const f = todos.add("gr-c", [item("One.")], "t-1");
+    expect(f).toMatchObject({ sessionId: "gr-c", id: "t-1" });
+    expect(todos.frame("gr-a").todos.map((x) => x.title)).toEqual(["One."]);
+    expect(todos.frame("gr-b").todos).toEqual([]);
+    expect([registry.counts.get("gr-a"), registry.counts.get("gr-c"), registry.counts.get("gr-b")]).toEqual([1, 1, 0]);
+    // A frame for each session of the project, the asker's with its id.
+    expect(frames).toEqual([todos.frame("gr-a"), todos.frame("gr-c", "t-1")]);
+    expect(todos.listOf("/w")).toHaveLength(1);
+    // Every session ends: the project keeps its list, and a new session there sees it.
+    registry.sessions.splice(0, registry.sessions.length, registry.sessions[1]!);
+    registry.emit("removed", "gr-a");
+    registry.emit("removed", "gr-c");
+    const d = session("gr-d", "/w");
+    registry.sessions.push(d);
+    registry.emit("created", d);
+    expect(todos.frame("gr-d").todos.map((x) => x.title)).toEqual(["One."]);
     expect(registry.counts.get("gr-d")).toBe(1);
-    expect(frames).toEqual([todos.frame("gr-d")]);
-    expect(todos.keptFor("conv-1")).toBeUndefined();
   });
 
-  it("keeps a list through a restart that lost its session, and lets one never resumed go after 60 days", () => {
+  it("follows a group whose folder widens, and a session moved to another project", () => {
+    const { registry, todos } = store();
+    registry.sessions[0] = { ...registry.sessions[0]!, cwd: "/w/app", group: "g-1" };
+    registry.emit("updated", registry.sessions[0]);
+    todos.add("gr-a", [item("One.")]);
+    expect(todos.listOf("/w/app")).toHaveLength(1);
+    // gr-b (/v… now /w/site) joins g-1: its folder is /w, and the list goes with it.
+    registry.sessions[1] = { ...registry.sessions[1]!, cwd: "/w/site", group: "g-1" };
+    registry.emit("updated", registry.sessions[1]);
+    expect(todos.listOf("/w/app")).toBeUndefined();
+    expect(todos.frame("gr-b").todos.map((x) => x.title)).toEqual(["One."]);
+    expect(registry.counts.get("gr-b")).toBe(1);
+    // Moved out again to a group of its own: it sees its own folder's list, none.
+    registry.sessions[1] = { ...registry.sessions[1]!, group: "g-2" };
+    registry.emit("updated", registry.sessions[1]);
+    expect(todos.frame("gr-b").todos).toEqual([]);
+    expect(registry.counts.get("gr-b")).toBe(0);
+  });
+
+  it("brings the lists of sessions and conversations from before into their projects", () => {
     const path = join(mkdtempSync(join(tmpdir(), "todos-")), "todos.json");
-    const first = store(path);
-    first.registry.transcripts.set("gr-a", "/p/conv-2.jsonl");
-    first.todos.add("gr-a", [item("One.")]);
-    expect(JSON.parse(readFileSync(path, "utf8")).conversations).toEqual({ "gr-a": "conv-2" });
-    // The daemon comes back without gr-a: its list is kept with conv-2, and a session resuming it gets it.
-    const lost = new FakeRegistry();
-    lost.sessions.splice(0, 1);
-    const again = store(path, lost);
-    expect(again.todos.keptFor("conv-2")?.map((t) => t.title)).toEqual(["One."]);
-    const later = new FakeRegistry();
-    later.sessions.splice(0, 1);
-    later.sessions.push({ ...session("gr-e"), resumedFrom: "conv-2" });
-    expect(store(path, later).todos.frame("gr-e").todos.map((t) => t.title)).toEqual(["One."]);
-    // Kept 61 days and never resumed: gone.
+    const at = "2026-10-13T15:00:00.000Z";
+    const todo = (id: string) => ({ id, title: id, text: id, done: false, at });
+    writeFileSync(path, JSON.stringify({
+      sessions: { "gr-a": [todo("td-0000000a")], "gr-gone": [todo("td-0000000b")] },
+      conversations: { "gr-gone": "conv-2" },
+      kept: { "conv-1": { todos: [todo("td-0000000c")], keptAt: "2026-10-12T00:00:00.000Z" } },
+    }));
+    const registry = new FakeRegistry();
+    registry.sessions.push({ ...session("gr-e"), resumedFrom: "conv-1" });
+    const { todos } = store(path, registry);
+    // gr-a's and the resumed conv-1's join /w; gr-gone's waits with conv-2.
+    expect(todos.frame("gr-a").todos.map((x) => x.id)).toEqual(["td-0000000a", "td-0000000c"]);
+    expect(todos.keptFor("conv-2")?.map((x) => x.id)).toEqual(["td-0000000b"]);
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    expect(Object.keys(saved.projects)).toEqual(["/w"]);
+    expect(saved.sessions).toBeUndefined();
+    // A session resuming conv-2 later brings it in; one never resumed goes after 60 days.
+    const resumed = { ...session("gr-f", "/v"), resumedFrom: "conv-2" };
+    registry.sessions.push(resumed);
+    registry.emit("created", resumed);
+    expect(todos.frame("gr-b").todos.map((x) => x.id)).toEqual(["td-0000000b"]);
     const stale = join(mkdtempSync(join(tmpdir(), "todos-")), "todos.json");
-    const old = store(stale);
-    old.registry.transcripts.set("gr-a", "/p/conv-3.jsonl");
-    old.todos.add("gr-a", [item("Old.")]);
-    old.registry.sessions.splice(0, 1);
-    old.registry.emit("removed", "gr-a");
-    expect(old.todos.keptFor("conv-3")).toHaveLength(1);
-    const after = store(stale, new FakeRegistry(), "2026-12-14T16:00:00.000Z");
-    expect(after.todos.keptFor("conv-3")).toBeUndefined();
+    writeFileSync(stale, JSON.stringify({ kept: { "conv-3": { todos: [todo("td-0000000d")], keptAt: "2026-10-12T00:00:00.000Z" } } }));
+    expect(store(stale, new FakeRegistry(), "2026-12-14T16:00:00.000Z").todos.keptFor("conv-3")).toBeUndefined();
+  });
+
+  it("moves a list kept with a conversation into the project of the folder that conversation was held in", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "todos-")), "todos.json");
+    const at = "2026-10-13T15:00:00.000Z";
+    writeFileSync(path, JSON.stringify({ kept: {
+      "conv-1": { todos: [{ id: "td-0000000e", title: "Kept.", text: "Kept.", done: false, at }], keptAt: "2026-10-12T00:00:00.000Z" },
+      "conv-2": { todos: [{ id: "td-0000000f", title: "Unknown.", text: "Unknown.", done: false, at }], keptAt: "2026-10-12T00:00:00.000Z" },
+    } }));
+    const registry = new FakeRegistry();
+    const todos = new TodoStore(registry, silentLogger, path, () => new Date("2026-10-13T16:00:00.000Z"), "/home", (c) => (c === "conv-1" ? "/w/.grenade/canvas" : undefined));
+    expect(todos.frame("gr-a").todos.map((x) => x.title)).toEqual(["Kept."]);
+    expect(registry.counts.get("gr-a")).toBe(1);
+    expect(todos.keptFor("conv-1")).toBeUndefined();
+    expect(todos.keptFor("conv-2")).toHaveLength(1);
   });
 
   it("saves to its file, mode 0600, and reads it back after a restart", () => {
@@ -170,7 +202,7 @@ describe("TodoStore", () => {
     const first = store(path);
     first.todos.add("gr-a", [item("One.")]);
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(path, "utf8")).sessions["gr-a"]).toHaveLength(1);
+    expect(JSON.parse(readFileSync(path, "utf8")).projects["/w"]).toHaveLength(1);
     const again = store(path);
     expect(again.todos.frame("gr-a").todos.map((t) => t.title)).toEqual(["One."]);
     expect(again.registry.counts.get("gr-a")).toBe(1);
