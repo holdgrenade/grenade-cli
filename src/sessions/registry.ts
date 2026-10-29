@@ -705,8 +705,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const r = this.records.get(id);
     if (!r) return;
     const now = r.session.context;
-    if (now && now.used === context.used && now.size === context.size) return;
-    r.session = { ...r.session, context: { used: context.used, size: context.size } };
+    if (now && JSON.stringify(now) === JSON.stringify(context)) return;
+    r.session = { ...r.session, context: { ...context } };
     this.emit("updated", r.session);
   }
 

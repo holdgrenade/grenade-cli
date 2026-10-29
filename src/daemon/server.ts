@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, codexActivityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo } from "@grenade/protocol";
+import { CONTROL_PORT, DEFAULT_PORT, PROMPT_HOOK_PATH, PairRequest, WS_PATH, activityEntriesIn, codexActivityEntriesIn, endsStopped, workingDirectoryIn, type ClientInfo, type DaemonFrame, type DaemonInfo, type SessionContext } from "@grenade/protocol";
 import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.js";
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
@@ -20,6 +20,8 @@ import { EndedSessions } from "../sessions/endedSessions.js";
 import { GroupOrderStore } from "../sessions/groupOrderStore.js";
 import { TermStream } from "../sessions/termStream.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
+import { ContextBreakdown } from "../usage/contextBreakdown.js";
+import { probeContext } from "../usage/contextProbe.js";
 import { Summarizer } from "../summary/summarizer.js";
 import { TerminalMirror, terminalFromEnv, type TerminalKind, type TerminalStatus } from "../terminal/mirror.js";
 import { readTerminalSetting } from "../terminal/terminalSetting.js";
@@ -674,6 +676,25 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
     });
 
+  /**
+   * What each Claude Code session's context holds (PROTOCOL.md "Usage", "Where it goes"): its folder measured by a
+   * promptless claude, the conversation the rest. Off with GRENADE_CONTEXT_PROBE=off, or when claude is not found.
+   */
+  const claudeForContext = process.env["GRENADE_CONTEXT_PROBE"] === "off" ? undefined : resolveClaudeBin();
+  const statusContexts = new Map<string, SessionContext>();
+  const contextBreakdown = claudeForContext
+    ? new ContextBreakdown({
+        probe: (cwd) => probeContext(claudeForContext, cwd),
+        onMeasured: (cwd) => {
+          for (const [id, context] of statusContexts) {
+            const s = registry.get(id);
+            if (s?.cwd === cwd) registry.setContext(id, contextBreakdown!.of(cwd, context));
+          }
+        },
+        log,
+      })
+    : undefined;
+
   /** One Claude Code status line payload: the session's context by Claude Code's own count, and the plan windows. */
   function applyStatusLine(session: string | null, body: string): void {
     let payload: unknown;
@@ -684,7 +705,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     }
     const usage = claudeStatusUsage(payload, new Date().toISOString());
     planLimits.record("claude", usage.limits);
-    if (session && usage.context) registry.setContext(session, usage.context);
+    if (!session || !usage.context) return;
+    const cwd = registry.get(session)?.cwd;
+    statusContexts.set(session, usage.context);
+    registry.setContext(session, contextBreakdown && cwd ? contextBreakdown.of(cwd, usage.context) : usage.context);
   }
 
   function handlePair(raw: string, res: Parameters<typeof sendJson>[0]): void {
