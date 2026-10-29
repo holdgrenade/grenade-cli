@@ -2,6 +2,13 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.131 (2026-10-29)
+
+- Continuing a conversation now picks up the original conversation itself instead of making a copy, so the agent keeps its history where it left off. If the agent already has that conversation open outside Grenade, Grenade still makes a copy.
+- For Codex, Grenade now tells when a conversation is open in another window, so it knows whether it can safely continue the original.
+- Codex sessions whose hooks were never trusted can now be matched to their saved conversation by folder and start time.
+- Ended sessions stay in the list after Grenade restarts, and each conversation shows the ended session it was last in.
+
 ## 1.0.130 (2026-10-29)
 
 - You can now restart an ended session in its place. Claude Code and Codex sessions whose conversation is still on the computer pick up that conversation again. Other sessions, including plain shells, start fresh.
