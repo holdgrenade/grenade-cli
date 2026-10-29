@@ -37,7 +37,7 @@ import { ConversationIndex } from "../conversations/conversationIndex.js";
 import { AllConversations } from "../conversations/conversationSource.js";
 import { ConversationMarks } from "../conversations/conversationMarks.js";
 import { moveToTrash } from "../conversations/trash.js";
-import { conversationIdOf, heldConversations } from "../conversations/heldConversations.js";
+import { conversationIdOf, heldConversations, withLastSessions } from "../conversations/heldConversations.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { LiveConnections } from "./connections.js";
 import { createControlServer } from "./control.js";
@@ -204,7 +204,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, continueOriginal: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -444,8 +444,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const marks = new ConversationMarks(log, marksPath);
   const held = () => heldConversations(registry.transcripts(), (id) => (registry.get(id)?.status ?? "gone") !== "gone");
   const talkWorkDir = talkDir ? join(talkDir, "work") : undefined;
+  // Every conversation a Grenade session is in, running or ended (but `except`'s): never "open elsewhere" for Codex.
+  const sessionsConversations = (except?: string) => new Set(registry.transcripts().filter((t) => t.id !== except).map((t) => conversationIdOf(t.path)));
+  const codexConversations = new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held, ours: () => sessionsConversations() });
   const conversationIndex = new AllConversations(
-    [new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }), new CodexConversations({ codexDir: opts.codexDir ?? paths.codexDir, marks, held })],
+    [new ConversationIndex({ claudeDir: opts.claudeDir ?? paths.claudeDir, marks, held }), codexConversations],
     // Typed Talk's own conversations are the daemon's, not the owner's.
     (cwd) => talkWorkDir !== undefined && (cwd === talkWorkDir || cwd.startsWith(`${talkWorkDir}/`)),
   );
@@ -541,7 +544,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   };
 
   const conversations: ConversationsPort = {
-    list: (anyAgent) => conversationIndex.list(anyAgent),
+    // An ended session a conversation was in last (still listed) is named, so a client continues it there.
+    list: async (anyAgent) => withLastSessions(await conversationIndex.list(anyAgent), registry.list(), registry.transcripts()),
     preview: (id) => conversationIndex.preview(id),
     async delete(id) {
       const target = await conversationIndex.trashPaths(id);
@@ -555,16 +559,19 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       log.info(`Moved conversation ${id} to the Trash`, { paths: target.paths.join(",") });
       return null;
     },
-    async resume({ name, agent, group, conversationId }) {
+    async resume({ name, agent, group, conversationId, same }) {
       const found = await conversationIndex.find(conversationId);
       if (!found || found.agent !== agent) return `no ${agent} conversation ${conversationId} on this ${computerWord()}`;
-      const session = await registry.create({ name, cwd: found.cwd, agent, group, resume: conversationId });
+      // The conversation itself when asked, unless its agent has it open elsewhere: then a copy (PROTOCOL.md "The same conversation").
+      const fork = !same || (await conversationIndex.openElsewhere(conversationId));
+      const session = await registry.create({ name, cwd: found.cwd, agent, group, resume: conversationId, fork });
+      ended.holdFirstPrompt(session);
       // The agent writes the copy only with its first prompt; until then the session shows the original's history.
       // Read whole here, not through the reader, whose place in that file may belong to another session.
       registry.setTranscript(session.id, found.path);
       const history = await conversationIndex.preview(conversationId);
       if (history) activity.replace(session.id, history);
-      log.info(`Resumed a copy of conversation ${conversationId}`, { session: session.id, cwd: found.cwd });
+      log.info(fork ? `Resumed a copy of conversation ${conversationId}` : `Continued conversation ${conversationId}`, { session: session.id, cwd: found.cwd });
       return session;
     },
   };
@@ -578,6 +585,9 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     findConversation: (id) => conversationIndex.find(id),
     previewConversation: (id) => conversationIndex.preview(id),
     replaceActivity: (id, entries) => activity.replace(id, entries),
+    openElsewhere: (id) => conversationIndex.openElsewhere(id),
+    codexRolloutFor: (cwd, since, others) => codexConversations.rolloutFor(cwd, since, others),
+    othersConversations: (id) => sessionsConversations(id),
     resumes: (agent) => AGENTS.some((a) => a.kind === agent && "conversations" in a && a.conversations === true),
     screenLines: (id) => registry.screenOf(id)?.lines,
     now: () => Date.now(),

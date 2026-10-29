@@ -50,8 +50,8 @@ export interface Tmux {
   /** The folder each session's shell is in now (its first pane's), by session name. Empty when no server is running. */
   paneFolders(): Promise<Map<string, string>>;
   hasSession(id: string): Promise<boolean>;
-  /** `resume`: a Claude Code conversation id to start a copy of (`agentCommand`). */
-  newSession(opts: { id: string; cwd: string; agent: AgentKind; resume?: string | undefined }): Promise<void>;
+  /** `resume`: a conversation id to start a copy of, or with `fork: false` to continue itself (`agentCommand`). */
+  newSession(opts: { id: string; cwd: string; agent: AgentKind; resume?: string | undefined; fork?: boolean | undefined }): Promise<void>;
   capture(id: string): Promise<Screen>;
   /** Up to `count` scrollback rows before history index `before`, and the pane geometry at that moment. */
   captureHistory(id: string, before: number, count: number): Promise<{ rows: HistoryRows; geo: PaneGeometry }>;
@@ -154,7 +154,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         return false;
       }
     },
-    async newSession({ id, cwd, agent, resume }) {
+    async newSession({ id, cwd, agent, resume, fork }) {
       // history-limit only applies to panes created after it is set, so the session starts on a placeholder shell,
       // gets its options, then respawn-pane starts the agent in a pane that has the big history. `mouse on` lets the
       // wheel scroll tmux history in the iTerm mirror. A blank fill-character hides tmux's dots in the part of a Mac
@@ -167,7 +167,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
         "set-option", "-t", pane(id), "history-limit", String(historyLimit), ";",
         "set-option", "-t", pane(id), "mouse", "on", ";",
         "set-option", "-w", "-t", pane(id), "fill-character", " ", ";",
-        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent, undefined, resume, opts.agentFlags),
+        "respawn-pane", "-k", "-t", pane(id), ...env, agentCommand(agent, undefined, resume, opts.agentFlags, fork),
       ]);
     },
     async capture(id) {

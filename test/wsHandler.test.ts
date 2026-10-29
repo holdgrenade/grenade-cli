@@ -918,8 +918,8 @@ describe("Connection: conversations", () => {
         calls.push(`delete:${id}`);
         return id === glass.id ? null : "it is open in a Grenade session; end that session first";
       },
-      async resume({ name, agent, conversationId }) {
-        calls.push(`resume:${name}:${conversationId}`);
+      async resume({ name, agent, conversationId, same }) {
+        calls.push(`resume:${name}:${conversationId}${same ? ":same" : ""}`);
         return conversationId === glass.id && agent === "claude" ? { ...session, id: `gr-${name}`, name, resumedFrom: conversationId } : `no ${agent} conversation ${conversationId} on this Mac`;
       },
     };
@@ -1022,6 +1022,16 @@ describe("Connection: conversations", () => {
     await conn.handleMessage(fixture("client.session.create.resume.json"));
     expect(calls).toEqual([`resume:glass-buttons:${glass.id}`]);
     expect(registry.calls).toEqual([]);
+    expect(out[0]).toMatchObject({ type: "sessions" });
+  });
+
+  it("passes same on to the conversations port, to continue the conversation itself", async () => {
+    const { port, calls } = withConversations();
+    const { conn, out } = connect({ conversations: port });
+    await conn.handleMessage(hello());
+    out.length = 0;
+    await conn.handleMessage(fixture("client.session.create.resume.same.json"));
+    expect(calls).toEqual([`resume:glass-buttons:${glass.id}:same`]);
     expect(out[0]).toMatchObject({ type: "sessions" });
   });
 

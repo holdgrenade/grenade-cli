@@ -125,6 +125,27 @@ describe("SessionRegistry.restart", () => {
   });
 });
 
+describe("ended sessions across a restart", () => {
+  it("keeps an ended session listed after the daemon restarts, until it is removed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-ended-"));
+    const persistPath = join(dir, "sessions.json");
+    const folders = new Set(["/Users/me/app"]);
+    const make = (live: string[]) => new SessionRegistry({ tmux: fakeTmux(live).tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), persistPath, now: () => Date.parse("2026-10-29T10:00:00.000Z") });
+    const first = make([]);
+    await first.create({ name: "app", cwd: "~/app", agent: "claude" });
+    first.setTranscript("gr-app", "/Users/me/.claude/projects/-Users-me-app/9a76de47.jsonl");
+    first.markGone("gr-app");
+    const again = make([]);
+    await again.adopt();
+    expect(again.get("gr-app")).toMatchObject({ name: "app", status: "gone", statusSince: "2026-10-29T10:00:00.000Z" });
+    expect(again.transcriptOf("gr-app")).toBe("/Users/me/.claude/projects/-Users-me-app/9a76de47.jsonl");
+    await again.kill("gr-app");
+    const third = make([]);
+    await third.adopt();
+    expect(third.get("gr-app")).toBeUndefined();
+  });
+});
+
 describe("SessionRegistry.sweep", () => {
   const folders = new Set(["/Users/me/app"]);
   const make = () => {

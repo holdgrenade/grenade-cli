@@ -229,23 +229,25 @@ export interface AgentFlags {
 }
 
 /** The program launched inside the tmux session for an agent kind. */
-export function agentCommand(agent: AgentKind, shell = loginShell(), resume?: string, flags: AgentFlags = {}): string {
+export function agentCommand(agent: AgentKind, shell = loginShell(), resume?: string, flags: AgentFlags = {}, fork = true): string {
   const claude = flags.claude ? `claude ${flags.claude}` : "claude";
   switch (agent) {
     case "claude":
-      // A copy of the conversation (PROTOCOL.md "Conversations"): the original transcript is never written to. The
-      // id is checked by the protocol (letters, digits, dashes), and again here because tmux hands this to a shell.
+      // A copy of the conversation (PROTOCOL.md "Conversations"), or with `fork` false the conversation itself ("The
+      // same conversation"). The id is checked by the protocol (letters, digits, dashes), and again here because tmux
+      // hands this to a shell.
       if (resume === undefined) return claude;
       if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
-      return `${claude} --resume ${resume} --fork-session`;
+      return fork ? `${claude} --resume ${resume} --fork-session` : `${claude} --resume ${resume}`;
     case "codex": {
       const codex = flags.codex ? `codex ${flags.codex}` : "codex";
       // Inline, like Claude Code: on its alternate screen Codex leaves no scrollback in tmux, so a phone or a terminal
       // could not scroll back through it, and a drag on the phone's terminal could only select.
       if (resume === undefined) return `${codex} --no-alt-screen`;
-      // A copy, as for Claude Code: `codex fork` starts a new thread with the history and leaves the original alone.
+      // As for Claude Code: `codex fork` starts a new thread with the history and leaves the original alone, `codex
+      // resume` goes on in the thread itself.
       if (!/^[A-Za-z0-9-]{1,64}$/.test(resume)) throw new Error(`not a conversation id: ${resume}`);
-      return `${codex} fork --no-alt-screen ${resume}`;
+      return `${codex} ${fork ? "fork" : "resume"} --no-alt-screen ${resume}`;
     }
     case "shell":
       return flags.shell ? flags.shell(shell) : shell;

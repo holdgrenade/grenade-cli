@@ -1,9 +1,9 @@
 /**
  * The Codex conversations saved on this Mac (PROTOCOL.md "Conversations", Codex's row): the rollouts in
  * `<codex dir>/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`, titled by `<codex dir>/session_index.jsonl`. Codex's
- * ConversationSource. Reads only; a rollout is read again only when it changed. Codex has no file that says a thread
- * is open in another terminal, so none is `running`. A `codex fork` (how Grenade resumes one) writes only what comes
- * after the fork and points at the original, so a preview reads the original's lines first.
+ * ConversationSource. Reads only; a rollout is read again only when it changed. A thread is `running` when a `codex`
+ * process names it or its rollout was just written (`runningCodex.ts`). A `codex fork` (how Grenade resumes a copy)
+ * writes only what comes after the fork and points at the original, so a preview reads the original's lines first.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import type { ConversationInfo } from "./conversationInfo.js";
 import type { ConversationMarks } from "./conversationMarks.js";
 import type { ConversationSource } from "./conversationSource.js";
 import { isDirectoryOnDisk, readEnds } from "./fileEnds.js";
+import { codexIdsInProcesses, codexOpenElsewhere, processArgs } from "./runningCodex.js";
 
 /** How many forks back a preview follows. */
 const FORK_DEPTH = 8;
@@ -21,6 +22,7 @@ interface Found {
   id: string;
   path: string;
   mtimeMs: number;
+  birthtimeMs: number;
   size: number;
 }
 
@@ -30,6 +32,11 @@ export interface CodexConversationsOptions {
   marks: ConversationMarks;
   /** Conversation id → the live Grenade session that holds it. */
   held(): Map<string, string>;
+  /** Every thread a Grenade session is in, running or ended: never "open elsewhere". Defaults to none. */
+  ours?(): Set<string>;
+  /** `ps -A -o args=`, for the `codex` processes and the threads they name. */
+  processArgs?(): Promise<string>;
+  now?(): number;
   isDirectory?(path: string): boolean;
 }
 
@@ -43,6 +50,7 @@ export class CodexConversations implements ConversationSource {
     const found = (await this.scan()).sort((a, b) => b.mtimeMs - a.mtimeMs);
     const titles = await this.titles();
     const held = this.opts.held();
+    const open = await this.openSet(found);
     const isDirectory = this.opts.isDirectory ?? isDirectoryOnDisk;
     const out: Conversation[] = [];
     for (const f of found) {
@@ -58,6 +66,8 @@ export class CodexConversations implements ConversationSource {
         title: info.title,
         ...(info.lastPrompt !== undefined ? { lastPrompt: info.lastPrompt } : {}),
         updatedAt: new Date(f.mtimeMs).toISOString(),
+        // A thread Grenade holds runs in Grenade, not somewhere else.
+        ...(open.has(f.id) && !sessionId ? { running: true as const } : {}),
         ...(sessionId ? { sessionId } : {}),
         ...(copyOf ? { copyOf } : {}),
       });
@@ -70,6 +80,31 @@ export class CodexConversations implements ConversationSource {
     if (!f) return null;
     const info = await this.infoOf(f, (await this.titles()).get(f.id));
     return info ? { path: f.path, cwd: info.cwd } : null;
+  }
+
+  /** Whether a `codex` outside Grenade may have the thread open: then it is continued as a copy. */
+  async openElsewhere(id: string): Promise<boolean> {
+    const f = await this.findFile(id);
+    return f !== undefined && !this.opts.held().has(f.id) && (await this.openSet([f])).has(f.id);
+  }
+
+  /**
+   * The thread a Codex session in `cwd` that started at `since` is in, when no hook named its rollout (hooks Codex was
+   * never told to trust): the newest rollout begun in that folder since then that no other Grenade session is in.
+   */
+  async rolloutFor(cwd: string, since: number, others: ReadonlySet<string>): Promise<{ id: string; path: string } | null> {
+    const titles = await this.titles();
+    const candidates = (await this.scan()).filter((f) => f.birthtimeMs >= since - 5000 && !others.has(f.id)).sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const f of candidates) {
+      const info = await this.infoOf(f, titles.get(f.id));
+      if (info?.cwd === cwd) return { id: f.id, path: f.path };
+    }
+    return null;
+  }
+
+  private async openSet(rollouts: Found[]): Promise<Set<string>> {
+    const named = codexIdsInProcesses(await (this.opts.processArgs ?? processArgs)(), rollouts.map((f) => f.id));
+    return codexOpenElsewhere({ rollouts, named, ours: this.opts.ours?.() ?? new Set(), now: (this.opts.now ?? Date.now)() });
   }
 
   async preview(id: string): Promise<ActivityEntry[] | null> {
@@ -119,7 +154,7 @@ export class CodexConversations implements ConversationSource {
         const id = e.isFile() ? codexConversationIdOf(path) : null;
         if (!id) continue;
         const s = await stat(path).catch(() => null);
-        if (s?.isFile()) out.push({ id, path, mtimeMs: s.mtimeMs, size: s.size });
+        if (s?.isFile()) out.push({ id, path, mtimeMs: s.mtimeMs, birthtimeMs: s.birthtimeMs, size: s.size });
       }
     };
     await walk(join(this.opts.codexDir, "sessions"), 0);

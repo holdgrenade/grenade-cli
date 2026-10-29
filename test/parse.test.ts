@@ -145,6 +145,11 @@ describe("helpers", () => {
     expect(() => agentCommand("codex", undefined, "x; rm -rf ~")).toThrow();
     expect(() => agentCommand("aider")).toThrow(/not an agent/);
   });
+  it("agentCommand continues the conversation itself without fork", () => {
+    expect(agentCommand("claude", undefined, "9a76de47-6489-4620-8e10-4bf9c4d12b09", {}, false)).toBe("claude --resume 9a76de47-6489-4620-8e10-4bf9c4d12b09");
+    expect(agentCommand("codex", undefined, "0190c0de-1111-7000-8000-00000000000a", { codex: "-c x=1" }, false)).toBe("codex -c x=1 resume --no-alt-screen 0190c0de-1111-7000-8000-00000000000a");
+    expect(() => agentCommand("codex", undefined, "x; rm -rf ~", {}, false)).toThrow();
+  });
 });
 
 describe("tmuxEnv", () => {

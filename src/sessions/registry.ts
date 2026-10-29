@@ -115,7 +115,12 @@ interface PersistedSession {
   planPath?: string | undefined;
   /** The commit checked out when the session was first read in git. */
   gitBase?: string | undefined;
+  /** When it ended: an ended session is kept across a restart (PROTOCOL.md "An ended session"). */
+  endedAt?: string | undefined;
 }
+
+/** Ended sessions kept in sessions.json past a restart; the oldest go first. */
+export const ENDED_KEPT_MAX = 50;
 
 export class SessionExistsError extends Error {}
 export class UnknownSessionError extends Error {}
@@ -230,6 +235,16 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       this.adoptOne(id, persisted.get(id), fallbackAt);
     }
     if (live.length > 0) this.log.info(`Picked up ${live.length} running session${live.length === 1 ? "" : "s"}`, { sessions: live.join(",") });
+    // Ended sessions stay listed, so they can be continued in their place after a restart too.
+    const running = new Set(live);
+    for (const meta of persisted.values()) {
+      if (meta.endedAt === undefined || running.has(meta.id) || this.records.has(meta.id)) continue;
+      const { endedAt, ...rest } = meta;
+      this.add(rest);
+      const r = this.records.get(meta.id);
+      if (r) this.setState(r, reduceStatus(r.state, { kind: "gone", at: Date.parse(endedAt) || this.now() }), false);
+    }
+    this.persist();
   }
 
   /**
@@ -267,7 +282,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   }
 
   /** `resume` starts a copy of that Claude Code conversation (PROTOCOL.md "Conversations"); `agent` must be `claude`. */
-  async create(input: { name: string; cwd: string; agent: AgentKind; group?: string | undefined; resume?: string | undefined }): Promise<Session> {
+  async create(input: { name: string; cwd: string; agent: AgentKind; group?: string | undefined; resume?: string | undefined; fork?: boolean | undefined }): Promise<Session> {
     const id = sessionIdFor(input.name);
     const cwd = expandCwd(input.cwd, this.home);
     if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the ${computerWord()}: ${input.cwd}`);
@@ -282,7 +297,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (missing) throw new MissingAgentError(missing);
     this.creating.add(id);
     try {
-      await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume });
+      await this.tmux.newSession({ id, cwd, agent: input.agent, resume: input.resume, fork: input.fork });
     } finally {
       this.creating.delete(id);
     }
@@ -305,7 +320,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
    * order and createdAt, so it stays where it was in every list. While tmux still runs that id (marked gone wrongly),
    * that session is taken back instead.
    */
-  async restart(id: string, opts: { cwd: string; resume?: string | undefined }): Promise<Session> {
+  async restart(id: string, opts: { cwd: string; resume?: string | undefined; fork?: boolean | undefined }): Promise<Session> {
     const r = this.require(id);
     if (r.session.status !== "gone") throw new NotEndedError(`session ${id} has not ended`);
     const kept = this.persistedOf(r);
@@ -322,7 +337,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     if (missing) throw new MissingAgentError(missing);
     this.creating.add(id);
     try {
-      await this.tmux.newSession({ id, cwd, agent, resume: opts.resume });
+      await this.tmux.newSession({ id, cwd, agent, resume: opts.resume, fork: opts.fork });
     } finally {
       this.creating.delete(id);
     }
@@ -437,6 +452,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const r = this.records.get(id);
     if (!r || r.session.status === "gone") return;
     this.setState(r, reduceStatus(r.state, { kind: "gone", at: this.now() }));
+    this.persist();
   }
 
   // ---- input ---------------------------------------------------------------
@@ -989,9 +1005,13 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
 
   private persist(): void {
     if (!this.persistPath) return;
-    const list: PersistedSession[] = [...this.records.values()]
-      .filter((r) => r.session.status !== "gone")
-      .map((r) => this.persistedOf(r));
+    const records = [...this.records.values()];
+    const ended = records
+      .filter((r) => r.session.status === "gone")
+      .sort((a, b) => b.session.statusSince.localeCompare(a.session.statusSince))
+      .slice(0, ENDED_KEPT_MAX)
+      .map((r) => ({ ...this.persistedOf(r), endedAt: r.session.statusSince }));
+    const list: PersistedSession[] = [...records.filter((r) => r.session.status !== "gone").map((r) => this.persistedOf(r)), ...ended];
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       writeFileSync(this.persistPath, JSON.stringify(list, null, 2) + "\n");

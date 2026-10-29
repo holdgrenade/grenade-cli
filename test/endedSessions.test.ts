@@ -18,7 +18,7 @@ const ended = (over: Partial<Session> = {}): Session => ({
   ...over,
 });
 
-function make(o: { session?: Session; transcript?: string; conversation?: { agent: string; path: string; cwd: string } | null; history?: ActivityEntry[]; onSleep?: (sleeps: number) => readonly string[] | undefined } = {}) {
+function make(o: { session?: Session; transcript?: string; conversation?: { agent: string; path: string; cwd: string } | null; history?: ActivityEntry[]; onSleep?: (sleeps: number) => readonly string[] | undefined; openElsewhere?: boolean; rollout?: { id: string; path: string } | null } = {}) {
   const calls: string[] = [];
   let session = o.session ?? ended();
   let screen: readonly string[] | undefined;
@@ -27,7 +27,7 @@ function make(o: { session?: Session; transcript?: string; conversation?: { agen
     get: () => session,
     transcriptOf: () => o.transcript,
     async restart(id, opts) {
-      calls.push(`restart:${id}:${opts.cwd}:${opts.resume ?? "-"}`);
+      calls.push(`restart:${id}:${opts.cwd}:${opts.resume ?? "-"}${opts.resume ? (opts.fork ? ":copy" : ":same") : ""}`);
       session = { ...session, status: "idle", ...(opts.resume ? { resumedFrom: opts.resume } : {}) };
       return session;
     },
@@ -38,6 +38,12 @@ function make(o: { session?: Session; transcript?: string; conversation?: { agen
     },
     async previewConversation() { return o.history ?? null; },
     replaceActivity: (id, entries) => calls.push(`activity:${id}:${entries.length}`),
+    async openElsewhere() { return o.openElsewhere ?? false; },
+    async codexRolloutFor(cwd, since, others) {
+      calls.push(`rollout:${cwd}:${since}:${[...others].join(",")}`);
+      return o.rollout ?? null;
+    },
+    othersConversations: () => new Set(["other-thread"]),
     resumes: (agent) => agent === "claude" || agent === "codex",
     screenLines: () => screen,
     now: () => now,
@@ -53,7 +59,7 @@ function make(o: { session?: Session; transcript?: string; conversation?: { agen
 const asked: ActivityEntry = { kind: "asked", text: "Fix the clash", at: "2026-10-29T09:10:00.000Z" };
 
 describe("EndedSessions.resume", () => {
-  it("resumes a copy of the session's own conversation in the folder it was started in, and shows its history", async () => {
+  it("continues the session's own conversation itself in the folder it was started in, and shows its history", async () => {
     const { ended: e, calls } = make({
       transcript: "/Users/me/.claude/projects/-Users-me-app/9a76de47.jsonl",
       conversation: { agent: "claude", path: "/Users/me/.claude/projects/-Users-me-app/9a76de47.jsonl", cwd: "/Users/me/app" },
@@ -62,9 +68,35 @@ describe("EndedSessions.resume", () => {
     await e.resume("gr-app");
     expect(calls).toEqual([
       "find:9a76de47",
-      "restart:gr-app:/Users/me/app:9a76de47",
+      "restart:gr-app:/Users/me/app:9a76de47:same",
       "transcript:gr-app:/Users/me/.claude/projects/-Users-me-app/9a76de47.jsonl",
       "activity:gr-app:1",
+    ]);
+  });
+
+  it("resumes a copy when its agent has the conversation open outside Grenade", async () => {
+    const { ended: e, calls } = make({
+      transcript: "/x/9a76de47.jsonl",
+      conversation: { agent: "claude", path: "/x/9a76de47.jsonl", cwd: "/Users/me/app" },
+      openElsewhere: true,
+    });
+    await e.resume("gr-app");
+    expect(calls).toContain("restart:gr-app:/Users/me/app:9a76de47:copy");
+  });
+
+  it("finds a Codex session's thread by its folder and start when no hook named it, leaving other sessions' threads alone", async () => {
+    const rollout = "/Users/me/.codex/sessions/2026/10/29/rollout-2026-10-29T09-00-00-019a2b3c-1111-2222-3333-444455556666.jsonl";
+    const { ended: e, calls } = make({
+      session: ended({ agent: "codex" }),
+      rollout: { id: "019a2b3c-1111-2222-3333-444455556666", path: rollout },
+      conversation: { agent: "codex", path: rollout, cwd: "/Users/me/app/web" },
+    });
+    await e.resume("gr-app");
+    expect(calls).toEqual([
+      `rollout:/Users/me/app/web:${Date.parse("2026-10-29T09:00:00.000Z")}:other-thread`,
+      "find:019a2b3c-1111-2222-3333-444455556666",
+      "restart:gr-app:/Users/me/app/web:019a2b3c-1111-2222-3333-444455556666:same",
+      `transcript:gr-app:${rollout}`,
     ]);
   });
 

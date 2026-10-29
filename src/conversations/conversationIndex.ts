@@ -76,6 +76,13 @@ export class ConversationIndex implements ConversationSource {
     return info ? { path: f.path, cwd: info.cwd } : null;
   }
 
+  /** Whether Claude Code has it open outside Grenade: then it is continued as a copy. */
+  async openElsewhere(id: string): Promise<boolean> {
+    if (this.opts.held().has(id)) return false;
+    const running = await (this.opts.running?.() ?? runningConversationIds(join(this.opts.claudeDir, "sessions")));
+    return running.has(id);
+  }
+
   /**
    * What deleting a conversation moves to the Trash: its transcript and the folder of the same name beside it
    * (subagents, tool results), or why it may not be deleted. Grenade's session would write it again, and so would

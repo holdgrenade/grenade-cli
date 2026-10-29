@@ -105,7 +105,8 @@ export interface ConversationsPort {
   /** Moves a conversation to the Trash. Resolves with why it was refused, or null when it is gone. */
   delete(id: string): Promise<string | null>;
   /** Starts a session that runs a copy of the conversation, its history already read. Resolves with why not, as text, when there is no such conversation of that agent. */
-  resume(input: { name: string; agent: string; group?: string | undefined; conversationId: string }): Promise<Session | string>;
+  /** `same`: continue the conversation itself, unless it is open elsewhere (PROTOCOL.md "The same conversation"). */
+  resume(input: { name: string; agent: string; group?: string | undefined; conversationId: string; same?: boolean | undefined }): Promise<Session | string>;
 }
 
 /** One client's live terminal on one session (PROTOCOL.md "Live terminal"); `TermStream` in the daemon. */
@@ -648,7 +649,7 @@ export class Connection {
         if (frame.resume !== undefined) {
           if (!agent.conversations) return this.fail("bad_frame", `${agent.name} has no conversations to resume`, frame.type);
           if (!this.d.conversations) return this.fail("bad_frame", "this daemon cannot resume conversations", frame.type);
-          const resumed = await this.d.conversations.resume({ name: frame.name, agent: frame.agent, group: frame.group, conversationId: frame.resume });
+          const resumed = await this.d.conversations.resume({ name: frame.name, agent: frame.agent, group: frame.group, conversationId: frame.resume, same: frame.same === true });
           if (typeof resumed === "string") return this.fail("bad_frame", resumed, frame.type);
         } else {
           await r.create({ name: frame.name, cwd: frame.cwd, agent: frame.agent, group: frame.group });

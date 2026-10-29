@@ -66,8 +66,8 @@ describe("CodexConversations", () => {
     writeFileSync(join(day, "notes.jsonl"), user("not a rollout") + "\n");
     writeFileSync(join(codexDir, "session_index.jsonl"), JSON.stringify({ id: ID, thread_name: "Rooms pagination" }) + "\n");
     const marks = new ConversationMarks(silentLogger);
-    const codex = new CodexConversations({ codexDir, marks, held: () => new Map([[OTHER, "gr-hello"]]), isDirectory: (p) => p === "/work/app" });
-    return { codex, marks };
+    const codex = new CodexConversations({ codexDir, marks, held: () => new Map([[OTHER, "gr-hello"]]), isDirectory: (p) => p === "/work/app", processArgs: async () => "", now: () => 1_791_000_000_000 });
+    return { codex, marks, codexDir };
   }
 
   it("lists rollouts newest first, as Codex conversations", async () => {
@@ -77,6 +77,31 @@ describe("CodexConversations", () => {
       { id: ID, agent: "codex", cwd: "/work/app", title: "Rooms pagination", lastPrompt: "Paginate rooms", updatedAt: new Date(1_790_900_000_000).toISOString(), copyOf: OTHER },
       { id: OTHER, agent: "codex", cwd: "/work/app", title: "Hello", lastPrompt: "Hello", updatedAt: new Date(1_790_000_000_000).toISOString(), sessionId: "gr-hello" },
     ]);
+  });
+
+  it("marks a thread a codex process names as running and open elsewhere, never one a Grenade session holds", async () => {
+    const { codexDir } = setup();
+    const named = new CodexConversations({ codexDir, marks: new ConversationMarks(silentLogger), held: () => new Map([[OTHER, "gr-hello"]]), isDirectory: () => true, processArgs: async () => `codex resume ${ID}\ncodex resume ${OTHER}`, now: () => 1_791_000_000_000 });
+    expect((await named.list()).map((c) => [c.id, c.running ?? false])).toEqual([[ID, true], [OTHER, false]]);
+    expect(await named.openElsewhere(ID)).toBe(true);
+    expect(await named.openElsewhere(OTHER)).toBe(false);
+  });
+
+  it("finds the thread a session in a folder began after it started, skipping other sessions' threads", async () => {
+    // Written now, as Codex writes a new thread's rollout: never given an old time, which moves macOS's birth time back too.
+    const codexDir = mkdtempSync(join(tmpdir(), "gr-codex-"));
+    const day = join(codexDir, "sessions", "2026", "10", "29");
+    mkdirSync(day, { recursive: true });
+    writeFileSync(join(day, `rollout-2026-10-29T09-00-00-${OTHER}.jsonl`), [meta(OTHER, "/work/app"), user("Hello")].join("\n") + "\n");
+    writeFileSync(join(day, `rollout-2026-10-29T09-01-00-${ID}.jsonl`), [meta(ID, "/work/app"), user("Paginate rooms")].join("\n") + "\n");
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(day, `rollout-2026-10-29T09-01-00-${ID}.jsonl`), later, later);
+    const codex = new CodexConversations({ codexDir, marks: new ConversationMarks(silentLogger), held: () => new Map(), isDirectory: () => true, processArgs: async () => "" });
+    const since = Date.now() - 60_000;
+    expect((await codex.rolloutFor("/work/app", since, new Set()))?.id).toBe(ID);
+    expect((await codex.rolloutFor("/work/app", since, new Set([ID])))?.id).toBe(OTHER);
+    expect(await codex.rolloutFor("/work/other", since, new Set())).toBeNull();
+    expect(await codex.rolloutFor("/work/app", Date.now() + 60_000, new Set())).toBeNull();
   });
 
   it("finds, previews and names the rollout for the Trash; refuses one a session holds", async () => {
@@ -141,7 +166,7 @@ describe("Codex forks", () => {
     mkdirSync(day, { recursive: true });
     writeFileSync(join(day, `rollout-2026-10-02T21-04-29-${ID}.jsonl`), [at(0, meta(ID, "/work/app")), at(1, user("Paginate rooms")), at(2, said("Done.")), at(3, user("Later, in the original"))].join("\n") + "\n");
     writeFileSync(join(day, `rollout-2026-10-02T22-05-07-${FORK}.jsonl`), [forkMeta(FORK, ID, 3), at(1, user("And the tests", "2026-10-02T15:01:00.000Z"))].join("\n") + "\n");
-    const codex = new CodexConversations({ codexDir, marks: new ConversationMarks(silentLogger), held: () => new Map(), isDirectory: () => true });
+    const codex = new CodexConversations({ codexDir, marks: new ConversationMarks(silentLogger), held: () => new Map(), isDirectory: () => true, processArgs: async () => "" });
     expect((await codex.preview(FORK))?.map((e) => e.text)).toEqual(["Paginate rooms", "Done.", "And the tests"]);
     expect((await codex.list()).find((c) => c.id === FORK)).toMatchObject({ cwd: "/work/app", lastPrompt: "And the tests" });
   });

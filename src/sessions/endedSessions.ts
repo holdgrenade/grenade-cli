@@ -1,8 +1,9 @@
 /**
  * Ended sessions started again in their place (PROTOCOL.md "Conversations", "An ended session"): `session.resume`
- * resumes a copy of the session's own conversation, or starts its agent or shell fresh when it has none, and an
- * `input` sent right after waits until the agent is at its prompt box. The registry does the restart; this decides
- * what to restart with and holds the first prompt. I/O only through its deps.
+ * continues the session's own conversation (a copy while its agent has it open elsewhere), or starts its agent or
+ * shell fresh when it has none, and an `input` sent right after waits until the agent is at its prompt box; so does
+ * one after a conversation continued in a new session (`holdFirstPrompt`). The registry does the restart; this
+ * decides what to restart with and holds the first prompt. I/O only through its deps.
  */
 import type { ActivityEntry, AgentKind, Session } from "@grenade/protocol";
 import { conversationIdOf } from "../conversations/heldConversations.js";
@@ -17,11 +18,17 @@ export class PromptHeldError extends Error {}
 export interface EndedSessionsDeps {
   get(id: string): Session | undefined;
   transcriptOf(id: string): string | undefined;
-  restart(id: string, opts: { cwd: string; resume?: string | undefined }): Promise<Session>;
+  restart(id: string, opts: { cwd: string; resume?: string | undefined; fork?: boolean | undefined }): Promise<Session>;
   setTranscript(id: string, path: string): void;
   /** A conversation on this computer: its agent, transcript and the folder it was started in. */
   findConversation(id: string): Promise<{ agent: AgentKind; path: string; cwd: string } | null>;
-  /** Its last activity entries, the history a resumed copy shows until its first prompt. */
+  /** Its agent has it open outside Grenade: continued as a copy then, so two writers never split it. */
+  openElsewhere(id: string): Promise<boolean>;
+  /** The Codex thread a session in `cwd` started at `since` is in when no hook named it; `others`: threads other sessions are in. */
+  codexRolloutFor(cwd: string, since: number, others: ReadonlySet<string>): Promise<{ id: string; path: string } | null>;
+  /** The conversation of every other Grenade session, running or ended. */
+  othersConversations(id: string): Set<string>;
+  /** Its last activity entries, the history a resumed session shows until its first prompt. */
   previewConversation(id: string): Promise<ActivityEntry[] | null>;
   replaceActivity(id: string, entries: ActivityEntry[]): void;
   /** Agents whose conversations can be resumed (`AgentInfo.conversations`). */
@@ -41,17 +48,23 @@ export class EndedSessions {
   async resume(id: string): Promise<Session> {
     const session = this.d.get(id);
     const conversation = session && this.d.resumes(session.agent) ? await this.conversationOf(id, session.agent) : null;
+    const fork = conversation ? await this.d.openElsewhere(conversation.id) : undefined;
     const started = conversation
-      ? await this.d.restart(id, { cwd: conversation.cwd, resume: conversation.id })
+      ? await this.d.restart(id, { cwd: conversation.cwd, resume: conversation.id, fork })
       : await this.d.restart(id, { cwd: session?.cwd ?? "" });
     if (conversation && started.resumedFrom === conversation.id) {
-      // As for a conversation resumed from the list: the agent writes the copy only with its first prompt.
+      // As for a conversation resumed from the list: until its first prompt the session shows what it holds so far.
       this.d.setTranscript(id, conversation.path);
       const history = await this.d.previewConversation(conversation.id);
       if (history) this.d.replaceActivity(id, history);
     }
-    if (started.agent !== "shell" && started.status !== "gone") this.starting.add(id);
+    if (started.status !== "gone") this.holdFirstPrompt(started);
     return started;
+  }
+
+  /** The next `input` to this just-started session waits for its agent's prompt box (`whenReady`); a shell takes it at once. */
+  holdFirstPrompt(session: Session): void {
+    if (session.agent !== "shell") this.starting.add(session.id);
   }
 
   /**
@@ -83,10 +96,18 @@ export class EndedSessions {
 
   /** The conversation the session's transcript is, while it is still on this computer and the session's agent's. */
   private async conversationOf(id: string, agent: AgentKind): Promise<{ id: string; path: string; cwd: string } | null> {
-    const transcript = this.d.transcriptOf(id);
+    const transcript = this.d.transcriptOf(id) ?? (agent === "codex" ? await this.untrustedCodexRollout(id) : undefined);
     if (!transcript) return null;
     const conversationId = conversationIdOf(transcript);
     const found = await this.d.findConversation(conversationId);
     return found && found.agent === agent ? { id: conversationId, path: found.path, cwd: found.cwd } : null;
+  }
+
+  /** A Codex session whose hooks never ran (never trusted) has no rollout on record: found by its folder and start. */
+  private async untrustedCodexRollout(id: string): Promise<string | undefined> {
+    const session = this.d.get(id);
+    if (!session) return undefined;
+    const found = await this.d.codexRolloutFor(session.cwd, Date.parse(session.createdAt), this.d.othersConversations(id));
+    return found?.path;
   }
 }

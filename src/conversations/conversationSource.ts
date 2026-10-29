@@ -17,6 +17,8 @@ export interface ConversationSource {
   preview(id: string): Promise<ActivityEntry[] | null>;
   /** What deleting it moves to the Trash, or why not. Null when this source has no conversation with that id. */
   trashPaths(id: string): Promise<{ paths: string[] } | { refused: string } | null>;
+  /** Its agent has it open outside Grenade, so it is continued as a copy (PROTOCOL.md "The same conversation"). */
+  openElsewhere(id: string): Promise<boolean>;
 }
 
 /** The agent apps from before `Conversation.agent` can resume: a daemon lists only its conversations to them. */
@@ -39,6 +41,12 @@ export class AllConversations {
       if (found) return { agent: s.agent, ...found };
     }
     return null;
+  }
+
+  /** Whether the conversation is open outside Grenade, in whichever source has it. */
+  async openElsewhere(id: string): Promise<boolean> {
+    for (const s of this.sources) if (await s.openElsewhere(id)) return true;
+    return false;
   }
 
   async preview(id: string): Promise<ActivityEntry[] | null> {
