@@ -182,6 +182,15 @@ describe("installedVersion", () => {
     expect(installedVersion(join(dir, "bin", "grenade"))).toBe("0.1.10");
     expect(installedVersion(join(dir, "bin", "missing"))).toBeNull();
   });
+
+  it("reads what a checkout's dist/ was built as, not a package.json a pull moved on", () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-update-"));
+    mkdirSync(join(dir, "dist"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "grenade-cli", version: "1.0.124" }));
+    writeFileSync(join(dir, "dist", "cli.js"), "");
+    writeFileSync(join(dir, "dist", "version.json"), JSON.stringify({ version: "1.0.97" }));
+    expect(installedVersion(join(dir, "dist", "cli.js"))).toBe("1.0.97");
+  });
 });
 
 describe("UpdateChecker", () => {

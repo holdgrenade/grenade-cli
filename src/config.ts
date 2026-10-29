@@ -2,12 +2,12 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
+import { builtVersion } from "./update/installedVersion.js";
 
-const require = createRequire(import.meta.url);
-export const VERSION: string = (require("../package.json") as { version: string }).version;
+/** What this code was built as (`builtVersion`): never a package.json that moved on since the build. */
+export const VERSION: string = builtVersion(import.meta.dirname) ?? "0.0.0";
 
 export const GRENADE_DIR = process.env["GRENADE_HOME"] ?? join(homedir(), ".grenade");
 
