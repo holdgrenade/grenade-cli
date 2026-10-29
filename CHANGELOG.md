@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.133 (2026-10-29)
+
+- Claude Code sessions now show what their context is made up of and where it will compact. The daemon measures each session's folder without sending a prompt, so this doesn't use up any of your usage.
+
 ## 1.0.132 (2026-10-29)
 
 - You can now add a Library plan to other projects, and removing it from a project works the same way. The daemon remembers each addition and shows which groups a plan has been added to.
