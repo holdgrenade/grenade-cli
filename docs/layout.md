@@ -81,6 +81,7 @@ src/terminal/terminalSetting.ts ~/.grenade/terminal.json `{ "terminal": "iterm" 
 src/cli/terminalCommand.ts `grenade terminal [kind]`: writes the setting, `POST /terminal/reload`; `terminalLines` is pure
 src/terminal/iterm.ts      ITermAdapter: iTerm2 tabs and split panes (AppleScript via osascript), tagged with `user.grenadeSession`
 src/terminal/appleTerminal.ts AppleTerminalAdapter: one Terminal.app window per session (`terminal`, or `auto` without iTerm2)
+src/sessions/endedSessions.ts EndedSessions: `session.resume` (an ended session started again in its place) and the wait for its first prompt
 src/sessions/status.ts     pure status reducer (see below)
 src/sessions/sessionTitle.ts  pure: cleanSessionTitle (the title a user gives a session, trimmed to SESSION_TITLE_MAX; undefined takes it away)
 src/sessions/groups.ts     pure group rules: default group for a folder, joinable groups, group order (byGroupOrder, nextOrder, placeAt), a group's name (groupNameOf, named, cleanGroupName)

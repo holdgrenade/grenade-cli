@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ACTIVITY_FRAME_MAX_BYTES, ACTIVITY_FULL_TEXT_MAX, ACTIVITY_TEXT_MAX, type ActivityEntry, type ActivityFrame, type DaemonFrame, type Session } from "@grenade/protocol";
 import type { ScreenFrame } from "../src/frames.js";
 import { BrowserBridge } from "../src/browser/browserBridge.js";
+import { PromptHeldError } from "../src/sessions/endedSessions.js";
 import { type PlansPort, type TodosPort, type LibraryPort, type ChangesPort, Connection, type CanvasPort, type ConversationsPort, type ModelsPort, type PublishPort, type TalkPort, type TermHandle, type TermOpen, type VoicePort, type CommentsPort, type OwnerPort, type HighlightsPort, type ConnectionDeps } from "../src/daemon/wsHandler.js";
 import { VoiceError } from "../src/voice/voiceProvider.js";
 import { ModelSwitchError } from "../src/models/claudeModelSwitch.js";
@@ -14,6 +15,9 @@ import type { ForwardConnect } from "../src/forward/portForward.js";
 
 const fixtures = join(import.meta.dirname, "..", "..", "grenade-protocol", "fixtures");
 const fixture = (name: string) => readFileSync(join(fixtures, name), "utf8");
+
+/** Lets pending promise callbacks run. */
+const flushAll = () => new Promise((resolve) => setImmediate(resolve));
 
 const session: Session = {
   id: "gr-a1b2c3",
@@ -177,7 +181,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; connectors?: ConnectionDeps["connectors"]; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect } = {}) {
+function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; connectors?: ConnectionDeps["connectors"]; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect; ended?: ConnectionDeps["ended"] } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -216,6 +220,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     ...(opts.connectors ? { connectors: opts.connectors } : {}),
     ...(opts.openTerm ? { openTerm: opts.openTerm } : {}),
     ...(opts.forwardConnect ? { forwardConnect: opts.forwardConnect } : {}),
+    ...(opts.ended ? { ended: opts.ended } : {}),
     onHello: (_c, token) => events.push(`hello:${token}`),
     onEnd: (_c, token) => events.push(`end:${token}`),
     unpair: (token) => events.push(`unpair:${token}`),
@@ -301,6 +306,46 @@ describe("Connection", () => {
     expect(out[2]).toEqual({ type: "groups", order: ["g-7f3a91", "g-0c2d4e"] });
     await conn.handleMessage(JSON.stringify({ type: "group.close", group: "g-7f3a91" }));
     expect(out[3]).toMatchObject({ type: "error", code: "bad_frame", ref: "group.close" });
+  });
+
+  it("starts an ended session again through its port, holds an input to it until the port lets it go, and refuses session.resume without the port", async () => {
+    const calls: string[] = [];
+    let release = () => {};
+    const ended: NonNullable<ConnectionDeps["ended"]> = {
+      async resume(id) { calls.push(`resume:${id}`); return session; },
+      whenReady: (id) => new Promise<void>((resolve) => { calls.push(`ready:${id}`); release = resolve; }),
+    };
+    const { conn, out, registry } = connect({ ended });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(fixture("client.session.resume.json"));
+    expect(calls).toEqual(["resume:gr-a1b2c3"]);
+    expect(out[0]).toMatchObject({ type: "sessions" });
+    const typed = conn.handleMessage(JSON.stringify({ type: "input", sessionId: session.id, text: "go on", submit: true, id: "p1" }));
+    await flushAll();
+    expect(registry.calls.filter((c) => c.startsWith("input:"))).toEqual([]);
+    release();
+    await typed;
+    expect(registry.calls.filter((c) => c.startsWith("input:"))).toEqual([`input:${session.id}:go on:true`]);
+    expect(out.at(-1)).toEqual({ type: "input.sent", id: "p1", sessionId: session.id });
+    const bare = connect();
+    await bare.conn.handleMessage(fixture("client.hello.json"));
+    bare.out.length = 0;
+    await bare.conn.handleMessage(fixture("client.session.resume.json"));
+    expect(bare.out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "session.resume" });
+  });
+
+  it("answers an input the ended-session port held back with bad_frame and its id", async () => {
+    const ended: NonNullable<ConnectionDeps["ended"]> = {
+      async resume() { return session; },
+      async whenReady() { throw new PromptHeldError("The agent was not ready in time. The first prompt was not sent."); },
+    };
+    const { conn, out, registry } = connect({ ended });
+    await conn.handleMessage(fixture("client.hello.json"));
+    out.length = 0;
+    await conn.handleMessage(JSON.stringify({ type: "input", sessionId: session.id, text: "go on", submit: true, id: "p2" }));
+    expect(registry.calls.filter((c) => c.startsWith("input:"))).toEqual([]);
+    expect(out[0]).toMatchObject({ type: "error", code: "bad_frame", ref: "input", id: "p2" });
   });
 
   it("renames a session: every client hears it once, a rename that changes nothing still answers, an unknown session is unknown_session", async () => {
@@ -403,7 +448,7 @@ describe("Connection", () => {
       async plan(plan, id) { return { type: "library.plan", plan, folder: "/Users/ada/.claude/plans", text: "# Plan", modified: new Date(0).toISOString(), ...(id ? { id } : {}) }; },
       watch: () => () => {},
     };
-    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, connectors: { async read() { return { type: "connectors", connectors: [], at: new Date(0).toISOString() }; } }, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }) });
+    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, connectors: { async read() { return { type: "connectors", connectors: [], at: new Date(0).toISOString() }; } }, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }), ended: { async resume() { return session; }, async whenReady() {} } });
     // `group.close` names a group kept with no session.
     groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.

@@ -125,6 +125,8 @@ export class BadCwdError extends Error {}
 export class UnknownGroupError extends Error {}
 /** The agent's program is not on this computer, so its session would end as it started. */
 export class MissingAgentError extends Error {}
+/** `session.resume` of a session that has not ended. */
+export class NotEndedError extends Error {}
 
 export interface RegistryOptions {
   tmux: Tmux;
@@ -293,6 +295,44 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const resumed = input.resume !== undefined ? { resumedFrom: input.resume, resumedAt: createdAt } : {};
     const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: this.groupNameOf(group, others), ...resumed });
     this.log.info(`Started ${input.agent} session ${id}`, { cwd, group });
+    this.emit("created", session);
+    return session;
+  }
+
+  /**
+   * Starts a `gone` session again under its own id (PROTOCOL.md "Conversations", "An ended session"): with `resume` (a
+   * conversation id) a copy of that conversation in `cwd`, else its agent fresh. It keeps its name, titles, group,
+   * order and createdAt, so it stays where it was in every list. While tmux still runs that id (marked gone wrongly),
+   * that session is taken back instead.
+   */
+  async restart(id: string, opts: { cwd: string; resume?: string | undefined }): Promise<Session> {
+    const r = this.require(id);
+    if (r.session.status !== "gone") throw new NotEndedError(`session ${id} has not ended`);
+    const kept = this.persistedOf(r);
+    if (await this.tmux.hasSession(id)) {
+      this.records.delete(id);
+      this.adoptOne(id, kept, kept.createdAt);
+      this.log.info(`Picked up running session ${id} again`);
+      return this.require(id).session;
+    }
+    const cwd = expandCwd(opts.cwd, this.home);
+    if (!cwd || !this.isDirectory(cwd)) throw new BadCwdError(`folder not found on the ${computerWord()}: ${opts.cwd}`);
+    const agent = r.session.agent;
+    const missing = this.missingAgent(agent);
+    if (missing) throw new MissingAgentError(missing);
+    this.creating.add(id);
+    try {
+      await this.tmux.newSession({ id, cwd, agent, resume: opts.resume });
+    } finally {
+      this.creating.delete(id);
+    }
+    this.misses.delete(id);
+    this.records.delete(id);
+    // What belonged to the run that ended (its background tasks, transcript, plan file, resume) does not carry over.
+    const { background: _background, transcript: _transcript, planPath: _planPath, resumedFrom: _from, resumedAt: _at, ...rest } = kept;
+    const resumed = opts.resume !== undefined ? { resumedFrom: opts.resume, resumedAt: new Date(this.now()).toISOString() } : {};
+    const session = this.add({ ...rest, cwd, ...resumed });
+    this.log.info(`Started ${agent} session ${id} again`, { cwd, resume: opts.resume ?? "none" });
     this.emit("created", session);
     return session;
   }

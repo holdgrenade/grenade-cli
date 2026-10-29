@@ -12,7 +12,8 @@ import type { AttachmentStore } from "../attachments/attachmentStore.js";
 import type { Route } from "./devices.js";
 import { SentInputs } from "./sentInputs.js";
 import { isInterrupt } from "../tmux/termPaint.js";
-import { BadCwdError, MissingAgentError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
+import { BadCwdError, MissingAgentError, NotEndedError, SessionExistsError, UnknownGroupError, UnknownSessionError } from "../sessions/registry.js";
+import { PromptHeldError } from "../sessions/endedSessions.js";
 import { PortForwards, type ForwardConnect } from "../forward/portForward.js";
 import { modelChoiceProblem, switchTimingProblem } from "../models/modelChoice.js";
 import { ModelSwitchError } from "../models/claudeModelSwitch.js";
@@ -295,6 +296,8 @@ export interface ConnectionDeps {
   interrupted?(sessionId: string): void;
   /** Past conversations to list, preview, resume and delete. Absent means this daemon has none (no `conversations: 1`). */
   conversations?: ConversationsPort;
+  /** Ended sessions started again in their place (`session.resume`). Absent means this daemon starts none (no `resumeEnded: 1`). */
+  ended?: { resume(sessionId: string): Promise<Session>; whenReady(sessionId: string): Promise<void> };
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
   /** Switches a session's model. Absent means this daemon switches none and answers `session.model` with `bad_frame`. */
@@ -451,7 +454,7 @@ export class Connection {
       const id = frame.type === "input" || frame.type === "attachment" || frame.type === "activity.text" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
-      if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof MissingAgentError) return this.fail("bad_frame", e.message, frame.type, false, id);
+      if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof MissingAgentError || e instanceof NotEndedError || e instanceof PromptHeldError) return this.fail("bad_frame", e.message, frame.type, false, id);
       const msg = e instanceof Error ? e.message : String(e);
       // The tmux session ended before the 1 s sweep marked it gone; the phone just needs to know.
       if (/can't find session/i.test(msg)) {
@@ -596,6 +599,8 @@ export class Connection {
       case "input": {
         // A prompt's `<todo>` blocks are checked off when the turn it starts ends (PROTOCOL.md "To-dos").
         const type = async () => {
+          // Right after `session.resume` the agent is still starting: the prompt waits for its prompt box.
+          await this.d.ended?.whenReady(frame.sessionId);
           await r.sendText(frame.sessionId, frame.text, frame.submit);
           if (frame.submit) this.d.todos?.prompted(frame.sessionId, frame.text);
         };
@@ -650,6 +655,10 @@ export class Connection {
         }
         return this.send({ type: "sessions", sessions: r.list() });
       }
+      case "session.resume":
+        if (!this.d.ended) return this.fail("bad_frame", "this daemon cannot start an ended session again", frame.type);
+        await this.d.ended.resume(frame.sessionId);
+        return this.send({ type: "sessions", sessions: r.list() });
       case "conversations":
         if (!this.d.conversations) return this.fail("bad_frame", "this daemon lists no conversations", frame.type);
         // Every reply after this one (a delete, an archive) lists the same agents.

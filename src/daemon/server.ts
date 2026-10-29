@@ -16,6 +16,7 @@ import { VERSION, defaultName, ensureDir, loadDaemonId, paths } from "../config.
 import { createLogger, type Logger } from "../log.js";
 import { startPoller, type Poller } from "../sessions/poller.js";
 import { SessionRegistry } from "../sessions/registry.js";
+import { EndedSessions } from "../sessions/endedSessions.js";
 import { GroupOrderStore } from "../sessions/groupOrderStore.js";
 import { TermStream } from "../sessions/termStream.js";
 import { resolveClaudeBin, runClaudeSummary } from "../summary/claudeCli.js";
@@ -203,7 +204,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -568,6 +569,21 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     },
   };
 
+  // An ended session started again in its place (PROTOCOL.md "Conversations", "An ended session").
+  const ended = new EndedSessions({
+    get: (id) => registry.get(id),
+    transcriptOf: (id) => registry.transcriptOf(id),
+    restart: (id, o) => registry.restart(id, o),
+    setTranscript: (id, path) => registry.setTranscript(id, path),
+    findConversation: (id) => conversationIndex.find(id),
+    previewConversation: (id) => conversationIndex.preview(id),
+    replaceActivity: (id, entries) => activity.replace(id, entries),
+    resumes: (agent) => AGENTS.some((a) => a.kind === agent && "conversations" in a && a.conversations === true),
+    screenLines: (id) => registry.screenOf(id)?.lines,
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  });
+
   /** One hook event of a session: its plan, status, summary input, model, activity and the text of a push. */
   const applyClaudeHook = (session: string | null, body: string) => {
     if (session) notePlanHook(session, body);
@@ -913,6 +929,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       todos,
       library,
       conversations,
+      ended,
       ...(talk ? { talk } : {}),
       ...(highlights ? { highlights } : {}),
       // Port forwarding (PROTOCOL.md "Port forwarding"): sockets to this computer's loopback address only.

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Session } from "@grenade/protocol";
 import { byGroupOrder, cleanGroupName, defaultGroupFor, isJoinableGroup, nextOrder, otherMembers, placeAt } from "../src/sessions/groups.js";
-import { BadCwdError, MissingAgentError, SessionRegistry, UnknownGroupError, UnknownSessionError } from "../src/sessions/registry.js";
+import { BadCwdError, MissingAgentError, NotEndedError, SessionRegistry, UnknownGroupError, UnknownSessionError } from "../src/sessions/registry.js";
 import { cleanSessionTitle } from "../src/sessions/sessionTitle.js";
 import type { Tmux } from "../src/tmux/tmux.js";
 import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
@@ -14,14 +14,14 @@ import { WIDTH_FLOOR, type WindowWidth } from "../src/sessions/widthFloor.js";
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function fakeTmux(live: string[] = []) {
-  const created: { id: string; cwd: string }[] = [];
+  const created: { id: string; cwd: string; resume?: string | undefined }[] = [];
   const sizing: string[] = [];
   const widths = new Map<string, WindowWidth>();
   const tmux: Tmux = {
     async listSessions() { return live; },
     async paneFolders() { return new Map(); },
     async hasSession() { return false; },
-    async newSession(o) { created.push({ id: o.id, cwd: o.cwd }); },
+    async newSession(o) { created.push({ id: o.id, cwd: o.cwd, ...(o.resume !== undefined ? { resume: o.resume } : {}) }); },
     async capture() { throw new Error("unused"); },
     async captureHistory() { throw new Error("unused"); },
     async applySessionOptions() {},
@@ -67,6 +67,61 @@ describe("SessionRegistry.create", () => {
     expect(t.created).toEqual([]);
     await registry.create({ name: "y", cwd: "~/app", agent: "shell" });
     expect(t.created).toEqual([{ id: "gr-y", cwd: "/Users/me/app" }]);
+  });
+});
+
+describe("SessionRegistry.restart", () => {
+  const folders = new Set(["/Users/me/app", "/Users/me/app/web"]);
+  const make = () => {
+    const t = fakeTmux();
+    let now = Date.parse("2026-10-29T10:00:00.000Z");
+    const registry = new SessionRegistry({ tmux: t.tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), now: () => now });
+    return { registry, ...t, later: () => (now += 60_000) };
+  };
+
+  it("starts an ended session again under its own id, name, title, group, order and createdAt, as a copy of the conversation given", async () => {
+    const { registry, created, later } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    await registry.create({ name: "web", cwd: "~/app/web", agent: "claude", group: registry.get("gr-app")?.group });
+    registry.renameSession("gr-app", "Fix the clash");
+    const before = registry.get("gr-app")!;
+    registry.markGone("gr-app");
+    later();
+    const started = await registry.restart("gr-app", { cwd: "/Users/me/app/web", resume: "9a76de47" });
+    expect(created.at(-1)).toEqual({ id: "gr-app", cwd: "/Users/me/app/web", resume: "9a76de47" });
+    expect(started).toMatchObject({ id: "gr-app", name: "app", title: "Fix the clash", group: before.group, order: before.order, createdAt: before.createdAt, cwd: "/Users/me/app/web", resumedFrom: "9a76de47", resumedAt: "2026-10-29T10:01:00.000Z" });
+    expect(started.status).not.toBe("gone");
+    expect(registry.liveIds()).toContain("gr-app");
+  });
+
+  it("starts the agent fresh without a conversation, and drops what the ended run resumed from", async () => {
+    const { registry, created } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude", resume: "1111" });
+    registry.markGone("gr-app");
+    const started = await registry.restart("gr-app", { cwd: "~/app" });
+    expect(created.at(-1)).toEqual({ id: "gr-app", cwd: "/Users/me/app" });
+    expect(started.resumedFrom).toBeUndefined();
+  });
+
+  it("refuses a session that has not ended, and a folder that is gone", async () => {
+    const { registry } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    await expect(registry.restart("gr-app", { cwd: "~/app" })).rejects.toBeInstanceOf(NotEndedError);
+    registry.markGone("gr-app");
+    await expect(registry.restart("gr-app", { cwd: "~/gone" })).rejects.toBeInstanceOf(BadCwdError);
+    expect(registry.get("gr-app")?.status).toBe("gone");
+  });
+
+  it("takes back a session tmux still runs instead of starting another", async () => {
+    const { registry, created, tmux } = make();
+    await registry.create({ name: "app", cwd: "~/app", agent: "claude" });
+    registry.markGone("gr-app");
+    tmux.hasSession = async () => true;
+    const started = await registry.restart("gr-app", { cwd: "~/app", resume: "9a76de47" });
+    expect(created).toHaveLength(1);
+    expect(started).toMatchObject({ id: "gr-app", name: "app" });
+    expect(started.status).not.toBe("gone");
+    expect(started.resumedFrom).toBeUndefined();
   });
 });
 
