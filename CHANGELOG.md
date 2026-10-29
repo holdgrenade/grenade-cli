@@ -2,6 +2,13 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.130 (2026-10-29)
+
+- You can now restart an ended session in its place. Claude Code and Codex sessions whose conversation is still on the computer pick up that conversation again. Other sessions, including plain shells, start fresh.
+- A restarted session keeps its name, title, group, order, and ID, so it looks the same in your session list.
+- If you send a prompt right after restarting, it waits until the agent shows its prompt box before it is sent.
+- If a session's terminal is still running in tmux, restarting it reconnects you to that running session instead of starting a new one.
+
 ## 1.0.129 (2026-10-29)
 
 - A daemon run from a source checkout now reports the version it was built as, not the version a `git pull` brought in. After pulling, run `npm run build` so the reported version matches the code that's running.
