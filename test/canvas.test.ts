@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computerWord } from "../src/platform/computer.js";
 import { CANVAS_BOARD_MAX_BYTES, CANVAS_BOARDS_MAX, type Session } from "@grenade/protocol";
-import { allowedCanvasCwd, canvasCwds, canvasFolderOf, groupCanvasFolderOf, groupFolderOf, isListedGroup, normalizeCwd, projectOf, sharedFolder } from "../src/canvas/canvasAccess.js";
+import { allowedCanvasCwd, canvasCwds, canvasFolderOf, firstCanvasCwdOf, groupCanvasFolderOf, groupCwdOf, groupFolderOf, isListedGroup, normalizeCwd, projectOf, sharedFolder } from "../src/canvas/canvasAccess.js";
 import { boardsFrom, boardTooLarge, isBoardFile, listingKey } from "../src/canvas/boardListing.js";
 import { CanvasError, listCanvas, listCanvases, readBoard } from "../src/canvas/canvasFolder.js";
 import { CanvasWatcher, type Every } from "../src/canvas/canvasWatcher.js";
@@ -79,6 +79,28 @@ describe("which canvases are served", () => {
     // With a member in the project itself, the group still shares the project.
     const mixed = [session("gr-a", "/Users/adam/web/app", "g"), session("gr-b", "/Users/adam/web/.grenade/canvas", "g")];
     expect(allowedCanvasCwd("/Users/adam/web", mixed, home)).toBe("/Users/adam/web");
+  });
+
+  it("a group's fixed canvas folder wins over the folder its members share, and is served", () => {
+    const fixed = (s: Session): Session => ({ ...s, canvasCwd: "/Users/adam/work/app/ios" });
+    const group = [fixed(session("gr-a", "/Users/adam/work/app/ios", "g-1")), fixed(session("gr-b", "/Users/adam/elsewhere", "g-1"))];
+    expect(groupCwdOf(group[1]!, group, home)).toBe("/Users/adam/work/app/ios");
+    // Without it, the shared folder as before.
+    expect(groupCwdOf(session("gr-b", "/Users/adam/work/app/web", "g-1"), sessions, home)).toBe("/Users/adam/work/app");
+    // A fixed folder no member works in any more is still the group's, and served.
+    const moved = [fixed(session("gr-a", "/Users/adam/notes", "g-1"))];
+    expect(allowedCanvasCwd("/Users/adam/work/app/ios", moved, home)).toBe("/Users/adam/work/app/ios");
+  });
+
+  it("fixes a group from before in its oldest member's project that already holds its canvases", () => {
+    const old = (id: string, cwd: string, at: string): Session => ({ ...session(id, cwd, "g-1"), createdAt: at });
+    const group = [old("gr-new", "/Users/adam/work", "2026-10-29T10:00:00.000Z"), old("gr-mac", "/Users/adam/work/mac", "2026-10-20T10:00:00.000Z")];
+    const has = (folders: string[]) => (project: string) => folders.includes(project);
+    expect(firstCanvasCwdOf("g-1", group, home, has(["/Users/adam/work/mac", "/Users/adam/work"]))).toBe("/Users/adam/work/mac");
+    expect(firstCanvasCwdOf("g-1", group, home, has(["/Users/adam/work"]))).toBe("/Users/adam/work");
+    // None holds them: the folder they share.
+    expect(firstCanvasCwdOf("g-1", group, home, has([]))).toBe("/Users/adam/work");
+    expect(firstCanvasCwdOf("g-9", group, home, has([]))).toBeNull();
   });
 
   it("puts the canvas in .grenade/canvas", () => {

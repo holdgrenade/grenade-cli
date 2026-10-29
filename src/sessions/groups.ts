@@ -48,6 +48,17 @@ export function named(session: Session, name: string | undefined): Session {
   return name === undefined ? rest : { ...rest, groupName: name };
 }
 
+/** The folder `group` keeps its canvases in (PROTOCOL.md "Canvas", "Where they are"): what a member other than `exceptId` carries. */
+export function canvasCwdOfGroup(group: string, sessions: readonly Session[], exceptId?: string): string | undefined {
+  return sessions.find((s) => s.group === group && s.id !== exceptId && s.canvasCwd !== undefined)?.canvasCwd;
+}
+
+/** `session` carrying `cwd` as its group's canvas folder, or none. */
+export function withCanvasCwd(session: Session, cwd: string | undefined): Session {
+  const { canvasCwd: _was, ...rest } = session;
+  return cwd === undefined ? rest : { ...rest, canvasCwd: cwd };
+}
+
 /** A name as it was typed, ready to keep: trimmed, at most `GROUP_NAME_MAX` long. Undefined when nothing is left. */
 export function cleanGroupName(name: string | null): string | undefined {
   const clean = (name ?? "").trim().slice(0, GROUP_NAME_MAX).trim();

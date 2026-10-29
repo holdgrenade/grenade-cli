@@ -17,7 +17,8 @@ import { expandCwd, isGrenadeSession, lastNonEmptyLine, sessionIdFor, type Scree
 import type { Tmux } from "../tmux/tmux.js";
 import { nextHistoryMark, type HistoryMark } from "./historyEpoch.js";
 import { cleanSessionTitle } from "./sessionTitle.js";
-import { cleanGroupName, defaultGroupFor, groupNameOf, isJoinableGroup, membersInOrder, named, nextOrder, otherMembers, placeAt } from "./groups.js";
+import { firstCanvasCwdOf, groupFolderOf, normalizeCwd, projectOf } from "../canvas/canvasAccess.js";
+import { canvasCwdOfGroup, cleanGroupName, defaultGroupFor, groupNameOf, isJoinableGroup, membersInOrder, named, nextOrder, otherMembers, placeAt, withCanvasCwd } from "./groups.js";
 import { initialStatus, reduceStatus, shownStoppedBecause, shownWaitingFor, type StatusState } from "./status.js";
 import { claudeIsWorking } from "../activity/claudeScreen.js";
 import { WIDTH_FLOOR, onRelease, onSweep } from "./widthFloor.js";
@@ -98,6 +99,8 @@ interface PersistedSession {
   order?: number | undefined;
   /** The name the user gave the session's group, the same on every member. */
   groupName?: string | undefined;
+  /** The folder its group keeps its canvases in, fixed for the group (PROTOCOL.md "Canvas", "Where they are"). */
+  canvasCwd?: string | undefined;
   summary?: string | undefined;
   /** The title the user gave the session, kept over the agent's until taken away. */
   userTitle?: string | undefined;
@@ -180,7 +183,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
    * The groups kept with no session (`GroupOrderStore`, PROTOCOL.md "Kept groups"), which a new or moved session may
    * join and whose name it then carries. Set once the store exists, as it follows this registry.
    */
-  keptGroups: { keptGroup(group: string): { name?: string | undefined } | undefined } | undefined;
+  keptGroups: { keptGroup(group: string): { name?: string | undefined; cwd: string } | undefined } | undefined;
 
   constructor(opts: RegistryOptions) {
     super();
@@ -244,6 +247,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       const r = this.records.get(meta.id);
       if (r) this.setState(r, reduceStatus(r.state, { kind: "gone", at: Date.parse(endedAt) || this.now() }), false);
     }
+    this.fixCanvasCwds();
     this.persist();
   }
 
@@ -278,6 +282,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       this.records.delete(id);
       this.adoptOne(id, r ? this.persistedOf(r) : persisted.get(id), fallbackAt);
     }
+    this.fixCanvasCwds();
     this.log.info(`Picked up ${lost.length} running session${lost.length === 1 ? "" : "s"} again`, { sessions: lost.join(",") });
   }
 
@@ -308,7 +313,8 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const order = nextOrder(group, others);
     const createdAt = new Date(this.now()).toISOString();
     const resumed = input.resume !== undefined ? { resumedFrom: input.resume, resumedAt: createdAt } : {};
-    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: this.groupNameOf(group, others), ...resumed });
+    const canvasCwd = this.canvasCwdOf(group, others) ?? this.ownCanvasCwd(cwd);
+    const session = this.add({ id, name: input.name, agent: input.agent, cwd, createdAt, group, order, groupName: this.groupNameOf(group, others), canvasCwd, ...resumed });
     this.log.info(`Started ${input.agent} session ${id}`, { cwd, group });
     this.emit("created", session);
     return session;
@@ -380,7 +386,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const from = r.session.group;
     if (group === null) {
       if (from !== undefined && otherMembers(from, this.list(), id).length === 0) return r.session;
-      r.session = named({ ...r.session, group: this.newGroupId(), order: 0 }, undefined);
+      r.session = withCanvasCwd(named({ ...r.session, group: this.newGroupId(), order: 0 }, undefined), this.ownCanvasCwd(r.session.cwd));
       this.persist();
       this.log.info(`Moved ${id} into a group of its own`);
       this.emit("updated", r.session);
@@ -392,11 +398,13 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     const ids = membersInOrder(group, this.list()).map((s) => s.id);
     const placed = placeAt(ids, id, index ?? ids.length);
     const name = this.groupNameOf(group, this.list(), id);
+    const canvasCwd = this.canvasCwdOf(group, this.list(), id) ?? r.session.canvasCwd;
     const changed: Record_[] = [];
     placed.forEach((memberId, order) => {
       const m = this.records.get(memberId);
       if (!m || (m.session.group === group && m.session.order === order)) return;
-      m.session = memberId === id && group !== from ? named({ ...m.session, group, order }, name) : { ...m.session, group, order };
+      m.session =
+        memberId === id && group !== from ? withCanvasCwd(named({ ...m.session, group, order }, name), canvasCwd) : { ...m.session, group, order };
       changed.push(m);
     });
     if (changed.length === 0) return r.session;
@@ -419,6 +427,44 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     // and was the group's last (Jeff, 2026-10-26: New Session in a project whose only session had ended, in the same
     // folder, said "no live session in group").
     return this.keptGroups.keptGroup(group) !== undefined || this.list().some((s) => s.group === group && (s.id !== id || s.status === "gone"));
+  }
+
+  /** The canvas folder a session joining `group` carries: its members', else the kept group's (PROTOCOL.md "Canvas"). */
+  private canvasCwdOf(group: string, sessions: readonly Session[], exceptId?: string): string | undefined {
+    return canvasCwdOfGroup(group, sessions, exceptId) ?? this.keptGroups?.keptGroup(group)?.cwd;
+  }
+
+  /** A new group's canvas folder: its session's `cwd`, read as its project. */
+  private ownCanvasCwd(cwd: string): string | undefined {
+    const own = normalizeCwd(cwd, this.home);
+    return own ? projectOf(own) : undefined;
+  }
+
+  /**
+   * Fixes the canvas folder of each group whose members carry none (saved by a daemon before `canvasCwd`), or only
+   * some of them: a member's, else `firstCanvasCwdOf` (the oldest member's project that already holds the group's
+   * canvases, else the folder they share). Emits `updated` for each session it set.
+   */
+  private fixCanvasCwds(): void {
+    const sessions = this.list();
+    const changed: Record_[] = [];
+    for (const group of new Set(sessions.map((s) => s.group ?? s.id))) {
+      const members = [...this.records.values()].filter((m) => (m.session.group ?? m.session.id) === group);
+      if (members.every((m) => m.session.canvasCwd !== undefined)) continue;
+      const cwd =
+        canvasCwdOfGroup(group, sessions) ??
+        firstCanvasCwdOf(group, sessions, this.home, (project) => this.isDirectory(groupFolderOf(project, group))) ??
+        undefined;
+      if (cwd === undefined) continue;
+      for (const m of members) {
+        if (m.session.canvasCwd !== undefined) continue;
+        m.session = withCanvasCwd(m.session, cwd);
+        changed.push(m);
+      }
+    }
+    if (changed.length === 0) return;
+    this.persist();
+    for (const m of changed) this.emit("updated", m.session);
   }
 
   /** The name a session joining `group` carries: its members', else the kept group's. */
@@ -897,6 +943,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       group,
       order: meta?.order ?? nextOrder(group, this.list()),
       groupName: meta?.groupName ?? groupNameOf(group, this.list()),
+      canvasCwd: meta?.canvasCwd ?? canvasCwdOfGroup(group, this.list()),
       summary: meta?.summary,
       userTitle: meta?.userTitle,
       aiTitle: meta?.aiTitle,
@@ -936,6 +983,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
       ...(meta.group !== undefined ? { group: meta.group } : {}),
       ...(meta.order !== undefined ? { order: meta.order } : {}),
       ...(meta.groupName !== undefined ? { groupName: meta.groupName } : {}),
+      ...(meta.canvasCwd !== undefined ? { canvasCwd: meta.canvasCwd } : {}),
       ...(meta.resumedFrom !== undefined ? { resumedFrom: meta.resumedFrom } : {}),
       ...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
     };
@@ -1000,7 +1048,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
   }
 
   private persistedOf({ session: s, transcript, userTitle, aiTitle, guessedTitle, held, modelChosenAt, planPath, gitBase }: Record_): PersistedSession {
-    return { id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, summary: s.summary, userTitle, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) };
+    return { id: s.id, name: s.name, agent: s.agent, cwd: s.cwd, createdAt: s.createdAt, group: s.group, order: s.order, groupName: s.groupName, canvasCwd: s.canvasCwd, summary: s.summary, userTitle, aiTitle, guessedTitle, model: s.model, effort: s.effort, modelChosenAt, transcript, ...(held.length > 0 ? { background: held } : {}), resumedFrom: s.resumedFrom, resumedAt: s.resumedAt, ...(planPath ? { planPath } : {}), ...(gitBase ? { gitBase } : {}) };
   }
 
   private persist(): void {

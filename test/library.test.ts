@@ -146,13 +146,13 @@ describe("LibraryStore", () => {
 });
 
 describe("LibraryStore, starting again", () => {
-  it("lets a session start in a remembered group that no session has, carrying its name", async () => {
+  it("lets a session start in a remembered group that no session has, carrying its name and folder", async () => {
     const { registry, project, store } = setUp();
     registry.set(s("gr-a", "g-1", project, { groupName: "Website" }));
     const library = store();
     expect(library.rememberedGroup("g-1")).toBeUndefined();
     registry.sessions = [];
-    expect(library.rememberedGroup("g-1")).toEqual({ name: "Website" });
+    expect(library.rememberedGroup("g-1")).toEqual({ name: "Website", cwd: project });
     expect(library.rememberedGroup("g-9")).toBeUndefined();
     library.stop();
   });

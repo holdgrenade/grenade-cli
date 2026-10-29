@@ -219,13 +219,14 @@ export class LibraryStore {
 
   /**
    * A group the Library remembers, or knows a canvas of, that no session the daemon lists has: a session may be started
-   * in it, as in a kept group, carrying the name it had (PROTOCOL.md "Library", "Starting again").
+   * in it, as in a kept group, carrying the name it had and its canvas folder (PROTOCOL.md "Library", "Starting again").
    */
-  rememberedGroup(group: string): { name?: string } | undefined {
+  rememberedGroup(group: string): { name?: string; cwd: string } | undefined {
     if (this.d.registry.list().some((s) => groupOf(s) === group)) return undefined;
     const record = this.groups.get(group);
-    if (record) return record.name ? { name: record.name } : {};
-    return this.found.some((c) => c.group === group) ? {} : undefined;
+    if (record) return record.name ? { name: record.name, cwd: record.cwd } : { cwd: record.cwd };
+    const canvas = this.found.find((c) => c.group === group);
+    return canvas ? { cwd: canvas.cwd } : undefined;
   }
 
   /** Something may have changed: the list is worked out again (at most every 2 s) and sent when it did. */

@@ -39,9 +39,9 @@ export function sharedFolder(paths: string[]): string | null {
 
 /**
  * Every folder whose canvas may be served: each session's `cwd` (a `gone` one too; for a `cwd` inside a project's
- * `.grenade`, that project, `projectOf`), and for a group of several the
- * folder its members share (the Mac app's `Canvas.folder(for:)`; when they share only `/`, its first member's `cwd`,
- * which is in the set already).
+ * `.grenade`, that project, `projectOf`) and its group's `canvasCwd`, and for a group of several the
+ * folder its members share (what a client from before `canvasCwd` asks for; when they share only `/`, its first
+ * member's `cwd`, which is in the set already).
  */
 export function canvasCwds(sessions: Session[], home: string): Set<string> {
   const allowed = new Set<string>();
@@ -50,6 +50,8 @@ export function canvasCwds(sessions: Session[], home: string): Set<string> {
     const own = normalizeCwd(s.cwd, home);
     if (!own) continue;
     allowed.add(own);
+    const fixed = s.canvasCwd ? normalizeCwd(s.canvasCwd, home) : null;
+    if (fixed) allowed.add(fixed);
     // A session inside a project's `.grenade` works on that project's canvas.
     const cwd = projectOf(own);
     allowed.add(cwd);
@@ -90,11 +92,39 @@ export function isListedGroup(group: string, sessions: Session[]): boolean {
 }
 
 /**
- * The folder a session's group shares, whose canvases its boards are on (PROTOCOL.md "Canvas", "Where they are"): the
- * folder every member's `cwd` (read as its project, `projectOf`) starts with, else the session's own. Null when its
- * `cwd` is not a path.
+ * The folder a session's group keeps its canvases in (PROTOCOL.md "Canvas", "Where they are"): its `canvasCwd`, fixed
+ * for the group; for a session that carries none, the folder every member's `cwd` (read as its project, `projectOf`)
+ * starts with, else the session's own. Null when neither is a path.
  */
 export function groupCwdOf(session: Session, sessions: readonly Session[], home: string): string | null {
+  const fixed = session.canvasCwd ? normalizeCwd(session.canvasCwd, home) : null;
+  if (fixed) return fixed;
+  return sharedCwdOf(session, sessions, home);
+}
+
+/**
+ * The canvas folder to fix for a group whose members carry none (saved by a daemon before `canvasCwd`): the project of
+ * its oldest member that already holds the group's folder (`hasGroupFolder`, `<project>/.grenade/canvas/<group>`), so
+ * canvases made there stay where they are; else the folder the members share (`sharedCwdOf`). Null with no path.
+ */
+export function firstCanvasCwdOf(
+  group: string,
+  sessions: readonly Session[],
+  home: string,
+  hasGroupFolder: (project: string) => boolean,
+): string | null {
+  const members = sessions.filter((s) => (s.group ?? s.id) === group).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const first = members[0];
+  if (!first) return null;
+  for (const m of members) {
+    const own = normalizeCwd(m.cwd, home);
+    if (own && hasGroupFolder(projectOf(own))) return projectOf(own);
+  }
+  return sharedCwdOf(first, members, home);
+}
+
+/** The folder a session's group shares as its members' `cwd`s give it, ignoring `canvasCwd` (what older clients ask for). */
+export function sharedCwdOf(session: Session, sessions: readonly Session[], home: string): string | null {
   const key = session.group ?? session.id;
   const cwds = sessions
     .filter((s) => (s.group ?? s.id) === key)

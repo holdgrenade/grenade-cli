@@ -708,3 +708,51 @@ describe("SessionRegistry plans", () => {
     expect(r.planPaths()).toEqual([{ id: s.id, path: "/Users/me/.claude/plans/p.md" }]);
   });
 });
+
+describe("a group's canvas folder", () => {
+  const folders = new Set(["/Users/me", "/Users/me/app", "/Users/me/app/web", "/Users/me/site", "/Users/me/app/.grenade/canvas/g-1"]);
+  const make = (opts: { persistPath?: string; live?: string[] } = {}) => {
+    let n = 0;
+    return new SessionRegistry({ tmux: fakeTmux(opts.live).tmux, log: silentLogger, home: "/Users/me", isDirectory: (p) => folders.has(p), newGroupId: () => `g-${++n}`, ...(opts.persistPath ? { persistPath: opts.persistPath } : {}) });
+  };
+
+  it("is fixed when the group begins, and a session joining from elsewhere carries it", async () => {
+    const r = make();
+    expect((await r.create({ name: "app", cwd: "~/app", agent: "claude" })).canvasCwd).toBe("/Users/me/app");
+    expect((await r.create({ name: "site", cwd: "~/site", agent: "claude", group: "g-1" })).canvasCwd).toBe("/Users/me/app");
+    // Moved out: a group of its own, in its own folder; moved back in: the group's again.
+    expect(r.setGroup("gr-site", null)).toMatchObject({ group: "g-2", canvasCwd: "/Users/me/site" });
+    expect(r.setGroup("gr-site", "g-1")).toMatchObject({ group: "g-1", canvasCwd: "/Users/me/app" });
+  });
+
+  it("a session started in a kept group carries the kept group's folder", async () => {
+    const r = make();
+    r.keptGroups = { keptGroup: (g) => (g === "g-kept" ? { cwd: "/Users/me/app" } : undefined) };
+    expect((await r.create({ name: "site", cwd: "~/site", agent: "claude", group: "g-kept" })).canvasCwd).toBe("/Users/me/app");
+  });
+
+  it("is fixed once for a group saved before, in the oldest member's project that holds its canvases, and kept", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "grenade-canvas-cwd-"));
+    const persistPath = join(dir, "sessions.json");
+    const saved = [
+      { id: "gr-web", name: "web", agent: "claude", cwd: "/Users/me/app/web", createdAt: "2026-10-01T10:00:00.000Z", group: "g-1", order: 0 },
+      { id: "gr-root", name: "root", agent: "claude", cwd: "/Users/me", createdAt: "2026-10-02T10:00:00.000Z", group: "g-1", order: 1 },
+    ];
+    writeFileSync(persistPath, JSON.stringify(saved));
+    const r = make({ persistPath, live: ["gr-web", "gr-root"] });
+    await r.adopt();
+    // gr-web's project (/Users/me/app/web) holds no g-1 folder; the shared folder would be /Users/me.
+    expect(r.get("gr-root")?.canvasCwd).toBe("/Users/me");
+    folders.add("/Users/me/app/web/.grenade/canvas/g-1");
+    const again = make({ persistPath, live: ["gr-web", "gr-root"] });
+    await again.adopt();
+    // Once fixed it stays, though a folder for the group appeared since.
+    expect(again.get("gr-web")?.canvasCwd).toBe("/Users/me");
+    // Saved before again: the oldest member's project now holds the group's folder.
+    writeFileSync(persistPath, JSON.stringify(saved));
+    const third = make({ persistPath, live: ["gr-web", "gr-root"] });
+    await third.adopt();
+    expect(third.get("gr-root")?.canvasCwd).toBe("/Users/me/app/web");
+    expect(JSON.parse(readFileSync(persistPath, "utf8"))[0].canvasCwd).toBe("/Users/me/app/web");
+  });
+});
