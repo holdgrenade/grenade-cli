@@ -14,6 +14,7 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   CANVAS_SHARED,
+  LIBRARY_ADDED_MAX,
   canvasNameOf,
   canvasNumberOf,
   PLAN_TEXT_MAX,
@@ -180,6 +181,39 @@ export class LibraryStore {
     };
   }
 
+  /**
+   * Adds a plan to another project, a group the daemon lists, keeps or remembers (PROTOCOL.md "Library", "A plan in
+   * another project"): only remembered here, the file stays where it is. Its own group, or one it has, changes nothing.
+   * `LibraryError` for a plan the Library does not list, a group it does not know, or one group too many.
+   */
+  add(file: string, group: string): void {
+    const record = this.plans.get(file);
+    if (!record) throw new LibraryError("That plan is not in the Library.");
+    if (!this.knowsGroup(group)) throw new LibraryError("That project is not on this computer.");
+    if (record.group === group || record.addedTo?.includes(group)) return;
+    if ((record.addedTo?.length ?? 0) >= LIBRARY_ADDED_MAX) throw new LibraryError(`A plan can be in at most ${LIBRARY_ADDED_MAX} other projects.`);
+    record.addedTo = [...(record.addedTo ?? []), group];
+    this.saveSoon();
+    this.changed(0);
+  }
+
+  /** Takes a plan off a project it was added to. `LibraryError` for a plan the Library does not list. */
+  remove(file: string, group: string): void {
+    const record = this.plans.get(file);
+    if (!record) throw new LibraryError("That plan is not in the Library.");
+    if (!record.addedTo?.includes(group)) return;
+    const rest = record.addedTo.filter((g) => g !== group);
+    if (rest.length > 0) record.addedTo = rest;
+    else delete record.addedTo;
+    this.saveSoon();
+    this.changed(0);
+  }
+
+  /** A group with a session the daemon lists, kept with none, or remembered from before. */
+  private knowsGroup(group: string): boolean {
+    return this.d.registry.list().some((s) => groupOf(s) === group) || this.d.kept().some((k) => k.group === group) || this.groups.has(group);
+  }
+
   /** Sends `send` the list whenever it changes, until the returned function is called. */
   watch(send: (frame: LibraryFrame) => void): () => void {
     this.watchers.add(send);
@@ -229,9 +263,16 @@ export class LibraryStore {
     return canvas ? { cwd: canvas.cwd } : undefined;
   }
 
-  /** Something may have changed: the list is worked out again (at most every 2 s) and sent when it did. */
-  changed(): void {
-    if (this.watchers.size === 0 || this.settleTimer !== undefined) return;
+  /**
+   * Something may have changed: the list is worked out again (at most every 2 s) and sent when it did. A client's own
+   * change (`settleMs` 0) goes out at once, in place of one waiting.
+   */
+  changed(settleMs = LIBRARY_SETTLE_MS): void {
+    if (this.watchers.size === 0) return;
+    if (this.settleTimer !== undefined) {
+      if (settleMs >= LIBRARY_SETTLE_MS) return;
+      (this.d.clearTimer ?? ((t) => clearTimeout(t as NodeJS.Timeout)))(this.settleTimer);
+    }
     const set = this.d.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms).unref());
     this.settleTimer = set(() => {
       this.settleTimer = undefined;
@@ -242,7 +283,7 @@ export class LibraryStore {
         const frame: LibraryFrame = { type: "library", items: this.items, ...(this.truncated ? { truncated: true as const } : {}) };
         for (const send of this.watchers) send(frame);
       });
-    }, LIBRARY_SETTLE_MS);
+    }, settleMs);
   }
 
   // ---- finding ----------------------------------------------------------------
@@ -454,7 +495,11 @@ export class LibraryStore {
     try {
       const saved = JSON.parse(readFileSync(this.d.path, "utf8")) as Partial<Saved>;
       for (const g of saved.groups ?? []) if (typeof g?.group === "string" && typeof g.cwd === "string") this.groups.set(g.group, g);
-      for (const p of saved.plans ?? []) if (typeof p?.file === "string" && typeof p.cwd === "string") this.plans.set(p.file, p);
+      for (const p of saved.plans ?? []) {
+        if (typeof p?.file !== "string" || typeof p.cwd !== "string") continue;
+        if (p.addedTo !== undefined && !(Array.isArray(p.addedTo) && p.addedTo.every((g) => typeof g === "string"))) delete p.addedTo;
+        this.plans.set(p.file, p);
+      }
       for (const f of saved.projects ?? []) if (typeof f === "string") this.projects.add(f);
       this.backfilled = saved.backfilled === true;
     } catch (e) {

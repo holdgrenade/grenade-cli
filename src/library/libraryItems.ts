@@ -7,6 +7,7 @@ import {
   LIBRARY_GROUP_GONE,
   LIBRARY_GROUP_KEPT,
   LIBRARY_GROUP_LIVE,
+  LIBRARY_ADDED_MAX,
   LIBRARY_ITEMS_MAX,
   LIBRARY_KIND_CANVAS,
   LIBRARY_KIND_PLAN,
@@ -35,6 +36,8 @@ export interface PlanRecord {
   session?: string;
   /** `approved` once the agent left plan mode with it; absent when not known (found in an old conversation). */
   state?: "approved" | "draft";
+  /** The other groups it was added to (`library.add`), in the order they were added. */
+  addedTo?: string[];
 }
 
 /** What the groups are now: the sessions the daemon lists and the groups it keeps. */
@@ -114,6 +117,7 @@ export function planItem(found: FoundPlan, now: GroupsNow, planningFiles: Readon
     ...(state ? { planState: state } : {}),
     ...(record.session ? { session: record.session.slice(0, 120) } : {}),
     ...(found.preview ? { preview: found.preview } : {}),
+    ...(record.addedTo?.length ? { addedTo: record.addedTo.slice(0, LIBRARY_ADDED_MAX).map((group) => ({ group, ...groupStateOf(group, now) })) } : {}),
   };
 }
 

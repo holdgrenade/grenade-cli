@@ -255,6 +255,9 @@ export interface TodosPort {
 export interface LibraryPort {
   frame(id?: string): Promise<LibraryFrame>;
   plan(file: string, id?: string): Promise<LibraryPlanFrame>;
+  /** A plan added to another project, or taken off it (PROTOCOL.md "Library", "A plan in another project"). Throw `LibraryError`. */
+  add(file: string, group: string): void;
+  remove(file: string, group: string): void;
   /** Sends the list whenever it changes, until the returned function is called. */
   watch(send: (frame: LibraryFrame) => void): () => void;
 }
@@ -757,6 +760,8 @@ export class Connection {
         return this.handleTodos(frame);
       case "library":
       case "library.plan":
+      case "library.add":
+      case "library.remove":
         return this.handleLibrary(frame);
       case "session.mode": {
         const session = r.get(frame.sessionId);
@@ -923,7 +928,7 @@ export class Connection {
   }
 
   /** The Library's frames (PROTOCOL.md "Library"): the list, sent again whenever it changes, and a plan's file. */
-  private async handleLibrary(frame: Extract<ClientFrame, { type: "library" | "library.plan" }>): Promise<void> {
+  private async handleLibrary(frame: Extract<ClientFrame, { type: "library" | "library.plan" | "library.add" | "library.remove" }>): Promise<void> {
     const library = this.d.library;
     if (!library) return this.fail("bad_frame", "this daemon keeps no Library", frame.type, false, frame.id);
     if (frame.type === "library") {
@@ -932,6 +937,8 @@ export class Connection {
       return;
     }
     try {
+      if (frame.type === "library.add") return library.add(frame.plan, frame.group);
+      if (frame.type === "library.remove") return library.remove(frame.plan, frame.group);
       this.send(await library.plan(frame.plan, frame.id));
     } catch (e) {
       if (e instanceof LibraryError) return this.fail("bad_frame", e.message, frame.type, false, frame.id);

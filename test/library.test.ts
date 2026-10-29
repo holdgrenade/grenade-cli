@@ -157,3 +157,63 @@ describe("LibraryStore, starting again", () => {
     library.stop();
   });
 });
+
+describe("LibraryStore, a plan in another project", () => {
+  it("adds a plan to a live or kept group, says where each stands, keeps it, and takes it off", async () => {
+    const { claudeDir, kept, plans, registry, project, root, store } = setUp();
+    const path = join(claudeDir, "plans", "velvety-knitting-shell.md");
+    writeFileSync(path, "# Move the docs\n\nEvery page.\n");
+    registry.set(s("gr-a", "g-1", project, { title: "docs-move", plan: { file: "velvety-knitting-shell.md", planning: false, writing: false } }));
+    registry.set(s("gr-b", "g-2", join(root, "mac"), { groupName: "Mac" }));
+    kept.push({ group: "g-3", cwd: join(root, "cli"), name: "CLI" });
+    plans.paths.set("gr-a", path);
+    const library = store();
+    plans.emit("plan", "gr-a", { file: "velvety-knitting-shell.md", planning: false, writing: false });
+    library.add("velvety-knitting-shell.md", "g-2");
+    library.add("velvety-knitting-shell.md", "g-3");
+    // Its own group, and one it has, change nothing.
+    library.add("velvety-knitting-shell.md", "g-1");
+    library.add("velvety-knitting-shell.md", "g-2");
+    const plan = () => library.frame().then((f) => f.items.find((i) => i.kind === "plan"));
+    expect((await plan())?.addedTo).toEqual([
+      { group: "g-2", groupName: "Mac", groupState: "live" },
+      { group: "g-3", groupName: "CLI", groupState: "kept" },
+    ]);
+    expect(() => library.add("velvety-knitting-shell.md", "g-9")).toThrow(LibraryError);
+    expect(() => library.add("other.md", "g-2")).toThrow(LibraryError);
+    library.remove("velvety-knitting-shell.md", "g-3");
+    expect((await plan())?.addedTo).toEqual([{ group: "g-2", groupName: "Mac", groupState: "live" }]);
+    library.stop();
+    // Kept across a restart; once the last one is taken off, the plan has none.
+    const again = store();
+    expect((await again.frame()).items.find((i) => i.kind === "plan")?.addedTo).toEqual([{ group: "g-2", groupName: "Mac", groupState: "live" }]);
+    again.remove("velvety-knitting-shell.md", "g-2");
+    expect((await again.frame()).items.find((i) => i.kind === "plan")?.addedTo).toBeUndefined();
+    again.stop();
+  });
+
+  it("sends the list at once after an add, not after the usual wait", async () => {
+    const { claudeDir, plans, registry, project, root, store } = setUp();
+    const path = join(claudeDir, "plans", "p.md");
+    writeFileSync(path, "# P\n");
+    registry.set(s("gr-a", "g-1", project, { plan: { file: "p.md", planning: false, writing: false } }));
+    registry.set(s("gr-b", "g-2", join(root, "mac")));
+    plans.paths.set("gr-a", path);
+    const timers: { fn: () => void; ms: number }[] = [];
+    const library = new LibraryStore({
+      registry, kept: () => [], onKeptChanged: () => {}, plans, claudeDir, home: root, log: silentLogger,
+      setTimer: (fn, ms) => timers.push({ fn, ms }), clearTimer: () => {}, every: () => () => {},
+    });
+    plans.emit("plan", "gr-a", { file: "p.md", planning: false, writing: false });
+    const sent: unknown[] = [];
+    library.watch((f) => sent.push(f));
+    library.changed();
+    library.add("p.md", "g-2");
+    expect(timers.at(-1)?.ms).toBe(0);
+    timers.at(-1)!.fn();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sent).toHaveLength(1);
+    library.stop();
+  });
+});
+
