@@ -93,12 +93,14 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
   const historyLimit = opts.historyLimit ?? 50_000;
   const killGraceMs = opts.killGraceMs ?? 2000;
 
-  const run = (args: string[]): Promise<string> =>
+  /** `stdin`: written to the command's stdin, then closed (`load-buffer -`). */
+  const run = (args: string[], stdin?: string): Promise<string> =>
     new Promise((resolve, reject) => {
-      execFile(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
+      const child = execFile(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024, env: tmuxEnv(process.env) }, (err, stdout, stderr) => {
         if (err) reject(new TmuxError(tmuxFailure(stderr, err), args));
         else resolve(stdout);
       });
+      if (stdin !== undefined) child.stdin?.end(stdin);
     });
 
   /** `run` for the one command that may start the tmux server: under systemd it goes through `systemd-run --scope`. */
@@ -205,7 +207,7 @@ export function createTmux(opts: TmuxOptions = {}): Tmux {
       // After a paste, Enter waits until the agent has taken it in (`pasteSettle.ts`), or Claude Code can lose it.
       const settle = submit && text.length > 0 && goesInAsPaste(text, paste);
       const before = settle ? await run(["capture-pane", "-p", "-t", pane(id)]) : "";
-      if (text.length > 0) await run(inputCommand(pane(id), text, paste));
+      if (text.length > 0) for (const step of inputCommand(pane(id), text, paste)) await run(step.args, step.stdin);
       if (settle) await waitForSettle(before, () => run(["capture-pane", "-p", "-t", pane(id)]), sleep);
       if (submit) await run(["send-keys", "-t", pane(id), "Enter"]);
     },

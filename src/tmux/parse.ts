@@ -203,21 +203,32 @@ export function keyToTmux(key: KeyName): string {
  * as part of the input. CRLF and a lone CR become LF. The buffer is deleted after the paste (`-d`).
  * `paste` pastes one line too: Codex takes fast typing followed by Enter for a paste (its "paste burst") and makes
  * that Enter a newline, so a typed prompt sat unsent; a bracketed paste says what it is, and the Enter after it sends.
+ * A paste is two commands: the text is loaded from stdin (`load-buffer -`), never put on tmux's command line, which
+ * tmux refuses past about 16 KB ("command too long": a sandbox's build prompt, 2026-10-29); then it is pasted. A line
+ * longer than `TYPED_MAX` is pasted too, for the same reason.
  */
-export function inputCommand(target: string, text: string, paste = false): string[] {
-  if (!goesInAsPaste(text, paste)) return ["send-keys", "-t", target, "-l", "--", text];
-  const lines = text.replace(/\r\n?/g, "\n");
+export function inputCommand(target: string, text: string, paste = false): InputStep[] {
+  if (!goesInAsPaste(text, paste)) return [{ args: ["send-keys", "-t", target, "-l", "--", text] }];
   return [
-    "set-buffer", "-b", INPUT_BUFFER, "--", lines, ";",
-    "paste-buffer", "-p", "-r", "-d", "-b", INPUT_BUFFER, "-t", target,
+    { args: ["load-buffer", "-b", INPUT_BUFFER, "-"], stdin: text.replace(/\r\n?/g, "\n") },
+    { args: ["paste-buffer", "-p", "-r", "-d", "-b", INPUT_BUFFER, "-t", target] },
   ];
+}
+
+/** One tmux command of `inputCommand`, with what goes to its stdin. */
+export interface InputStep {
+  args: string[];
+  stdin?: string;
 }
 
 const INPUT_BUFFER = "grenade-input";
 
+/** The longest line typed with `send-keys`; a longer one is pasted, as tmux's command line would refuse it. */
+const TYPED_MAX = 8 * 1024;
+
 /** Whether `inputCommand` pastes `text` rather than typing it. */
 export function goesInAsPaste(text: string, paste = false): boolean {
-  return paste || /[\r\n]/.test(text);
+  return paste || /[\r\n]/.test(text) || Buffer.byteLength(text) > TYPED_MAX;
 }
 
 /** What an agent starts with: Grenade's hooks (`claudeHookFlags`, `codexHookFlags`), already quoted for the shell. */
