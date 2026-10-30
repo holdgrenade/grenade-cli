@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.134 (2026-10-30)
+
+- Long prompts no longer fail with "Not sent · command too long". Prompts of any length, including a sandbox's Build prompt or a prompt with the Sandbox chip on a sandbox with many items, now reach the agent. Long single lines are also delivered reliably.
+
 ## 1.0.133 (2026-10-29)
 
 - Claude Code sessions now show what their context is made up of and where it will compact. The daemon measures each session's folder without sending a prompt, so this doesn't use up any of your usage.

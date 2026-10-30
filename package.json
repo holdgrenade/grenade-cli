@@ -1,6 +1,6 @@
 {
   "name": "grenade-cli",
-  "version": "1.0.133",
+  "version": "1.0.134",
   "description": "grenaded: the Grenade daemon for macOS and Linux, plus the grenade CLI.",
   "type": "module",
   "bin": {
