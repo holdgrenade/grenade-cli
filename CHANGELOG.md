@@ -2,6 +2,10 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.136 (2026-10-31)
+
+- The daemon no longer moves a group's canvas folders. It goes back to reading canvas folders without writing to them, since the Mac app only shows a canvas's folder.
+
 ## 1.0.135 (2026-10-31)
 
 - Groups can now move their canvases to another project. The group's canvas folder, with every canvas in it, goes to the new project, and the group's published links keep the same address at their new location.
