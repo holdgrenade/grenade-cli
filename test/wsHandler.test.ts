@@ -181,7 +181,7 @@ class FakeGroups extends EventEmitter {
   }
 }
 
-function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; connectors?: ConnectionDeps["connectors"]; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect; ended?: ConnectionDeps["ended"] } = {}) {
+function connect(opts: { canvasMove?: ConnectionDeps["canvasMove"]; token?: string; sealed?: boolean; acceptsPlain?: (token: string) => boolean; conversations?: ConversationsPort; models?: ModelsPort; voice?: VoicePort; canvas?: CanvasPort; highlights?: HighlightsPort; publish?: PublishPort; comments?: CommentsPort; owner?: OwnerPort; plans?: PlansPort; todos?: TodosPort; library?: LibraryPort; changes?: ChangesPort; talk?: TalkPort; connectors?: ConnectionDeps["connectors"]; browser?: BrowserBridge; local?: boolean; openTerm?: (open: TermOpen) => TermHandle; forwardConnect?: ForwardConnect; ended?: ConnectionDeps["ended"] } = {}) {
   const registry = new FakeRegistry();
   const activity = new FakeActivity();
   const groups = new FakeGroups();
@@ -193,6 +193,7 @@ function connect(opts: { token?: string; sealed?: boolean; acceptsPlain?: (token
     registry: registry as never,
     activity: activity as never,
     groups,
+    ...(opts.canvasMove ? { canvasMove: opts.canvasMove } : {}),
     attachments: {
       async save(sessionId, name, mime, data) {
         saved.push({ sessionId, name, mime, bytes: data.length });
@@ -448,7 +449,7 @@ describe("Connection", () => {
       async plan(plan, id) { return { type: "library.plan", plan, folder: "/Users/ada/.claude/plans", text: "# Plan", modified: new Date(0).toISOString(), ...(id ? { id } : {}) }; },
       watch: () => () => {},
     };
-    const { conn, out, groups } = connect({ conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, connectors: { async read() { return { type: "connectors", connectors: [], at: new Date(0).toISOString() }; } }, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }), ended: { async resume() { return session; }, async whenReady() {} } });
+    const { conn, out, groups } = connect({ canvasMove: { async move() { return undefined; } }, conversations: everything, models: { async switch(s) { return s; } }, voice, canvas, publish, comments, owner, plans, todos, library, changes, talk: new FakeTalk(), highlights: fakeHighlights, connectors: { async read() { return { type: "connectors", connectors: [], at: new Date(0).toISOString() }; } }, browser: new BrowserBridge(), local: true, openTerm: () => term, forwardConnect: () => Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} }), ended: { async resume() { return session; }, async whenReady() {} } });
     // `group.close` names a group kept with no session.
     groups.kept.set("g-5b8e20", { group: "g-5b8e20", cwd: "/Users/ada/code/web" });
     // `hello`, then `term.open` before the other term frames and `term.close` after them; `unpair` ends the connection, so it goes last.

@@ -445,6 +445,21 @@ describe("session groups", () => {
     expect(again.list().every((s) => s.groupName === undefined)).toBe(true);
   });
 
+  it("moves a group's canvas folder: every member carries it, gone ones too", async () => {
+    const r = make();
+    await r.create({ name: "app", cwd: "~/app", agent: "claude" });
+    await r.create({ name: "zsh", cwd: "~/app", agent: "shell" });
+    r.markGone("gr-zsh");
+    const updated: string[] = [];
+    r.on("updated", (s) => updated.push(`${s.id}:${s.canvasCwd}`));
+    expect(r.setGroupCanvasCwd("g-1", "/elsewhere/web")).toMatchObject({ changed: true, session: { id: "gr-app", canvasCwd: "/elsewhere/web" } });
+    expect(updated).toEqual(["gr-app:/elsewhere/web", "gr-zsh:/elsewhere/web"]);
+    expect(r.setGroupCanvasCwd("g-1", "/elsewhere/web").changed).toBe(false);
+    expect(() => r.setGroupCanvasCwd("g-nope", "/x")).toThrow(UnknownGroupError);
+    // A session joining the group afterwards carries the new folder.
+    expect((await r.create({ name: "more", cwd: "~/app", agent: "shell", group: "g-1" })).canvasCwd).toBe("/elsewhere/web");
+  });
+
   it("cleans a typed group name", () => {
     expect(cleanGroupName("  Launch week  ")).toBe("Launch week");
     expect(cleanGroupName("   ")).toBeUndefined();

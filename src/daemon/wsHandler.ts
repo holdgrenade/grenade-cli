@@ -24,6 +24,7 @@ import { CanvasError, type CanvasPick, type CanvasReply } from "../canvas/canvas
 import { boardTooLarge } from "../canvas/boardListing.js";
 import type { PublishedLink, PublishExpiry, PublishScope } from "@grenade/protocol";
 import { PublishError } from "../publish/publisher.js";
+import { CanvasMoveError } from "../canvas/canvasMove.js";
 import type { CommentsFrame } from "@grenade/protocol";
 import { CommentError } from "../publish/comments.js";
 import type { TalkEntry, TalkHistoryCursor, TalkThreadFrame } from "@grenade/protocol";
@@ -302,6 +303,8 @@ export interface ConnectionDeps {
   conversations?: ConversationsPort;
   /** Ended sessions started again in their place (`session.resume`). Absent means this daemon starts none (no `resumeEnded: 1`). */
   ended?: { resume(sessionId: string): Promise<Session>; whenReady(sessionId: string): Promise<void> };
+  /** Moves a group's canvases to another project (`group.canvasCwd`). Absent means this daemon moves none (no `groupCanvasCwd: 1`). */
+  canvasMove?: { move(group: string, cwd: string): Promise<Session | GroupsFrame | undefined> };
   /** The order groups are listed in. Absent means this daemon keeps none and answers `group.move` with `bad_frame`. */
   groups?: GroupsPort;
   /** Switches a session's model. Absent means this daemon switches none and answers `session.model` with `bad_frame`. */
@@ -458,7 +461,7 @@ export class Connection {
       const id = frame.type === "input" || frame.type === "attachment" || frame.type === "activity.text" || frame.type === "canvases" || frame.type === "canvas" || frame.type === "canvas.subscribe" || frame.type === "canvas.board" || frame.type.startsWith("publish.") || frame.type.startsWith("comment") || frame.type === "owner.name" ? (frame as { id?: string }).id : undefined;
       if (e instanceof UnknownSessionError) return this.fail("unknown_session", e.message, frame.type, false, id);
       if (e instanceof SessionExistsError) return this.fail("tmux_failed", e.message, frame.type, false, id);
-      if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof MissingAgentError || e instanceof NotEndedError || e instanceof PromptHeldError) return this.fail("bad_frame", e.message, frame.type, false, id);
+      if (e instanceof BadCwdError || e instanceof UnknownGroupError || e instanceof CanvasMoveError || e instanceof MissingAgentError || e instanceof NotEndedError || e instanceof PromptHeldError) return this.fail("bad_frame", e.message, frame.type, false, id);
       const msg = e instanceof Error ? e.message : String(e);
       // The tmux session ended before the 1 s sweep marked it gone; the phone just needs to know.
       if (/can't find session/i.test(msg)) {
@@ -811,6 +814,14 @@ export class Connection {
         // The registry emits session.updated for every member it renamed; a rename that changes nothing still gets an answer.
         const renamed = r.renameGroup(frame.group, frame.name);
         if (!renamed.changed) this.send({ type: "session.updated", session: renamed.session });
+        return;
+      }
+      case "group.canvasCwd": {
+        if (!this.d.canvasMove) return this.fail("bad_frame", "this daemon moves no canvases", frame.type);
+        // A move reaches every client through the registry or the group store; one to where it is still gets an answer.
+        const reply = await this.d.canvasMove.move(frame.group, frame.cwd);
+        if (reply && "type" in reply) this.send(reply);
+        else if (reply) this.send({ type: "session.updated", session: reply });
         return;
       }
       case "session.rename": {

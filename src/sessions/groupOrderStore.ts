@@ -84,6 +84,18 @@ export class GroupOrderStore extends EventEmitter<GroupOrderEvents> {
     return true;
   }
 
+  /** Makes `cwd` a kept group's canvas folder (`group.canvasCwd`). Returns false when it was that already. */
+  setCwd(group: string, cwd: string): boolean {
+    const k = this.kept.get(group);
+    if (!k) throw new UnknownGroupError(`no kept group ${group}`);
+    if (k.cwd === cwd) return false;
+    this.kept.set(group, { ...k, cwd });
+    this.save();
+    this.log.info(`Moved the canvases of group ${group}`, { cwd });
+    this.emit("changed", this.frame());
+    return true;
+  }
+
   /** Drops a kept group (`group.close`). Its canvases stay in its folder. */
   close(group: string): void {
     if (!this.kept.delete(group)) throw new UnknownGroupError(`no kept group ${group}`);
