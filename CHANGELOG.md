@@ -2,6 +2,11 @@
 
 What changed in each version of Grenade's CLI and daemon (`@holdgrenade/cli`), newest first. Every push to `main` is a release: CI's `bump` job (`.github/workflows/release.yml`) writes the released version's section from the commit subjects since the previous tag, and that section is the GitHub release's notes. A section written here by hand for the version being released is kept as it is, so write one when the commit subjects don't say enough.
 
+## 1.0.135 (2026-10-31)
+
+- Groups can now move their canvases to another project. The group's canvas folder, with every canvas in it, goes to the new project, and the group's published links keep the same address at their new location.
+- The move never writes over anything already in the destination, and only moves real folders. Shared boards and each session's own folder stay where they are.
+
 ## 1.0.134 (2026-10-30)
 
 - Long prompts no longer fail with "Not sent · command too long". Prompts of any length, including a sandbox's Build prompt or a prompt with the Sandbox chip on a sandbox with many items, now reach the agent. Long single lines are also delivered reliably.
