@@ -11,7 +11,7 @@ import { PUBLISHED_LINKS_MAX, SHARE_PLAN_FILE, type CanvasBoard, type PublishedL
 import type { CanvasListing } from "../canvas/canvasFolder.js";
 import type { CanvasPick } from "../canvas/canvasService.js";
 import type { Logger } from "../log.js";
-import { boardsInScope, isExpired, linksOf, movedRecord, newSecrets, planTitleOf, referencedAssets, titleOf, tokenForLog, withExpiry, type PublishRecord } from "./publishPlan.js";
+import { boardsInScope, isExpired, linksOf, newSecrets, planTitleOf, referencedAssets, titleOf, tokenForLog, withExpiry, type PublishRecord } from "./publishPlan.js";
 import type { AssetFile } from "./publishFolder.js";
 import { loadPublished, savePublished } from "./publishStore.js";
 import type { ShareClient } from "./shareClient.js";
@@ -240,30 +240,6 @@ export class Publisher extends EventEmitter {
     this.schedule(token, 0);
     this.changed();
     return this.list();
-  }
-
-  /**
-   * Points every link of a canvas in the folder `from` at it in `to`, its new place in the project `cwd` (a group's
-   * canvases moved, `group.canvasCwd`), keeping their addresses. Returns how many links followed.
-   */
-  async followMove(from: string, to: string, cwd: string): Promise<number> {
-    const moved = this.records.flatMap((r) => {
-      const next = movedRecord(r, from, to, cwd);
-      return next ? [next] : [];
-    });
-    if (moved.length === 0) return 0;
-    for (const next of moved) {
-      this.unfollow(next.token);
-      this.replace(next);
-    }
-    this.save();
-    for (const next of moved) {
-      this.d.log.info("A published canvas moved with its group", { folder: next.folder, link: tokenForLog(next.token) });
-      await this.follow(next.token);
-      this.schedule(next.token, 0);
-    }
-    this.changed();
-    return moved.length;
   }
 
   /** Takes a link down at the host, then forgets it. */

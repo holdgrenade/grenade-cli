@@ -120,13 +120,3 @@ export function linksOf(records: PublishRecord[], host: string): PublishedLink[]
 export function tokenForLog(token: string): string {
   return `${token.slice(0, 4)}…`;
 }
-
-/**
- * A canvas link whose folder lies in `from` (a group's folder that moved to `to`, PROTOCOL.md "Canvas", "Moving a
- * group's canvases"), pointed at the same canvas in its new place, in the project `cwd`; null for any other link.
- */
-export function movedRecord(record: PublishRecord, from: string, to: string, cwd: string): PublishRecord | null {
-  if (record.kind !== "canvas") return null;
-  if (record.folder !== from && !record.folder.startsWith(from + "/")) return null;
-  return { ...record, cwd, folder: to + record.folder.slice(from.length) };
-}

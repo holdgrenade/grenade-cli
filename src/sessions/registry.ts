@@ -494,27 +494,6 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     return { session: this.get(first.id) ?? first, changed: true };
   }
 
-  /**
-   * Makes `cwd` the canvas folder of every member of `group` (PROTOCOL.md "Canvas", "Moving a group's canvases"): the
-   * daemon has moved the group's folder there already. Emits `updated` for every member it changed. Returns the group's
-   * first member and whether anything changed.
-   */
-  setGroupCanvasCwd(group: string, cwd: string): { session: Session; changed: boolean } {
-    const first = membersInOrder(group, this.list())[0];
-    if (!first) throw new UnknownGroupError(`no session in group ${group}`);
-    const changed: Record_[] = [];
-    for (const m of this.records.values()) {
-      if (m.session.group !== group || m.session.canvasCwd === cwd) continue;
-      m.session = withCanvasCwd(m.session, cwd);
-      changed.push(m);
-    }
-    if (changed.length === 0) return { session: first, changed: false };
-    this.persist();
-    this.log.info(`Moved the canvases of group ${group}`, { cwd });
-    for (const m of changed) this.emit("updated", m.session);
-    return { session: this.get(first.id) ?? first, changed: true };
-  }
-
   markGone(id: string): void {
     const r = this.records.get(id);
     if (!r || r.session.status === "gone") return;

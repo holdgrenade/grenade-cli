@@ -106,7 +106,6 @@ import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.j
 import { TalkService } from "../talk/talkService.js";
 import { HighlightsService } from "../highlights/highlightsService.js";
 import { CanvasWork } from "../canvas/canvasWork.js";
-import { GroupCanvasMover } from "../canvas/groupCanvasMover.js";
 import { PictureStore } from "../highlights/pictureStore.js";
 import { TalkTools } from "../talk/talkTools.js";
 import { diskPlanFiles, PlanTracker, watchPlanFile } from "../plans/planTracker.js";
@@ -207,7 +206,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
   const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
-  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, continueOriginal: 1, voice: 1, canvas: 1, canvases: 1, groupCanvasCwd: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, libraryProjects: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
+  const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, continueOriginal: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, libraryProjects: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
@@ -515,8 +514,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
         log,
       })
     : undefined;
-  // `group.canvasCwd` (PROTOCOL.md "Canvas", "Moving a group's canvases"): a group's canvases to another project, its links with them.
-  const canvasMove = new GroupCanvasMover({ registry, groups: groupOrder, publish: publisher, home: homedir(), log });
   if (publisher && publishedPath) {
     const service = new CommentService({
       dir: join(dirname(publishedPath), "comments"),
@@ -944,7 +941,6 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       board: push.board,
       prompts,
       groups: groupOrder,
-      canvasMove,
       models,
       voice,
       canvas,
