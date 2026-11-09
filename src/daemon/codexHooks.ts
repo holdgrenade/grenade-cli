@@ -13,6 +13,8 @@ export interface CodexHookListeners {
   onModel?: (sessionId: string, model: string) => void;
   /** How many background terminals the session's screen shows; Codex's hooks do not say (PROTOCOL.md "Background tasks"). */
   background?: (sessionId: string) => number;
+  /** Every applied hook, with its payload: Codex's approvals are cards (`CodexApprovals`). */
+  onHook?: (sessionId: string, event: string, toolName: string | undefined, payload: unknown) => void;
 }
 
 export function handleCodexHook(registry: HookRegistryPort, sessionParam: string | null, rawBody: string, log: Logger, on: CodexHookListeners = {}): HookResult {
@@ -39,6 +41,7 @@ export function handleCodexHook(registry: HookRegistryPort, sessionParam: string
   if (parsed.data.model) on.onModel?.(sessionParam, parsed.data.model);
   if (parsed.data.prompt !== undefined) on.onPrompt?.(sessionParam, parsed.data.prompt);
   if (parsed.data.transcript_path) on.onTranscript?.(sessionParam, parsed.data.transcript_path, event);
+  on.onHook?.(sessionParam, event, typeof parsed.data.tool_name === "string" ? parsed.data.tool_name : undefined, json);
   const shown = running > 0 ? "working" : status;
   log.debug(`Codex hook ${event}`, { session: sessionParam, status: shown });
   return { status: 200, body: { ok: true, applied: shown } };

@@ -50,6 +50,7 @@ import { underSystemd } from "../update/underService.js";
 import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
 import { ScreenPrompts } from "../prompts/screenPrompts.js";
+import { CodexApprovals } from "../prompts/codexApprovals.js";
 import { ClaudeBackgroundWatch } from "../background/claudeBackgroundWatch.js";
 import { codexBackgroundIn } from "../background/codexBackground.js";
 import { watchScreenBackground } from "../background/screenBackground.js";
@@ -652,6 +653,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
     handleCodexHook(registry, session, body, log, {
       onModel: (id, model) => registry.setModel(id, model),
       background: (id) => codexBackgroundIn(registry.screenOf(id)?.lines ?? []),
+      onHook: (id, event, toolName, payload) => {
+        if (event === "PermissionRequest") codexApprovals.requested(id, payload);
+        else codexApprovals.hook(id, event, toolName);
+      },
       onPrompt: (id, prompt) => {
         summarizer?.notePrompt(id, prompt);
         activity.noteAsked(id, prompt, new Date().toISOString());
@@ -812,6 +817,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   prompts.on("answered", (id) => registry.applyHook(id, "working", undefined, true));
   // Dialogs read off the screen are cards too (PROTOCOL.md "Codex dialogs", "Claude Code dialogs").
   const screenPrompts = new ScreenPrompts(registry, prompts, log, (id) => switchingModel.has(id));
+  // Codex's approvals: a card from its hook, answered with the dialog's keys (PROTOCOL.md "Codex approvals").
+  const codexApprovals = new CodexApprovals(registry, prompts, log);
   // What an agent left running when its turn ended holds the session working (PROTOCOL.md "Background tasks"):
   // Codex's is read off its screen, and Claude Code's own files say when a task ended without a hook.
   watchScreenBackground(registry);
@@ -819,6 +826,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   backgroundWatch.start();
   registry.on("removed", (id) => {
     prompts.closeSession(id);
+    codexApprovals.forget(id);
     activity.forget(id);
     catchUp.cancel(id);
     interruptCatchUp.cancel(id);
