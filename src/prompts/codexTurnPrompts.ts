@@ -5,7 +5,7 @@
  * waits for an answer, and an answer is typed as the keys the person would press, a step at a time as the screen
  * shows what each waits for. The card closes when the screen no longer shows the dialog, however it was answered.
  */
-import type { AgentKind, KeyName, PromptBody, PromptDecision, WaitingFor } from "@grenade/protocol";
+import { planEditedNote, type AgentKind, type KeyName, type PromptBody, type PromptDecision, type WaitingFor } from "@grenade/protocol";
 import type { Logger } from "../log.js";
 import { cardPlan, cardQuestions, codexOpenQuestionsIn, codexProposedPlanIn, type CodexQuestion } from "./codexRollout.js";
 import { codexComposerIn, codexInPlanMode, codexNotesOpenIn, codexPlanDialogIn, codexQuestionPageIn } from "./codexScreen.js";
@@ -28,8 +28,6 @@ export interface CodexTurnPromptsOptions {
   read: (path: string) => Promise<string>;
   /** Types text as keys, not as a paste (Shift-Tab, a note): Codex reads a paste as text to send. */
   type: (id: string, text: string) => Promise<void>;
-  /** The plan as the person left it, when they edited it (PROTOCOL.md "Plans"): approving builds that one. */
-  editedPlan?: (id: string) => string | undefined;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }
@@ -173,8 +171,14 @@ export class CodexTurnPrompts {
   private planSteps(id: string, shown: Shown, decision: PromptDecision): Step[] {
     const onDialog = (lines: string[]) => codexPlanDialogIn(lines) !== null;
     const menuKeys = (lines: string[], starts: string) => this.keys(id, codexPlanDialogIn(lines)?.menu ?? [], starts);
-    if (!decision.allow) return [{ when: onDialog, act: (lines) => menuKeys(lines, "No, stay in Plan mode") }, ...this.feedbackSteps(id, decision.feedback)];
-    const edited = this.opts.editedPlan?.(id);
+    if (!decision.allow) {
+      // A plan the person edited is planned on from their version: Codex is told where it is, as Claude Code is.
+      const note = decision.planEdited ? planEditedNote(decision.planEdited) : undefined;
+      const feedback = [decision.feedback, note].filter(Boolean).join(" ") || undefined;
+      return [{ when: onDialog, act: (lines) => menuKeys(lines, "No, stay in Plan mode") }, ...this.feedbackSteps(id, feedback)];
+    }
+    // The plan file's text, which `decisionFor` adds (PROTOCOL.md "Plans"): the person's edit, when it is not Codex's.
+    const edited = decision.planText?.trim() && decision.planText.trim() !== shown.plan?.trim() ? decision.planText : undefined;
     if (!decision.note && edited === undefined) return [{ when: onDialog, act: (lines) => menuKeys(lines, "Yes, implement this plan") }];
     // Codex would build the plan it wrote: back out of the dialog, leave Plan mode, and send the plan as it is now.
     return [

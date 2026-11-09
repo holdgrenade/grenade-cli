@@ -20,6 +20,10 @@ function memoryFiles(): PlanFiles & { files: Map<string, string>; saves: number 
       files.set(path, text);
       fs.saves += 1;
     },
+    async create(path: string, text: string) {
+      files.set(path, text);
+      fs.saves += 1;
+    },
   };
   return fs;
 }
@@ -40,7 +44,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 function tracker() {
   const files = memoryFiles();
   const every = manualEvery();
-  const t = new PlanTracker(files, `${home}/.claude`, home, every);
+  const t = new PlanTracker(files, `${home}/.claude`, home, every, `${home}/.grenade/plans`);
   const plans: [string, SessionPlan | undefined][] = [];
   t.on("plan", (id, p) => plans.push([id, p]));
   return { t, files, every, plans };
@@ -160,5 +164,53 @@ describe("PlanTracker", () => {
     expect(t.planOf("gr-a")).toEqual({ file: "velvety-knitting-shell.md", planning: false, writing: false });
     t.restore("gr-b", "/etc/passwd");
     expect(t.planOf("gr-b")).toBeUndefined();
+  });
+});
+
+describe("PlanTracker: Codex", () => {
+  const own = `${home}/.grenade/plans/gr-cx.md`;
+
+  it("follows Codex's footer into Plan mode and keeps its proposed plan in a file of the daemon's own", async () => {
+    const { t, files, plans } = tracker();
+    t.codexMode("gr-cx", false);
+    expect(t.planOf("gr-cx")).toBeUndefined();
+    t.codexMode("gr-cx", true);
+    expect(t.planOf("gr-cx")).toEqual({ planning: true, writing: false });
+    t.codexWorking("gr-cx", true);
+    expect(t.planOf("gr-cx")).toEqual({ planning: true, writing: true });
+    t.codexWorking("gr-cx", false);
+    await t.codexPlan("gr-cx", "# Add a README");
+    expect(files.files.get(own)).toBe("# Add a README");
+    expect(t.planOf("gr-cx")).toEqual({ file: "gr-cx.md", planning: true, writing: false });
+    expect(t.pathOf("gr-cx")).toBe(own);
+    expect(plans.at(-1)).toEqual(["gr-cx", { file: "gr-cx.md", planning: true, writing: false }]);
+  });
+
+  it("keeps the user's edit when the same reply is read again, and takes Codex's next plan", async () => {
+    const { t, files } = tracker();
+    t.codexMode("gr-cx", true);
+    await t.codexPlan("gr-cx", "# Codex's plan");
+    await t.write("gr-cx", "# My plan");
+    await t.codexPlan("gr-cx", "# Codex's plan");
+    expect(files.files.get(own)).toBe("# My plan");
+    expect(t.takeEditedNote("gr-cx")).toContain("~/.grenade/plans/gr-cx.md");
+    await t.codexPlan("gr-cx", "# Codex's revised plan");
+    expect(files.files.get(own)).toBe("# Codex's revised plan");
+  });
+
+  it("refuses edits while Codex works in Plan mode", async () => {
+    const { t } = tracker();
+    t.codexMode("gr-cx", true);
+    await t.codexPlan("gr-cx", "# Plan");
+    t.codexWorking("gr-cx", true);
+    await expect(t.write("gr-cx", "# Mine")).rejects.toBeInstanceOf(PlanWriteError);
+  });
+
+  it("restores the daemon's own plan file after a restart", () => {
+    const { t } = tracker();
+    t.restore("gr-cx", own);
+    expect(t.pathOf("gr-cx")).toBe(own);
+    t.restore("gr-x", `${home}/elsewhere/plan.md`);
+    expect(t.pathOf("gr-x")).toBeUndefined();
   });
 });

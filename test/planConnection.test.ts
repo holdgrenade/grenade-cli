@@ -70,7 +70,7 @@ describe("plans on a connection", () => {
     await flush();
     expect(of("plan")).toMatchObject([{ sessionId: "gr-a", text: "# Plan\n", writing: true, by: "agent" }]);
     await send({ type: "plan.write", sessionId: "gr-a", id: "w-1", text: "# Mine\n" });
-    expect(of("error")).toMatchObject([{ code: "bad_frame", ref: "plan.write", id: "w-1", message: "Claude is writing the plan. Edit it once it's done." }]);
+    expect(of("error")).toMatchObject([{ code: "bad_frame", ref: "plan.write", id: "w-1", message: "The agent is writing the plan. Edit it once it's done." }]);
     plans.hook("gr-a", { hook_event_name: "Stop", permission_mode: "plan" });
     await send({ type: "plan.write", sessionId: "gr-a", id: "w-2", text: "# Mine\n" });
     expect(files.get(planPath)).toBe("# Mine\n");
@@ -89,7 +89,7 @@ describe("plans on a connection", () => {
     expect(of("error").at(-1)).toMatchObject({ ref: "session.mode" });
     ask();
     await send({ type: "session.mode", sessionId: "gr-a", mode: "plan" });
-    expect(of("error").at(-1)).toMatchObject({ ref: "session.mode", message: "Answer what Claude is asking first." });
+    expect(of("error").at(-1)).toMatchObject({ ref: "session.mode", message: "Answer what the agent is asking first." });
     expect(entered).toBe(1);
   });
 

@@ -10,9 +10,13 @@
  *
  * The file is looked at every 400 ms while a client follows it, as a canvas is: a poll, so a file that is saved by a
  * rename is seen as readily as one written in place.
+ *
+ * Codex plans in no file: its plan is the `<proposed_plan>` block of a reply. The daemon keeps it in a file of its own
+ * (`<GRENADE_HOME>/plans/<session>.md`, `codexPlan`), which is then followed and edited as Claude Code's is.
+ * `planning` follows Codex's footer ("Plan mode", `codexMode`), and `writing` is a turn Codex works on in Plan mode.
  */
 import { EventEmitter } from "node:events";
-import { lstat, readFile, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { PLAN_TEXT_MAX, planEditedNote, type PlanFrame, type SessionPlan } from "@grenade/protocol";
@@ -40,6 +44,8 @@ export interface PlanFiles {
   read(path: string): Promise<{ text: string; modified: Date; bytes: number } | null>;
   /** Replaces a regular file's text. Rejects when it is not one. */
   write(path: string, text: string): Promise<void>;
+  /** Writes a file of the daemon's own (mode 0600, in a 0700 folder it makes), new or not. Rejects for a link or a folder. */
+  create(path: string, text: string): Promise<void>;
 }
 
 export const diskPlanFiles: PlanFiles = {
@@ -57,6 +63,13 @@ export const diskPlanFiles: PlanFiles = {
     if (!info.isFile()) throw new Error("not a regular file");
     await writeFile(path, text, "utf8");
   },
+  async create(path, text) {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(path), 0o700);
+    const info = await lstat(path).catch(() => null);
+    if (info && !info.isFile()) throw new Error("not a regular file");
+    await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
+  },
 };
 
 /** Why `write` refused, in a sentence for the user. */
@@ -71,6 +84,8 @@ interface SessionState {
   /** The user changed the plan after the agent last wrote it; the agent has not been told. */
   editedByUser: boolean;
   by: "agent" | "user";
+  /** Codex's plan as it last wrote it, so the same reply read again is not written over the user's edit. */
+  agentText?: string;
 }
 
 interface Follower {
@@ -102,16 +117,22 @@ export class PlanTracker extends EventEmitter<PlanTrackerEvents> {
   private readonly sessions = new Map<string, SessionState>();
   private readonly watched = new Map<string, Watched>();
   private readonly plansFolder: string;
+  private readonly ownFolder: string | undefined;
 
-  /** `claudeDir` is Claude Code's folder (`~/.claude`), whose `plans` the agent writes in; `home` names paths with `~`. */
+  /**
+   * `claudeDir` is Claude Code's folder (`~/.claude`), whose `plans` the agent writes in; `home` names paths with `~`;
+   * `ownFolder` is where the daemon keeps Codex's plans (`<GRENADE_HOME>/plans`), none for no Codex plans.
+   */
   constructor(
     private readonly files: PlanFiles = diskPlanFiles,
     claudeDir: string = join(homedir(), ".claude"),
     private readonly home: string = homedir(),
     private readonly every: Every = realEvery,
+    ownFolder?: string,
   ) {
     super();
     this.plansFolder = join(resolve(claudeDir), "plans");
+    this.ownFolder = ownFolder === undefined ? undefined : resolve(ownFolder);
   }
 
   /** What `Session.plan` says now, or undefined while the session has never been in plan mode. */
@@ -154,6 +175,40 @@ export class PlanTracker extends EventEmitter<PlanTrackerEvents> {
       if (TURN_ENDS.has(event)) next = { ...next, writing: false, wroteThisTurn: false };
       return next;
     });
+  }
+
+  /** Codex's footer says whether Plan mode is on. A session that has never planned has nothing to track until it does. */
+  codexMode(sessionId: string, planning: boolean): void {
+    if (!this.sessions.has(sessionId) && !planning) return;
+    if (this.sessions.get(sessionId)?.planning === planning) return;
+    this.change(sessionId, (s) => ({ ...s, planning, writing: planning && s.writing }));
+  }
+
+  /** A Codex session started or ended a turn: in Plan mode, a turn is when Codex may write the plan again. */
+  codexWorking(sessionId: string, working: boolean): void {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    const writing = working && s.planning;
+    if (s.writing !== writing) this.change(sessionId, (x) => ({ ...x, writing, wroteThisTurn: writing && x.wroteThisTurn }));
+  }
+
+  /**
+   * The newest plan Codex proposed (`codexProposedPlanIn`), read as a turn ends: kept in the daemon's own file for the
+   * session, unless it is the one it already wrote (so the user's edit of it stays).
+   */
+  async codexPlan(sessionId: string, text: string): Promise<void> {
+    if (!this.ownFolder) return;
+    const s = this.sessions.get(sessionId);
+    if (s?.agentText === text) return;
+    const path = join(this.ownFolder, `${sessionId}.md`);
+    if (s?.agentText === undefined && s?.path === path && (await this.files.read(path))?.text === text) {
+      s.agentText = text;
+      return;
+    }
+    await this.files.create(path, text);
+    this.change(sessionId, (x) => ({ ...x, path, agentText: text, editedByUser: false, by: "agent" }));
+    const w = this.watched.get(sessionId);
+    if (w) void this.look(sessionId, w);
   }
 
   /** The session's agent was switched into plan mode (`session.mode`): it plans, before the next hook says so. */
@@ -200,7 +255,7 @@ export class PlanTracker extends EventEmitter<PlanTrackerEvents> {
   async write(sessionId: string, text: string): Promise<PlanFrame> {
     const s = this.sessions.get(sessionId);
     if (!s?.path) throw new PlanWriteError("This session has no plan to edit yet.");
-    if (s.writing) throw new PlanWriteError("Claude is writing the plan. Edit it once it's done.");
+    if (s.writing) throw new PlanWriteError("The agent is writing the plan. Edit it once it's done.");
     try {
       await this.files.write(s.path, text);
     } catch {
@@ -297,7 +352,8 @@ export class PlanTracker extends EventEmitter<PlanTrackerEvents> {
 
   private inPlansFolder(path: string): boolean {
     const file = resolve(path);
-    return dirname(file) === this.plansFolder && file.endsWith(".md") && !basename(file).startsWith(".");
+    const folder = dirname(file);
+    return (folder === this.plansFolder || folder === this.ownFolder) && file.endsWith(".md") && !basename(file).startsWith(".");
   }
 }
 

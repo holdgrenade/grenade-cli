@@ -147,7 +147,7 @@ class FakeRegistry extends EventEmitter {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-function setup(rollout: string, editedPlan?: string) {
+function setup(rollout: string) {
   const registry = new FakeRegistry();
   const prompts = new PromptStore();
   const opened: PromptFrame[] = [];
@@ -158,7 +158,6 @@ function setup(rollout: string, editedPlan?: string) {
     read: async () => rollout,
     type: async (_id, text) => void registry.sent.push(`type:${text === SHIFT_TAB ? "⇧⇥" : text}`),
     wait: async () => {},
-    ...(editedPlan ? { editedPlan: () => editedPlan } : {}),
   });
   return { registry, prompts, turn, opened, closed };
 }
@@ -229,6 +228,25 @@ describe("CodexTurnPrompts: questions", () => {
 });
 
 describe("CodexTurnPrompts: plans", () => {
+  it("approves with Yes when the plan file holds Codex's own plan", async () => {
+    const { registry, prompts, opened } = setup(jsonl(planMessage));
+    registry.show("gr-a", planDialog);
+    await flush();
+    prompts.answer("gr-a", opened[0]!.promptId, { allow: true, planText: "# Add a README\n\n## Changes\n\n- Create `README.md`.\n" });
+    await flush();
+    expect(registry.sent).toEqual(["enter"]);
+  });
+
+  it("tells Codex where the edited plan is when it is sent back", async () => {
+    const { registry, prompts, opened } = setup(jsonl(planMessage));
+    registry.show("gr-a", planDialog);
+    await flush();
+    prompts.answer("gr-a", opened[0]!.promptId, { allow: false, planEdited: "~/.grenade/plans/gr-a.md" });
+    registry.show("gr-a", composerPlan);
+    await flush();
+    expect(registry.sent.at(-1)).toMatch(/^prompt:\(I edited the plan in ~\/\.grenade\/plans\/gr-a\.md myself/);
+  });
+
   it("opens a plan card with the proposed plan, and approving picks Yes, implement this plan", async () => {
     const { registry, prompts, opened } = setup(jsonl(planMessage));
     registry.show("gr-a", planDialog);
@@ -267,10 +285,10 @@ describe("CodexTurnPrompts: plans", () => {
   });
 
   it("builds the person's edited plan, not the one Codex wrote", async () => {
-    const { registry, prompts, opened } = setup(jsonl(planMessage), "# My own plan");
+    const { registry, prompts, opened } = setup(jsonl(planMessage));
     registry.show("gr-a", planDialog);
     await flush();
-    prompts.answer("gr-a", opened[0]!.promptId, { allow: true });
+    prompts.answer("gr-a", opened[0]!.promptId, { allow: true, planText: "# My own plan" });
     registry.show("gr-a", composerPlan);
     await flush();
     registry.show("gr-a", composerDefault);

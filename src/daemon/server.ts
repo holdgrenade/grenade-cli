@@ -102,7 +102,9 @@ import { SentInputs } from "./sentInputs.js";
 import { PlanLimits } from "../usage/planLimits.js";
 import { ConnectorReader } from "../connectors/connectorReader.js";
 import { claudeStatusUsage, STATUS_LINE_PATH } from "../usage/claudeStatusLine.js";
-import { readCodexTurn, readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
+import { readCodexPlan, readCodexTurn, readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
+import { enterCodexPlanMode } from "../plans/codexPlanMode.js";
+import { codexInPlanMode } from "../prompts/codexScreen.js";
 import { homedir } from "node:os";
 import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
@@ -137,6 +139,8 @@ export interface DaemonOptions {
   sessionsPath?: string | null;
   /** Claude Code's folder, where past conversations are read from (PROTOCOL.md "Conversations"). Default: paths.claudeDir. */
   claudeDir?: string;
+  /** Where Codex's plans are kept. Default: paths.plans (none when tokensPath is null); null for none. */
+  plansDir?: string | null;
   /** Codex's folder, where its past conversations are read from. Default: paths.codexDir. */
   codexDir?: string;
   /** Mirror sessions into terminal tabs. Pins it; without it `GRENADE_TERMINAL`, else `~/.grenade/terminal.json` read at every event (`none` when missing). */
@@ -254,7 +258,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const summarizer = startSummarizer(registry, log, opts.summaries ?? process.env["GRENADE_SUMMARIES"] !== "off");
   await registry.adopt();
   // What each session's agent does with its plan, and its plan file (PROTOCOL.md "Plans").
-  const plans = new PlanTracker(undefined, opts.claudeDir ?? paths.claudeDir);
+  const plans = new PlanTracker(undefined, opts.claudeDir ?? paths.claudeDir, undefined, undefined, opts.plansDir === null ? undefined : (opts.plansDir ?? (opts.tokensPath === null ? undefined : paths.plans)));
   plans.on("plan", (id, plan) => registry.setPlan(id, plan, plans.pathOf(id)));
   for (const { id, path } of registry.planPaths()) plans.restore(id, path);
   // The user edited a plan since its agent last wrote it: the next thing they say tells the agent.
@@ -262,6 +266,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // An interrupt ends a turn without a hook.
   registry.on("updated", (s) => {
     if (s.status !== "working") plans.turnOver(s.id);
+    // After every listener has this update: a plan change made inside it would reach clients first, then this older one.
+    if (s.agent === "codex") queueMicrotask(() => plans.codexWorking(s.id, registry.get(s.id)?.status === "working"));
+  });
+  // Codex's footer says when Plan mode is on (PROTOCOL.md "Plans").
+  registry.on("captured", (id, agent, lines) => {
+    if (agent === "codex") queueMicrotask(() => plans.codexMode(id, codexInPlanMode(lines)));
   });
   registry.on("removed", (id) => plans.forget(id));
   // Each session's to-do list (PROTOCOL.md "To-dos"), saved beside sessions.json as groups.json is.
@@ -677,6 +687,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
+        // A turn that ends in Plan mode may have proposed a plan: keep it where clients can follow and edit it.
+        if (event === "Stop" && plans.planOf(id)?.planning) {
+          readCodexPlan(path)
+            .then((plan) => (plan ? plans.codexPlan(id, plan) : undefined))
+            .catch((e) => log.debug("Could not keep a Codex plan", { session: id, path, error: e }));
+        }
         readCodexTurn(path)
           .then((turn) => {
             // The model and effort the newest turn ran with; one from before a client chose them changes nothing.
@@ -984,11 +1000,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       plans: Object.assign(plans, {
         async enterPlanMode(sessionId: string) {
           // Straight to tmux, as a model switch is: a key, not a prompt.
-          await enterClaudePlanMode({
+          const terminal: ModelTerminal = {
             lines: async () => (await tmux.capture(sessionId)).lines,
             type: (text) => tmux.sendText(sessionId, text, false),
             key: (key) => tmux.sendKey(sessionId, key),
-          });
+          };
+          await (registry.get(sessionId)?.agent === "codex" ? enterCodexPlanMode(terminal) : enterClaudePlanMode(terminal));
           plans.enteredPlanMode(sessionId);
         },
       }),

@@ -768,7 +768,7 @@ export class Connection {
         if (!session) return this.fail("unknown_session", `no session ${frame.sessionId}`, frame.type);
         const enter = this.d.plans?.enterPlanMode;
         if (!enter || !agentInfo(session.agent)?.plans) return this.fail("bad_frame", "this session's agent has no plan mode", frame.type);
-        if (this.d.prompts?.list().some((p) => p.sessionId === session.id)) return this.fail("bad_frame", "Answer what Claude is asking first.", frame.type);
+        if (this.d.prompts?.list().some((p) => p.sessionId === session.id)) return this.fail("bad_frame", "Answer what the agent is asking first.", frame.type);
         try {
           await enter(session.id);
         } catch (e) {
