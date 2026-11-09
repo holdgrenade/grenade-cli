@@ -6,7 +6,7 @@
 import { keysTo, menuIn, questionBody, type DialogChoice, type MenuRow, type ScreenDialog } from "./screenDialog.js";
 
 export interface CodexDialog extends ScreenDialog {
-  id: "hooks" | "folder";
+  id: "hooks" | "folder" | "update";
 }
 
 /** Codex marks the selected row of a menu with "›". */
@@ -16,6 +16,7 @@ const MARK = "›";
 export function codexDialogIn(lines: string[]): CodexDialog | null {
   if (lines.some((l) => l.trim() === "Hooks need review")) return hooksDialog(lines);
   if (lines.some((l) => l.includes("Trust this folder?"))) return folderDialog(lines);
+  if (lines.some((l) => /^\s*Update available · /.test(l))) return updateDialog(lines);
   return null;
 }
 
@@ -41,6 +42,20 @@ function folderDialog(lines: string[]): CodexDialog | null {
   const folder = at >= 0 ? lines[at + 1]?.trim() : undefined;
   const question = `Trust this folder?${folder ? ` ${folder}` : ""}`;
   return { id: "folder", body: questionBody("Folder access", question, [trust]), choices: [trust] };
+}
+
+/** "Update available · 0.160.0 → 0.167.0", as a new Codex starts: it takes the first prompt typed while it is up. */
+function updateDialog(lines: string[]): CodexDialog | null {
+  const menu = menuIn(lines, MARK);
+  const versions = lines.map((l) => /^\s*Update available · (.+?)\s*$/.exec(l)?.[1]).find((v) => v !== undefined);
+  const choices = [
+    choice(menu, "Skip until next version", "Skip this version", "Codex asks again when a newer one is out."),
+    choice(menu, "Skip", "Skip", "Codex asks again next time it starts."),
+    choice(menu, "Update now", "Update now", "Codex updates itself in this session's terminal, then starts again."),
+  ];
+  if (choices.some((c) => c === null)) return null;
+  const question = `A new Codex is out${versions ? ` (${versions})` : ""}. Update it before this session starts?`;
+  return { id: "update", body: questionBody("Codex update", question, choices as DialogChoice[]), choices: choices as DialogChoice[] };
 }
 
 /** The option whose text starts with `starts`, as a choice with the arrow keys from the selected row to it and Enter. */

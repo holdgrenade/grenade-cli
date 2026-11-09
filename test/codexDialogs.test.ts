@@ -29,9 +29,29 @@ const folderScreen = [
   "  2. Back to Agent Command Center",
   "  enter continue · esc back",
 ];
+/** As Codex 0.160 drew it, 2026-11-09. */
+const updateScreen = [
+  "  Update available · 0.160.0 → 0.167.0",
+  "  Release notes: https://github.com/openai/codex/releases/latest",
+  "› 1. Update now (runs `brew upgrade --cask codex`)",
+  "  2. Skip",
+  "  3. Skip until next version",
+  "  enter continue · esc skip",
+];
 const promptScreen = ["  >_ OpenAI Codex (v0.160.0)", "", "› Ask Codex to do anything", "  GPT-6-Luna default · ~/code/api"];
 
 describe("codexDialogIn", () => {
+  it("reads the update offer as a question, Skip and Skip this version told apart", () => {
+    const d = codexDialogIn(updateScreen)!;
+    expect(d.id).toBe("update");
+    expect(d.choices.map((c) => [c.label, c.keys])).toEqual([
+      ["Skip this version", ["down", "down", "enter"]],
+      ["Skip", ["down", "enter"]],
+      ["Update now", ["enter"]],
+    ]);
+    expect(d.body.questions?.[0]?.question).toBe("A new Codex is out (0.160.0 → 0.167.0). Update it before this session starts?");
+  });
+
   it("reads the hooks review as a question whose Trust picks Trust all and continue", () => {
     const d = codexDialogIn(hooksScreen)!;
     expect(d.id).toBe("hooks");

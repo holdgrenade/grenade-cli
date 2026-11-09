@@ -55,9 +55,8 @@ import { codexBackgroundIn } from "../background/codexBackground.js";
 import { watchScreenBackground } from "../background/screenBackground.js";
 import { codexHookFlags } from "../hooks/installCodexHooks.js";
 import { claudeHookFlags } from "../hooks/installHooks.js";
-import { BROWSER_INSTRUCTIONS } from "../browser/browserPrompt.js";
-import { CANVAS_INSTRUCTIONS } from "../canvas/canvasPrompt.js";
-import { TODO_INSTRUCTIONS } from "../todos/todoPrompt.js";
+import { codexInstructions, codexInstructionsFlag, grenadeInstructions } from "../agents/agentInstructions.js";
+import { readCodexDeveloperInstructions } from "../agents/codexUserConfig.js";
 import { readBody, sendJson } from "./http.js";
 import { LanSocket } from "./lanSocket.js";
 import { fromWebPage, isLoopback } from "./loopback.js";
@@ -211,14 +210,17 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
   const tmux = opts.tmux ?? createTmux({ agentFlags: {
         // Read as each session starts, so a status line the user set up since is the one it runs.
+        // Every session is told where its group's canvas is (`grenade canvas`) and how to add to its to-dos (`grenade
+        // todo`); on a Mac, also to test web pages in the app's toolbox (`grenade browser`).
         get claude() {
-          // Every session is told where its group's canvas is (`grenade canvas`) and how to add to its to-dos (`grenade
-          // todo`); on a Mac, also to test web pages in the app's toolbox (`grenade browser`).
-          const shared = `${CANVAS_INSTRUCTIONS}\n\n${TODO_INSTRUCTIONS}`;
-          const instructions = process.platform === "darwin" ? `${BROWSER_INSTRUCTIONS}\n\n${shared}` : shared;
-          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), instructions);
+          return claudeHookFlags(port, readUserStatusLine(join(opts.claudeDir ?? paths.claudeDir, "settings.json")), grenadeInstructions(process.platform === "darwin"));
         },
-        codex: codexHookFlags(port),
+        // Codex's hooks stay the same flags for every session (it trusts them by their hash); its instructions follow the
+        // user's own, read as each session starts.
+        get codex() {
+          const own = readCodexDeveloperInstructions(opts.codexDir ?? paths.codexDir);
+          return `${codexHookFlags(port)} ${codexInstructionsFlag(codexInstructions(process.platform === "darwin", own))}`;
+        },
         // Shells start with Grenade's prompt, its files written (again, if a new version changed them) as each starts.
         shell: (shell: string) => {
           try {

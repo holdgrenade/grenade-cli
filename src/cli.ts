@@ -9,6 +9,7 @@ import { CONTROL_PORT, DEFAULT_PORT, OFFICIAL_RELAY_URL, type Session } from "@g
 import { VERSION, paths } from "./config.js";
 import { computerWord } from "./platform/computer.js";
 import { ago, matchDevice, type Device } from "./daemon/devices.js";
+import { DaemonNotRunningError } from "./cli/controlClient.js";
 import { showPairing } from "./cli/pairCommand.js";
 import { registerPromptCommand } from "./cli/promptCommand.js";
 import { registerPushCommand } from "./cli/pushCommand.js";
@@ -370,7 +371,7 @@ async function control<T = unknown>(method: string, path: string, body?: unknown
       ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
   } catch {
-    throw new Error("grenaded is not running. Start it with: grenade daemon");
+    throw new DaemonNotRunningError();
   }
   const json = (await res.json()) as T & { error?: string; message?: string };
   if (!res.ok) throw new Error(json.message ?? json.error ?? `HTTP ${res.status}`);
