@@ -6,7 +6,7 @@
  */
 import { computerWord, daemonOs } from "../platform/computer.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -51,6 +51,7 @@ import { handleClaudeHook } from "./hooks.js";
 import { handleCodexHook } from "./codexHooks.js";
 import { ScreenPrompts } from "../prompts/screenPrompts.js";
 import { CodexApprovals } from "../prompts/codexApprovals.js";
+import { CodexTurnPrompts } from "../prompts/codexTurnPrompts.js";
 import { ClaudeBackgroundWatch } from "../background/claudeBackgroundWatch.js";
 import { codexBackgroundIn } from "../background/codexBackground.js";
 import { watchScreenBackground } from "../background/screenBackground.js";
@@ -819,6 +820,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   const screenPrompts = new ScreenPrompts(registry, prompts, log, (id) => switchingModel.has(id));
   // Codex's approvals: a card from its hook, answered with the dialog's keys (PROTOCOL.md "Codex approvals").
   const codexApprovals = new CodexApprovals(registry, prompts, log);
+  // Codex's questions and plans in Plan mode: read off its screen and its rollout (PROTOCOL.md "Codex questions and plans").
+  const codexTurnPrompts = new CodexTurnPrompts(registry, prompts, log, {
+    read: (path) => readFile(path, "utf8"),
+    type: (id, text) => tmux.sendText(id, text, false),
+  });
   // What an agent left running when its turn ended holds the session working (PROTOCOL.md "Background tasks"):
   // Codex's is read off its screen, and Claude Code's own files say when a task ended without a hook.
   watchScreenBackground(registry);
@@ -827,6 +833,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   registry.on("removed", (id) => {
     prompts.closeSession(id);
     codexApprovals.forget(id);
+    codexTurnPrompts.forget(id);
     activity.forget(id);
     catchUp.cancel(id);
     interruptCatchUp.cancel(id);

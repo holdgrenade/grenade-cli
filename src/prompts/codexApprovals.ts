@@ -7,7 +7,7 @@
  */
 import { promptFromClaudeHook, type AgentKind, type KeyName, type PromptDecision, type WaitingFor } from "@grenade/protocol";
 import type { Logger } from "../log.js";
-import { hasCodexComposer } from "../talk/agentReady.js";
+import { codexComposerIn } from "./codexScreen.js";
 import type { PromptStore } from "./promptStore.js";
 import { keysTo, menuIn } from "./screenDialog.js";
 
@@ -122,7 +122,7 @@ export class CodexApprovals {
       return;
     }
     if (next.kind === "feedback") {
-      if (dialog || !hasCodexComposer(lines)) return;
+      if (dialog || !codexComposerIn(lines)) return;
       owed.shift();
       this.registry.sendText(id, next.text, true).catch((e: unknown) => this.log.warn("Could not tell Codex what to do instead", { session: id, error: e }));
     } else {
