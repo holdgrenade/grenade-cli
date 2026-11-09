@@ -37,6 +37,8 @@ import { AGENTS, agentInfo, agentList, learnAgent } from "../agents/agentCatalog
 import { codexModelName, modelChoices, readCodexModels } from "../models/codexModels.js";
 import { effortFor, switchCodexModel } from "../models/codexModelSwitch.js";
 import { CodexConversations } from "../conversations/codexConversations.js";
+import { codexConversationIdOf, codexTitlesIn } from "../conversations/codexConversationInfo.js";
+import { endsWithError } from "../activity/codexErrors.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
 import { AllConversations } from "../conversations/conversationSource.js";
 import { ConversationMarks } from "../conversations/conversationMarks.js";
@@ -712,8 +714,22 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           .then((entries) => {
             if (event === "Stop" && !entries.some((e) => e.kind === "said")) catchUp.start(id, path);
             if (event === "Interrupt" && !entries.some((e) => e.kind === "stopped")) codexStopCatchUp.start(id, path);
+            // A turn that ended on Codex's error stopped without finishing, as a Claude Code StopFailure does.
+            if (event === "Stop" && endsWithError(entries)) registry.applyHook(id, "waiting", "stopped");
           })
           .catch((e) => log.debug("Could not read the activity from a Codex rollout", { session: id, path, error: e }));
+        // Codex names a thread itself, a moment after its first prompt (session_index.jsonl), as Claude Code's ai-title.
+        const thread = codexConversationIdOf(path);
+        if (thread && (event === "Stop" || event === "UserPromptSubmit")) {
+          readFile(join(opts.codexDir ?? paths.codexDir, "session_index.jsonl"), "utf8")
+            .then((index) => {
+              const title = clipTitle(codexTitlesIn(index).get(thread.toLowerCase()) ?? "");
+              if (title) registry.setAiTitle(id, title);
+            })
+            .catch(() => {
+              // No index yet: the summary's title stands in.
+            });
+        }
       },
     });
 

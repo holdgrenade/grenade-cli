@@ -626,7 +626,7 @@ export class SessionRegistry extends EventEmitter<RegistryEvents> {
     this.emit("updated", r.session);
   }
 
-  /** Claude Code's title for the session's conversation (`ai-title` in its transcript). */
+  /** The agent's own title for the session's conversation: Claude Code's `ai-title`, Codex's `thread_name`. */
   setAiTitle(id: string, title: string): void {
     const r = this.records.get(id);
     if (!r || r.aiTitle === title) return;
