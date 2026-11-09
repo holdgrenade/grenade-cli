@@ -33,7 +33,9 @@ import { ActivityStore } from "../activity/activityStore.js";
 import { TranscriptReader } from "../activity/transcriptReader.js";
 import { CatchUp } from "../activity/catchUp.js";
 import { TranscriptFollower } from "../activity/follower.js";
-import { AGENTS, agentInfo } from "../agents/agentCatalog.js";
+import { AGENTS, agentInfo, agentList, learnAgent } from "../agents/agentCatalog.js";
+import { codexModelName, modelChoices, readCodexModels } from "../models/codexModels.js";
+import { effortFor, switchCodexModel } from "../models/codexModelSwitch.js";
 import { CodexConversations } from "../conversations/codexConversations.js";
 import { ConversationIndex } from "../conversations/conversationIndex.js";
 import { AllConversations } from "../conversations/conversationSource.js";
@@ -100,7 +102,7 @@ import { SentInputs } from "./sentInputs.js";
 import { PlanLimits } from "../usage/planLimits.js";
 import { ConnectorReader } from "../connectors/connectorReader.js";
 import { claudeStatusUsage, STATUS_LINE_PATH } from "../usage/claudeStatusLine.js";
-import { readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
+import { readCodexTurn, readCodexUsage, readUserStatusLine } from "../usage/readUsage.js";
 import { homedir } from "node:os";
 import { TALK_AGENT_KINDS, type TalkAgentKind } from "../talk/talkAgents.js";
 import { resolveTalkBin, runTalkAgent, type TalkRun } from "../talk/talkRunner.js";
@@ -206,7 +208,10 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   // Typed Talk: the agents installed here can answer it (PROTOCOL.md "Agents", `talk`).
   const talkDir = opts.talk?.dir ?? (opts.tokensPath === null ? undefined : paths.talk);
   const talkAgents: TalkAgentKind[] = talkDir ? (opts.talk?.agents ?? TALK_AGENT_KINDS.filter((k) => resolveTalkBin(k) !== undefined)) : [];
-  const agents = AGENTS.map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
+  // Codex's models are the ones its own picker lists on this computer (PROTOCOL.md "Models").
+  const codexModels = readCodexModels(opts.codexDir ?? paths.codexDir);
+  learnAgent("codex", codexModels.length > 0 ? { models: modelChoices(codexModels) } : {});
+  const agents = agentList().map((a) => ((talkAgents as string[]).includes(a.kind) ? { ...a, talk: true as const } : a));
   const info: DaemonInfo = { id: loadDaemonId(), name: opts.name ?? defaultName(), version: VERSION, os: daemonOs(), key: e2eKey.publicKey.toString("base64"), e2e: 1, inputSent: 1, conversations: 1, conversationDelete: 1, term: 1, forward: 1, folders: 1, board: 1, groupNames: 1, keptGroups: 1, sessionTitles: 1, resumeEnded: 1, continueOriginal: 1, voice: 1, canvas: 1, canvases: 1, limits: 1, connectors: 1, plans: 1, todos: 1, projectTodos: 1, library: 1, libraryProjects: 1, changes: 1, browser: 1, ...(publishedPath ? { publish: 1 as const, comments: 1 as const } : {}), codexActivity: 1, ...(talkDir ? { talk: 1 as const, talkHistory: 1 as const, highlights: 1 as const } : {}), agents };
   const allowPlainLan = opts.allowPlainLan === true;
   // Every agent starts with Grenade's hooks for this port: nothing in ~/.claude or ~/.codex has to change.
@@ -541,6 +546,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
           type: (text) => tmux.sendText(session.id, text, false),
           key: (key) => tmux.sendKey(session.id, key),
         };
+        if (session.agent === "codex") {
+          const choice = codexModels.find((m) => m.name === model);
+          if (!choice) throw new ModelSwitchError(`Codex has no model named ${model}.`);
+          const switched = await switchCodexModel(terminal, choice, effortFor(choice, effort, session.effort));
+          return registry.chooseModel(session.id, model, switched.effort);
+        }
         const switched = await switchClaudeModel(terminal, model, effort);
         return registry.chooseModel(session.id, model, switched.effort);
       } finally {
@@ -652,7 +663,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
   /** One Codex hook event: status, summary input, model and activity (PROTOCOL.md "Codex hooks"). */
   const applyCodexHook = (session: string | null, body: string) =>
     handleCodexHook(registry, session, body, log, {
-      onModel: (id, model) => registry.setModel(id, model),
+      onModel: (id, model) => registry.setModel(id, codexModelName(codexModels, model)),
       background: (id) => codexBackgroundIn(registry.screenOf(id)?.lines ?? []),
       onHook: (id, event, toolName, payload) => {
         if (event === "PermissionRequest") codexApprovals.requested(id, payload);
@@ -666,6 +677,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<RunningDaem
       },
       onTranscript: (id, path, event) => {
         registry.setTranscript(id, path);
+        readCodexTurn(path)
+          .then((turn) => {
+            // The model and effort the newest turn ran with; one from before a client chose them changes nothing.
+            if (turn?.model) registry.setModel(id, codexModelName(codexModels, turn.model), turn.effort, turn.at);
+          })
+          .catch((e) => log.debug("Could not read the turn from a Codex rollout", { session: id, path, error: e }));
         readCodexUsage(path)
           .then((usage) => {
             if (usage?.context) registry.setContext(id, usage.context);

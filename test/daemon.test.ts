@@ -81,6 +81,8 @@ async function daemon(opts: { allowPlainLan?: boolean; relayUrl?: string; tmux?:
     e2eKeyPath: join(dir, "e2e-key"),
     attachmentsDir: join(dir, "attachments"),
     voiceKeysPath: join(dir, "voice-keys.json"),
+    // Not this computer's Codex: its models and conversations would make the tests depend on it.
+    codexDir: join(dir, "codex"),
     ...(opts.voiceFetch ? { voiceFetch: opts.voiceFetch } : {}),
     talk: { dir: join(dir, "talk"), settingsPath: join(dir, "talk.json"), agents: ["claude"], ...(opts.talkRun ? { run: opts.talkRun } : {}) },
     ...(opts.allowPlainLan ? { allowPlainLan: true } : {}),

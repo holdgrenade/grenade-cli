@@ -15,7 +15,8 @@ export interface CodexQuestion {
 
 interface Line {
   type?: string;
-  payload?: { type?: string; name?: string; call_id?: string; arguments?: string; role?: string; content?: { type?: string; text?: string }[] };
+  timestamp?: string;
+  payload?: { type?: string; model?: string; effort?: string; collaboration_mode?: { mode?: string }; name?: string; call_id?: string; arguments?: string; role?: string; content?: { type?: string; text?: string }[] };
 }
 
 function linesOf(jsonl: string): Line[] {
@@ -99,4 +100,29 @@ export function codexProposedPlanIn(jsonl: string): string | null {
 /** A plan as a `plan` card carries it, cut to fit. */
 export function cardPlan(plan: string): string {
   return plan.length <= PROMPT_PLAN_MAX ? plan : plan.slice(0, PROMPT_PLAN_MAX - PLAN_CUT.length) + PLAN_CUT;
+}
+
+/** What the newest turn of a rollout ran with: its model's slug, effort, Codex's mode (`plan`, `default`), and when. */
+export interface CodexTurn {
+  model?: string;
+  effort?: string;
+  mode?: string;
+  at?: string;
+}
+
+/** The newest `turn_context` line: Codex writes one as each turn starts. Null when there is none. */
+export function codexTurnIn(jsonl: string): CodexTurn | null {
+  const lines = linesOf(jsonl);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i]!;
+    if (l.type !== "turn_context") continue;
+    const p = l.payload ?? {};
+    const turn: CodexTurn = {};
+    if (typeof p.model === "string" && p.model) turn.model = p.model;
+    if (typeof p.effort === "string" && /^[a-z][a-z0-9-]{0,15}$/.test(p.effort)) turn.effort = p.effort;
+    if (typeof p.collaboration_mode?.mode === "string") turn.mode = p.collaboration_mode.mode;
+    if (typeof l.timestamp === "string") turn.at = l.timestamp;
+    return turn;
+  }
+  return null;
 }

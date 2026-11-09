@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { codexUsageIn, type CodexUsage } from "./codexUsage.js";
+import { codexTurnIn, type CodexTurn } from "../prompts/codexRollout.js";
 import { userStatusLineIn, type UserStatusLine } from "./claudeStatusLine.js";
 
 /** The last replies; a `token_count` comes after every Codex turn. */
@@ -18,6 +19,11 @@ async function readTail(path: string): Promise<string> {
   } finally {
     await file.close();
   }
+}
+
+/** The model, effort and mode of the newest turn in a Codex rollout (`codexTurnIn`). */
+export async function readCodexTurn(rolloutPath: string): Promise<CodexTurn | null> {
+  return codexTurnIn(await readTail(rolloutPath));
 }
 
 export async function readCodexUsage(rolloutPath: string): Promise<CodexUsage | null> {

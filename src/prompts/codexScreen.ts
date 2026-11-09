@@ -11,16 +11,15 @@ const MARK = "›";
 const MENU_ROW = /^\s*›?\s*\d+\.\s/;
 
 /**
- * Codex waits for a prompt: its composer (a "›" row that is no menu row) with the footer under it that names the
- * model ("GPT-6-Luna default · ~/code/api"), and no question or plan dialog on the screen.
+ * Codex waits for a prompt: its composer (a "›" row that is no menu row) among the last rows, under which only its
+ * footer follows, and no dialog on the screen. The footer is not read: at Max effort it is a banner ("M A X").
  */
 export function codexComposerIn(lines: readonly string[]): boolean {
-  if (codexQuestionPageIn(lines) || codexPlanDialogIn(lines)) return false;
+  if (codexQuestionPageIn(lines) || codexPlanDialogIn(lines) || lines.some((l) => /esc (back|to cancel)|enter to submit/.test(l))) return false;
   const rows = lines.map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
-  for (let i = rows.length - 1; i >= Math.max(0, rows.length - 8); i--) {
+  for (let i = rows.length - 1; i >= Math.max(0, rows.length - 3); i--) {
     const row = rows[i]!.trimStart();
-    if (!row.startsWith(MARK) || MENU_ROW.test(rows[i]!)) continue;
-    return rows.slice(i + 1).some((l) => l.includes(" · "));
+    if (row.startsWith(MARK) && !MENU_ROW.test(rows[i]!)) return true;
   }
   return false;
 }

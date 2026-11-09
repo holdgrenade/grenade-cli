@@ -27,8 +27,23 @@ export const AGENTS = [
 /** An agent this daemon knows how to start. */
 export type KnownAgent = (typeof AGENTS)[number]["kind"];
 
+/**
+ * What the daemon learned about an agent on this computer as it started: Codex's models come from its own cache
+ * (`codexModels.ts`), not from this file. Set once by the daemon (`learnAgent`); tests may set it again.
+ */
+const learned = new Map<string, Partial<AgentInfo>>();
+
+export function learnAgent(kind: KnownAgent, info: Partial<AgentInfo>): void {
+  learned.set(kind, info);
+}
+
+/** Every agent, with what was learned about it here. */
+export function agentList(): AgentInfo[] {
+  return AGENTS.map((a) => ({ ...a, ...learned.get(a.kind) }));
+}
+
 export function agentInfo(kind: string): AgentInfo | undefined {
-  return AGENTS.find((a) => a.kind === kind);
+  return agentList().find((a) => a.kind === kind);
 }
 
 export function isKnownAgent(kind: string): kind is KnownAgent {
